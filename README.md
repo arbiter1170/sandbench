@@ -7,10 +7,19 @@ Unofficial local demo of the capabilities observed in the iOS app (bundle `co.an
 ```bash
 cd C:\Users\garof\rea-work\grokbot-poc
 npm install
+cp .env.example .env.local   # Firebase + allowlist (see docs/deploy-vercel.md)
 npm run dev
 ```
 
 Open http://127.0.0.1:5173.
+
+## Cloud deploy (private)
+
+- Firebase Google Auth (email allowlist) + Firestore workspace sync
+- Vercel SPA on branch `deploy/vercel`
+- Details: [docs/deploy-vercel.md](docs/deploy-vercel.md)
+
+Attachments stay on-device (IndexedDB). Model API keys sync with the cloud snapshot under your Firebase UID — keep the allowlist tight.
 
 **Test stack:** Settings and each bot’s **Test profile** switch between xAI, Claude API, Claude Code CLI, Ollama, and Groq. See [docs/test-stack.md](docs/test-stack.md).
 
