@@ -1,0 +1,12 @@
+node_modules
+dist
+dev-dist
+*.local
+.env
+.env.*
+!.env.example
+.harness-token
+sandbench-migration.json
+.DS_Store
+.vercel
+release
