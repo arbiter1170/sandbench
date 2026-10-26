@@ -1,6 +1,7 @@
 // Data routes (SB-02), all behind the runner's sign-in check; rows are scoped to the
 // signed-in user's uid.
-//   GET    /api/data/:kind[?thread=&since=&limit=]   list (messages: one thread, oldest first)
+//   GET    /api/data/:kind[?thread=&since=&limit=&after=]   list (messages: one thread, oldest
+//          first); with after= the list is in id order and pages by id
 //   GET    /api/data/:kind/:id
 //   POST   /api/data/:kind          { id, data, threadId? }   -> 201, version 1
 //   PATCH  /api/data/:kind/:id      { version, data }          -> merged fields, version + 1
@@ -109,6 +110,7 @@ export function createDataRoutes(store) {
           threadId: url.searchParams.get("thread") || undefined,
           since: url.searchParams.get("since") || 0,
           limit: url.searchParams.get("limit") || undefined,
+          after: url.searchParams.get("after") ?? undefined,
         });
         return send(res, 200, list), true;
       }

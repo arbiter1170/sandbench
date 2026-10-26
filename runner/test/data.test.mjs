@@ -302,3 +302,31 @@ test("changes/head is the newest seq for this user only", { skip }, async () => 
   await call("other", "POST", "/data/contacts", { id: "c-head", data: { name: "x" } });
   assert.equal((await call("laptop", "GET", "/changes/head")).body.seq, mine);
 });
+
+test("after= pages a list by id, and an edit made mid-load does not push a row past the cursor", { skip }, async () => {
+  const ids = [];
+  for (let i = 0; i < 7; i += 1) {
+    ids.push(`page-${i}`);
+    await call("laptop", "POST", "/data/contacts", { id: `page-${i}`, data: { name: `p${i}` } });
+  }
+  const pages = [];
+  let cursor = "";
+  for (;;) {
+    assert.ok(pages.length < 10, "the cursor moves forward");
+    const { status, body } = await call("phone", "GET", `/data/contacts?limit=3&after=${cursor}`);
+    assert.equal(status, 200);
+    pages.push(body.items.map((item) => item.id));
+    // Another device edits the first row while this one is loading; in updated_at order it
+    // would move to the end, in id order it stays put.
+    if (pages.length === 1) {
+      const row = (await call("laptop", "GET", "/data/contacts/page-0")).body;
+      await call("laptop", "PATCH", "/data/contacts/page-0", { version: row.version, data: { name: "edited" } });
+    }
+    if (!body.more) break;
+    cursor = body.items[body.items.length - 1].id;
+  }
+  const seen = pages.flat().filter((id) => id.startsWith("page-"));
+  assert.deepEqual(seen, ids);
+  assert.equal(new Set(pages.flat()).size, pages.flat().length, "no row twice");
+  assert.equal((await call("phone", "GET", "/data/contacts?after=../x")).status, 400);
+});
