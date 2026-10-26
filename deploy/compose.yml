@@ -1,8 +1,10 @@
-# Sandbench on the runner VM: runner + Postgres + cloudflared.
-# No service publishes a port. The only way in is the Cloudflare Tunnel, behind
-# Cloudflare Access (Google sign-in, allowlist), and then the runner's own token check.
+# Sandbench runner: runner + Postgres, plus one way in, picked with COMPOSE_PROFILES:
+#   laptop     -> Tailscale Funnel (https://<name>.<tailnet>.ts.net), no domain needed
+#   cloudflare -> Cloudflare named tunnel + Access (needs a domain; the "server later" path)
+# No service publishes a port; the tunnel sidecar is the only way in. The same file runs
+# on a laptop or a VPS.
 #
-#   cp deploy/.env.example deploy/.env   # fill it in on the VM; never commit it
+#   cp deploy/.env.example deploy/.env   # fill it in on the host; never commit it
 #   docker compose -f deploy/compose.yml --env-file deploy/.env up -d --build
 name: sandbench
 
@@ -22,7 +24,9 @@ services:
     environment:
       FIREBASE_PROJECT_ID: ${FIREBASE_PROJECT_ID:?set FIREBASE_PROJECT_ID}
       SANDBENCH_ALLOWED_EMAILS: ${SANDBENCH_ALLOWED_EMAILS:?set SANDBENCH_ALLOWED_EMAILS}
-      SANDBENCH_PUBLIC_ORIGIN: ${SANDBENCH_PUBLIC_ORIGIN:?set SANDBENCH_PUBLIC_ORIGIN}
+      # The runner's own https address, and other pages allowed to call /api (exact origins).
+      SANDBENCH_PUBLIC_ORIGIN: ${SANDBENCH_PUBLIC_ORIGIN:-}
+      SANDBENCH_ALLOWED_ORIGINS: ${SANDBENCH_ALLOWED_ORIGINS:-}
       SANDBENCH_BLOCKED_PROJECTS: ${SANDBENCH_BLOCKED_PROJECTS:-}
       # Model and voice keys (optional here; they can also be added from Settings > Keys).
       XAI_API_KEY: ${XAI_API_KEY:-}
@@ -56,13 +60,36 @@ services:
       retries: 10
     networks: [internal]
 
+  # Server later: a Cloudflare named tunnel whose public hostname points at http://runner:8080,
+  # behind Cloudflare Access. Only started with COMPOSE_PROFILES=cloudflare.
   cloudflared:
     image: cloudflare/cloudflared:2025.8.1
+    profiles: [cloudflare]
     restart: unless-stopped
-    # The tunnel's public hostname points at http://runner:8080 (set in the Cloudflare dashboard).
     command: tunnel --no-autoupdate run
     environment:
-      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN}
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    depends_on: [runner]
+    networks: [edge]
+
+  # Laptop: Tailscale Funnel gives a stable https://<TS_HOSTNAME>.<tailnet>.ts.net address
+  # with a real certificate and forwards it to http://runner:8080 (tailscale/serve.json).
+  # There is no outer sign-in gate here: the runner's token check and allowlist are the gate.
+  tailscale:
+    image: tailscale/tailscale:v1.102.5
+    profiles: [laptop]
+    restart: unless-stopped
+    hostname: ${TS_HOSTNAME:-sandbench}
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:-}
+      TS_HOSTNAME: ${TS_HOSTNAME:-sandbench}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Userspace networking works on Docker Desktop (Windows and macOS) without /dev/net/tun.
+      TS_USERSPACE: "true"
+      TS_SERVE_CONFIG: /config/serve.json
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./tailscale/serve.json:/config/serve.json:ro
     depends_on: [runner]
     networks: [edge]
 
@@ -75,3 +102,4 @@ networks:
 volumes:
   sandbench-data:
   postgres-data:
+  tailscale-state:

@@ -29,11 +29,15 @@ Copy [`.env.example`](../.env.example) to `.env.local` for local dev. On Vercel 
 | `VITE_FIREBASE_STORAGE_BUCKET` | Optional |
 | `VITE_ALLOWED_EMAILS` | Comma-separated Google emails |
 
-Vite inlines these at **build** time. Changing the allowlist requires a redeploy.
+| `VITE_RUNNER_URL` | The runner's API, e.g. `https://sandbench.<tailnet>.ts.net/api`. Leave it unset to use the local harness via the dev proxy |
+
+Vite inlines these at **build** time. Changing the allowlist or the runner URL requires a redeploy.
+
+**The Firebase project must be `sandbench-arbiter`, the same project the runner verifies tokens against.** If the site is built with any other project, every runner call is a 401. Never point the site at one of the off-limits projects. The runner refuses to start with them (`runner/guard.mjs`); the site has no such guard, so check `VITE_FIREBASE_PROJECT_ID` before you deploy. The runner must also list the site's origin in `SANDBENCH_ALLOWED_ORIGINS` (see [runner.md](runner.md#laptop-runner)).
 
 ## 3. GitHub + Vercel
 
-- Repo is private; production branch: `deploy/vercel`.
+- Repo is public; production branch: `deploy/vercel` (merges deploy to production).
 - Vercel project: Framework Vite, build `npm run build`, output `dist` (see `vercel.json`).
 - After first deploy, add the Vercel URL to Firebase authorized domains.
 

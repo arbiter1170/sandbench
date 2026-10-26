@@ -6,6 +6,7 @@ import { after, before, test } from "node:test";
 import { createRunner } from "../api/server.mjs";
 
 const ORIGIN = "https://sandbench.example.test";
+const SITE = "https://site.example.test";
 let base;
 let server;
 let tmp;
@@ -21,6 +22,7 @@ before(async () => {
     home: path.join(tmp, "home"),
     uiDir: ui,
     publicOrigin: ORIGIN,
+    allowedOrigins: [SITE],
     allowedEmails: ["vincent@example.com"],
     env: {},
     verifyIdToken: async (token) => {
@@ -125,4 +127,47 @@ test("model proxy on the runner refuses localhost bases and needs a stored key",
   const missing = await fetch(`${base}/api/model`, post("good", { provider: "xai", path: "/chat/completions", payload: {} }));
   assert.equal(missing.status, 409);
   assert.equal((await fetch(`${base}/api/model`, post(null, { provider: "xai", path: "/chat/completions" }))).status, 401);
+});
+
+test("CORS: an allowed site gets a preflight answer and its origin echoed back", async () => {
+  const pre = await fetch(`${base}/api/health`, {
+    method: "OPTIONS",
+    headers: { origin: SITE, "access-control-request-method": "GET", "access-control-request-headers": "authorization" },
+  });
+  assert.equal(pre.status, 204);
+  assert.equal(pre.headers.get("access-control-allow-origin"), SITE);
+  assert.match(pre.headers.get("access-control-allow-headers"), /authorization/);
+  assert.equal(pre.headers.get("access-control-allow-credentials"), null);
+  assert.match(pre.headers.get("vary"), /Origin/);
+  const ok = await fetch(`${base}/api/health`, as("good", { headers: { origin: SITE } }));
+  assert.equal(ok.status, 200);
+  assert.equal(ok.headers.get("access-control-allow-origin"), SITE);
+});
+
+test("CORS: any other origin is refused, preflight included", async () => {
+  const pre = await fetch(`${base}/api/health`, { method: "OPTIONS", headers: { origin: "https://evil.example", "access-control-request-method": "GET" } });
+  assert.equal(pre.status, 403);
+  assert.equal(pre.headers.get("access-control-allow-origin"), null);
+  assert.equal((await fetch(`${base}/api/health`, as("good", { headers: { origin: "https://sandbench-evil.vercel.app" } }))).status, 403);
+  assert.equal((await fetch(`${base}/api/health`, { method: "OPTIONS" })).status, 403);
+});
+
+test("CORS: the sign-in check still applies to an allowed site", async () => {
+  const none = await fetch(`${base}/api/health`, { headers: { origin: SITE } });
+  assert.equal(none.status, 401);
+  // The browser can read the error because the origin header is sent on refusals too.
+  assert.equal(none.headers.get("access-control-allow-origin"), SITE);
+  assert.equal((await fetch(`${base}/api/health`, as("other", { headers: { origin: SITE } }))).status, 403);
+});
+
+test("a runner with no origin list refuses every browser Origin", async () => {
+  const strict = createRunner({ home: path.join(tmp, "strict"), allowedEmails: ["vincent@example.com"], verifyIdToken: async () => ({ uid: "u1", email: "vincent@example.com", email_verified: true }) });
+  await new Promise((resolve) => strict.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${strict.address().port}/api/health`;
+  try {
+    assert.equal((await fetch(url, as("good", { headers: { origin: SITE } }))).status, 403);
+    assert.equal((await fetch(url, as("good"))).status, 200);
+  } finally {
+    strict.close();
+  }
 });

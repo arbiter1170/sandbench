@@ -487,4 +487,8 @@ Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · a
 
 - 2026-10-26 · SB-21 (skeleton) · PR #2 · vitest for src/, node --test for harness/, CI workflow (typecheck, tests, build, no keys in dist/, gitleaks) · local typecheck, 11 tests and build pass; first CI run on the PR
 - 2026-10-26 · SB-01 · PR #3 · runner/ service (page + /api on one address, Firebase ID token + server allowlist), Dockerfile, compose (runner, postgres, cloudflared, no ports), runner mode in src/harness.ts · built; 401/403/200 proven with real Auth-emulator tokens and in CI; live acceptance (iPhone, VM port scan) pending the VM, Cloudflare and Firebase project, so the box stays unticked
+<<<<<<< HEAD
 - 2026-10-26 · SB-05 · PR #5 · keys moved to a write-only store on the harness/runner (env or 0600 file), /model proxy adds keys, turns/TTS/MCP resolve keys server-side, keys removed from Settings/Studio and Firestore with a one-time migration · no keys in dist/ (CI) or the Firestore copy (emulator run); rotation via file proven by test; Token Engineer vs Cursor key enforced by scope in tests, live check waits for SB-10, so the box stays unticked
+=======
+- 2026-10-26 · SB-01 (laptop) · PR #6 · runner CORS allowlist (SANDBENCH_ALLOWED_ORIGINS, exact origins), compose profiles laptop (Tailscale Funnel sidecar) and cloudflare, laptop docs and Funnel security note · CORS and profile checks pass in tests and CI; live check on Vincent's laptop pending, so SB-01 stays unticked
+>>>>>>> origin/deploy/vercel
