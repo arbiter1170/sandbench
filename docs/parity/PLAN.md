@@ -471,6 +471,16 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 
 ---
 
+### Answers so far (2026-10-26)
+
+- **Q1 VM host:** the cheapest that fits, so **Hetzner Cloud CX43** (x86, 8 vCPU / 16 GB, an EU location), roughly €10-13 a month. x86 is chosen over the cheaper ARM plans so the Playwright, Chromium and Firebase emulator images run without arm64 surprises. Vincent still creates the account and the server; nothing is bought from this repo.
+- **Q2 Postgres:** on the same VM, in `deploy/compose.yml`, with a nightly `pg_dump` backup. No extra cost.
+- **Q5 Firebase:** confirmed: a dedicated Sandbench project, never one of the four off-limits ones. Vincent creates it and shares the project id. Until then tests use the `demo-sandbench` emulator project.
+- **Q9 UI hosting:** serve the built UI **from the runner on the VM**, at the same address as the API, behind one Cloudflare Access app. That is free, needs no CORS, and keeps one sign-in gate. Vercel stays live until cutover.
+- **Allowlist:** `SANDBENCH_ALLOWED_EMAILS` holds one address, Vincent's. It is set in the runner's environment, not in the repo.
+- **Branch protection on `deploy/vercel`:** approved. Vincent turns it on once CI is green (require a PR and the CI checks, block force-pushes).
+- **Still open:** a domain on Cloudflare for the tunnel hostname (a named tunnel with Access needs one; about $10 a year if a new one is bought), and Q3, Q4, Q6, Q7, Q8, Q10.
+
 ## Progress log
 
 Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · acceptance result`.
