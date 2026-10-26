@@ -1,6 +1,10 @@
 import { initializeApp, type FirebaseApp } from "firebase/app";
-import { getAuth, type Auth } from "firebase/auth";
-import { getFirestore, type Firestore } from "firebase/firestore";
+import { connectAuthEmulator, getAuth, type Auth } from "firebase/auth";
+import { connectFirestoreEmulator, getFirestore, type Firestore } from "firebase/firestore";
+
+// Local tests only: point sign-in and Firestore at the Firebase emulators (demo-* projects).
+const AUTH_EMULATOR = import.meta.env.VITE_FIREBASE_AUTH_EMULATOR ?? "";
+const FIRESTORE_EMULATOR = import.meta.env.VITE_FIRESTORE_EMULATOR ?? "";
 
 const config = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY ?? "",
@@ -42,13 +46,20 @@ export function getFirebaseApp(): FirebaseApp | null {
 export function getFirebaseAuth(): Auth | null {
   const firebaseApp = getFirebaseApp();
   if (!firebaseApp) return null;
-  if (!auth) auth = getAuth(firebaseApp);
+  if (!auth) {
+    auth = getAuth(firebaseApp);
+    if (AUTH_EMULATOR) connectAuthEmulator(auth, AUTH_EMULATOR, { disableWarnings: true });
+  }
   return auth;
 }
 
 export function getFirebaseDb(): Firestore | null {
   const firebaseApp = getFirebaseApp();
   if (!firebaseApp) return null;
-  if (!db) db = getFirestore(firebaseApp);
+  if (!db) {
+    db = getFirestore(firebaseApp);
+    const [host, port] = FIRESTORE_EMULATOR.split(":");
+    if (host && port) connectFirestoreEmulator(db, host, Number(port));
+  }
   return db;
 }

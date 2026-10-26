@@ -181,10 +181,10 @@ export type Connector = {
   checkedAt: number;
 };
 
+/** A named secret used in connector headers as {{NAME}}. The value lives on the harness or runner only. */
 export type Secret = {
   id: string;
   name: string;
-  value: string;
   createdAt: number;
 };
 
@@ -299,12 +299,9 @@ export type Settings = {
   displayName: string;
   locale: Locale;
   apiBase: string;
-  apiKey: string;
   model: string;
   useProxy: boolean;
   compatBase?: string;
-  compatKey?: string;
-  anthropicKey?: string;
   anthropicModel?: string;
   defaultAgentDriver?: "" | "anthropic" | "http" | "claude" | "codex" | "grok";
   defaultTestProfile?: TestProfileId;
@@ -319,8 +316,6 @@ export type Settings = {
   ttsVoiceId?: string;
   /** @deprecated Prefer ttsVoiceId; kept for older snapshots. */
   xaiVoiceId?: string;
-  elevenLabsKey?: string;
-  fishKey?: string;
   fishModel?: string;
   chatterboxBaseUrl?: string;
   chatterboxModel?: string;
@@ -328,7 +323,6 @@ export type Settings = {
   decisionEnabled?: boolean;
   decisionProvider?: "openrouter" | "typesafe";
   decisionModel?: string;
-  decisionKey?: string;
   /** Attach a JPEG thumb after approved harness pointer/shell work. */
   attachWorkScreenshots?: boolean;
 };
@@ -392,7 +386,6 @@ export function defaultSettings(): Settings {
     displayName: "",
     locale: detectLocale(),
     apiBase: "",
-    apiKey: "",
     model: "grok-3",
     useProxy: true,
     lockEnabled: false,

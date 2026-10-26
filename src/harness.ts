@@ -1,5 +1,5 @@
 import { getFirebaseAuth } from "./firebase";
-import type { Connector, PointerAction, Secret, TriggerRun, WebhookTrigger } from "./types";
+import type { Connector, PointerAction, TriggerRun, WebhookTrigger } from "./types";
 
 const HEADERS = { "x-sandbench-client": "1" };
 // Runner mode (SB-01): VITE_RUNNER_URL (e.g. "/api") points at the hosted runner, and each
@@ -30,6 +30,8 @@ export type HarnessTriggers = {
   runs: TriggerRun[];
 };
 
+export { call as harnessCall };
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,
@@ -40,6 +42,24 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     throw new Error(body?.error || `Harness returned ${response.status}.`);
   }
   return (await response.json()) as T;
+}
+
+export type ModelRequest = {
+  provider: "xai" | "openai_compat" | "anthropic" | "openrouter";
+  /** Only for OpenAI-compatible servers (or a custom xAI base); the server checks it. */
+  base?: string;
+  path: "/chat/completions" | "/messages";
+  payload: unknown;
+};
+
+/** A model call through the harness or runner, which adds the stored API key (SB-05). */
+export async function modelFetch(request: ModelRequest, signal?: AbortSignal): Promise<Response> {
+  return fetch(`${BASE}/model`, {
+    method: "POST",
+    signal,
+    headers: { ...(await authHeaders()), "content-type": "application/json" },
+    body: JSON.stringify(request),
+  });
 }
 
 export async function harnessHealth(): Promise<HarnessHealth | null> {
@@ -79,7 +99,6 @@ export async function harnessTtsSpeak(input: {
   provider: TtsProvider;
   text: string;
   voiceId: string;
-  key?: string;
   baseUrl?: string;
   model?: string;
   fishModel?: string;
@@ -96,9 +115,8 @@ export async function harnessTtsSpeak(input: {
   return response.blob();
 }
 
-export function harnessTtsVoices(provider: TtsProvider, opts: { key?: string; baseUrl?: string } = {}) {
+export function harnessTtsVoices(provider: TtsProvider, opts: { baseUrl?: string } = {}) {
   const params = new URLSearchParams({ provider });
-  if (opts.key) params.set("key", opts.key);
   if (opts.baseUrl) params.set("baseUrl", opts.baseUrl);
   return call<{ voices: { id: string; label: string; description?: string }[]; provider: string }>(`/tts/voices?${params}`);
 }
@@ -149,15 +167,9 @@ export function harnessCallTool(url: string, headers: Record<string, string>, to
   return call("/mcp/call", { method: "POST", body: JSON.stringify({ url, headers, tool, args, approved: true }) });
 }
 
-export function connectorHeaders(connector: Connector, secrets: Secret[]): Record<string, string> {
-  return Object.fromEntries(
-    connector.headers
-      .filter((item) => item.key.trim())
-      .map((item) => [
-        item.key.trim(),
-        item.value.replace(/\{\{\s*([A-Z0-9_]+)\s*\}\}/g, (match, key: string) => secrets.find((secret) => secret.name === key)?.value ?? match),
-      ]),
-  );
+/** Header templates as stored; the harness or runner fills {{NAME}} from its secret store. */
+export function connectorHeaders(connector: Connector): Record<string, string> {
+  return Object.fromEntries(connector.headers.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
 }
 
 export function harnessSyncSchedules(routines: { id: string; botId: string; title: string; schedule: string; enabled: boolean }[]): Promise<{ ok: boolean }> {
@@ -215,7 +227,8 @@ export type TurnRequest = {
   history: { role: "user" | "assistant"; content: string }[];
   model: string;
   base: string;
-  key: string;
+  /** Which stored key the driver should use; the value never leaves the server. */
+  secret?: "XAI_API_KEY" | "ANTHROPIC_API_KEY" | "COMPAT_API_KEY";
   folder?: string;
   allow: string[];
   unattendedDeny: boolean;

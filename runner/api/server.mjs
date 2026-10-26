@@ -10,6 +10,8 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { listDrivers } from "../../harness/drivers/index.mjs";
+import { proxyModel } from "../../harness/modelProxy.mjs";
+import { createSecretStore } from "../../harness/secrets.mjs";
 import { createTurns } from "../../harness/turns.mjs";
 import { createShell, insideRoot } from "../shell.mjs";
 import { createAuth } from "./auth.mjs";
@@ -21,7 +23,7 @@ import { createStatic } from "./static.mjs";
 const CORS_HEADERS = "authorization, content-type, x-sandbench-client";
 const CORS_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 
-export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null }) {
+export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, secretsFile, env = process.env }) {
   // The runner's own address plus any page hosted elsewhere (e.g. the Vercel site).
   // Exact matches only: no wildcards, no credentials or cookies (the ID token is a header).
   const origins = new Set([publicOrigin, ...allowedOrigins].map((item) => String(item || "").trim().replace(/\/$/, "")).filter(Boolean));
@@ -31,8 +33,11 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
   const runShell = createShell(workspace);
   const authenticate = createAuth({ verifyIdToken, allowedEmails });
   const serveStatic = createStatic(uiDir);
+  // Keys come from the runner's environment or its secrets file, never from the page (SB-05).
+  const secrets = createSecretStore({ file: secretsFile ?? path.join(home, "secrets.json"), env });
   const turns = createTurns({
     runShell,
+    secrets,
     resolveFolder: (folder) => {
       const cwd = folder ? workspacePath(folder) : workspace;
       if (cwd) mkdirSync(cwd, { recursive: true });
@@ -51,6 +56,35 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
     }
     if (req.method === "GET" && route === "/health") {
       return send(res, 200, { ok: true, platform: process.platform, host: os.hostname(), workspace, user: user.email });
+    }
+    if (req.method === "GET" && route === "/secrets") {
+      return send(res, 200, { secrets: secrets.list() });
+    }
+    const secretRoute = /^\/secrets\/([A-Z][A-Z0-9_]{1,63})$/.exec(route);
+    if (req.method === "PUT" && secretRoute) {
+      const body = await readJson(req);
+      try {
+        const saved = secrets.set(secretRoute[1], body.value, body.scope || "shared");
+        console.log(`[secret] ${user.email} set ${saved.name} (${saved.scope})`);
+        return send(res, 200, saved);
+      } catch (error) {
+        return send(res, 400, { error: error.message });
+      }
+    }
+    if (req.method === "DELETE" && secretRoute) {
+      try {
+        console.log(`[secret] ${user.email} remove ${secretRoute[1]}`);
+        return send(res, 200, { ok: secrets.remove(secretRoute[1]) });
+      } catch (error) {
+        return send(res, 400, { error: error.message });
+      }
+    }
+    if (req.method === "POST" && route === "/model") {
+      const body = await readJson(req, 2 * 1024 * 1024);
+      const controller = new AbortController();
+      res.on("close", () => controller.abort());
+      // No localhost bases on the VM: the runner must not become a door into its own network.
+      return await proxyModel(body, res, { store: secrets, allowLocal: false, signal: controller.signal });
     }
     if (req.method === "GET" && route === "/drivers") {
       return send(res, 200, { drivers: await listDrivers() });

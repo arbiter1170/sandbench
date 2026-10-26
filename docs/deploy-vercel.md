@@ -46,7 +46,7 @@ Vite inlines these at **build** time. Changing the allowlist or the runner URL r
 - On sign-in, the app loads IndexedDB, then Firestore `users/{uid}/workspace/snapshot`.
 - Newer `updatedAt` wins; the other side is updated.
 - Attachments/blobs stay in IndexedDB on the device (not uploaded).
-- API keys in Settings sync with the snapshot — treat allowlist as the access boundary.
+- API keys are never in the snapshot. They live on the local harness or the hosted runner (see [runner.md](runner.md#api-keys-sb-05)). A snapshot from an older build that still holds keys is cleaned on the next load: the keys move to the harness or runner, and the Firestore copy is rewritten without them.
 
 ## 5. iOS Safari QA
 

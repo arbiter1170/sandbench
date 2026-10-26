@@ -1,5 +1,6 @@
 import { doc, getDoc, setDoc } from "firebase/firestore";
 import { getFirebaseDb } from "./firebase";
+import { extractLegacySecrets } from "./secrets";
 import type { Snapshot } from "./types";
 
 const DOC_PATH = ["workspace", "snapshot"] as const;
@@ -15,13 +16,14 @@ function workspaceRef(uid: string) {
   return doc(db, "users", uid, DOC_PATH[0], DOC_PATH[1]);
 }
 
-/** Strip oversized fields before upload (IndexedDB blobs stay local). */
+/** Strip oversized fields and any API key before upload (IndexedDB blobs stay local). */
 export function snapshotForCloud(snapshot: Snapshot): Snapshot {
+  const clean = extractLegacySecrets(snapshot).snapshot;
   return {
-    ...snapshot,
-    logs: snapshot.logs.slice(0, 40),
-    computer: snapshot.computer.slice(0, 40),
-    threads: snapshot.threads.map((thread) => ({
+    ...clean,
+    logs: clean.logs.slice(0, 40),
+    computer: clean.computer.slice(0, 40),
+    threads: clean.threads.map((thread) => ({
       ...thread,
       messages: thread.messages.map((message) => ({
         ...message,

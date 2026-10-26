@@ -1,4 +1,5 @@
 // Fast decision model for channel auto-route (OpenRouter Decisions / Jev-shaped).
+import { modelFetch } from "./harness";
 import type { Bot, Settings, Thread } from "./types";
 
 const THRESHOLD = 0.6;
@@ -13,8 +14,9 @@ export type DecisionPick = {
   providerLabel: string;
 };
 
-function decisionKey(settings: Settings): string {
-  return (settings.decisionKey?.trim() || settings.compatKey?.trim() || "").trim();
+/** The harness or runner uses DECISION_API_KEY, or COMPAT_API_KEY when that is all it has. */
+export function decisionReady(ready: ReadonlySet<string>): boolean {
+  return ready.has("DECISION_API_KEY") || ready.has("COMPAT_API_KEY");
 }
 
 function decisionModel(settings: Settings): string {
@@ -70,28 +72,24 @@ function parseDecision(raw: string, members: Bot[]): DecisionPick | null {
 
 /** OpenRouter chat-completions fallback that asks for Jev-shaped JSON (works without Decisions API). */
 async function openRouterDecide(settings: Settings, prompt: string, signal: AbortSignal): Promise<string> {
-  const key = decisionKey(settings);
-  if (!key) throw new Error("No decision API key.");
   const model = decisionModel(settings);
-  const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${key}`,
-      "content-type": "application/json",
-      "HTTP-Referer": "http://127.0.0.1:5173",
-      "X-Title": "Sandbench",
+  const response = await modelFetch(
+    {
+      provider: "openrouter",
+      path: "/chat/completions",
+      payload: {
+        model,
+        temperature: 0,
+        max_tokens: 80,
+        messages: [
+          { role: "system", content: "You are a room router. Answer with JSON only: {\"choice\":\"id\",\"probability\":0.0}." },
+          { role: "user", content: prompt },
+        ],
+      },
     },
-    body: JSON.stringify({
-      model,
-      temperature: 0,
-      max_tokens: 80,
-      messages: [
-        { role: "system", content: "You are a room router. Answer with JSON only: {\"choice\":\"id\",\"probability\":0.0}." },
-        { role: "user", content: prompt },
-      ],
-    }),
     signal,
-  });
+  );
+  if (response.status === 409) throw new Error("No DECISION_API_KEY (or COMPAT_API_KEY) is stored. Add one under Settings > Keys.");
   if (!response.ok) throw new Error(`OpenRouter ${response.status}`);
   const body = (await response.json()) as { choices?: { message?: { content?: string } }[] };
   return body.choices?.[0]?.message?.content ?? "";
@@ -102,9 +100,10 @@ export async function pickWithDecisionModel(
   channel: Thread,
   members: Bot[],
   text: string,
+  ready: ReadonlySet<string>,
 ): Promise<DecisionPick | null> {
   if (!settings.decisionEnabled) return null;
-  if (!decisionKey(settings)) return null;
+  if (!decisionReady(ready)) return null;
   const prompt = buildDecisionPrompt(members, text, channel);
   const signal = AbortSignal.timeout(BUDGET_MS);
   const providerLabel = settings.decisionProvider === "typesafe" ? "Jev" : "OpenRouter";

@@ -103,13 +103,15 @@ export function applyProfileToSettings(profile: TestProfileId): Partial<Settings
       return {
         defaultTestProfile: profile,
         compatBase: MOCK_BASE,
-        compatKey: "mock",
         defaultAgentDriver: "http",
       };
     default:
       return { defaultTestProfile: profile };
   }
 }
+
+/** The mock server accepts any key; applying the mock profile stores this as COMPAT_API_KEY. */
+export const MOCK_COMPAT_KEY = "mock";
 
 export function profileTouchesCompatBase(profile: TestProfileId): boolean {
   return profile === "ollama" || profile === "groq" || profile === "mock";
@@ -136,16 +138,17 @@ export function profileReadiness(
   profile: TestProfileId,
   settings: Settings,
   drivers: AgentDriver[] = [],
+  keys: ReadonlySet<string> = new Set(),
 ): ProfileReadiness {
   const missing: string[] = [];
   const driverOk = (id: string) => drivers.some((item) => item.id === id && item.ok);
 
   switch (profile) {
     case "xai":
-      if (!settings.apiKey.trim()) missing.push("testProfileNeedXaiKey");
+      if (!keys.has("XAI_API_KEY")) missing.push("testProfileNeedXaiKey");
       break;
     case "claude-api":
-      if (!settings.anthropicKey?.trim()) missing.push("testProfileNeedAnthropicKey");
+      if (!keys.has("ANTHROPIC_API_KEY")) missing.push("testProfileNeedAnthropicKey");
       if (drivers.length > 0 && !driverOk("anthropic")) missing.push("testProfileNeedAnthropicDriver");
       break;
     case "claude-cli":
@@ -153,12 +156,12 @@ export function profileReadiness(
       break;
     case "ollama":
       if (!settings.compatBase?.trim()) missing.push("testProfileNeedCompatBase");
-      if (!settings.compatKey?.trim()) missing.push("testProfileNeedCompatKey");
+      if (!keys.has("COMPAT_API_KEY")) missing.push("testProfileNeedCompatKey");
       if (drivers.length > 0 && !driverOk("http")) missing.push("testProfileNeedHarness");
       break;
     case "groq":
       if (!settings.compatBase?.trim()) missing.push("testProfileNeedCompatBase");
-      if (!settings.compatKey?.trim()) missing.push("testProfileNeedGroqKey");
+      if (!keys.has("COMPAT_API_KEY")) missing.push("testProfileNeedGroqKey");
       if (drivers.length > 0 && !driverOk("http")) missing.push("testProfileNeedHarness");
       break;
     case "mock":

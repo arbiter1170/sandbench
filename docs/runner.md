@@ -27,7 +27,7 @@ phone / browser ──https──> Tailscale Funnel (laptop)  or  Cloudflare Acc
 
 ## Routes so far
 
-`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write` and `/api/exec`. They're ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
+`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys) and the SB-02 record routes (see Records). The first nine are ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
 
 Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills, memory, schedules, triggers and MCP move to the runner in SB-08, SB-14, SB-15 and SB-22.
 
@@ -45,6 +45,20 @@ With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Pos
 - **No lost edits:** every row has a version, and an edit must name the version it read. A stale version gets **409** with the current row, so the page reloads that one row and retries. Edits to different rows never collide. Two devices changing different fields of the same row both survive after one retry.
 - **Change feed:** `GET /api/stream?since=<seq>` is an SSE stream of changes in commit order, pushed live through Postgres `LISTEN/NOTIFY`. `GET /api/changes?since=<seq>` returns the same changes as JSON, for catching up.
 - The page switches to these routes in SB-02b. Until then it still syncs the old way.
+
+## API keys (SB-05)
+
+Model, voice and connector keys are kept on the runner, or on the local harness in local mode, never in the page, IndexedDB sync or Firestore.
+
+- **Where they come from:** environment variables (`XAI_API_KEY`, `ANTHROPIC_API_KEY`, `COMPAT_API_KEY`, `DECISION_API_KEY`, `ELEVENLABS_API_KEY`, `FISH_API_KEY`, set in `deploy/.env`) or `/srv/sandbench/secrets.json` (mode 0600, override with `SANDBENCH_SECRETS_FILE`). An environment value wins and can't be changed from the page.
+- **Rotation:** the file is re-read on every call, so changing a key in it takes effect on the next request. A changed environment value needs `docker compose up -d runner`. Neither needs a new page build.
+- **What the page can do:** `GET /api/secrets` lists name, preview (`abcd…yz`), scope and source. `PUT /api/secrets/NAME` and `DELETE /api/secrets/NAME` add or remove a key. No route returns a value.
+- **Model calls:** the page sends `POST /api/model` with the provider, endpoint and request body. The runner adds the key and streams the answer back. Only the xAI, OpenAI-compatible, Anthropic and OpenRouter chat endpoints are allowed. On the VM an OpenAI-compatible base must be `https://`, so the runner can't be pointed at its own network.
+- **Agent scope:** a key can be `shared` or scoped to one agent slug. A scoped key is hidden from every other agent. The owner's page can still use it.
+- **Connectors:** header templates such as `{{COMPOSIO_KEY}}` are filled in on the server.
+- **Migration:** a workspace saved by an older build has its keys moved here on the first load that can reach a harness or runner. Until then they wait on that device only, never in the cloud copy.
+
+If you keep secrets in SOPS or age, decrypt them into `deploy/.env` (or `secrets.json`) on the VM when you deploy. The repo never holds them.
 
 ## The page in runner mode
 

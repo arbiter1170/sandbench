@@ -6,7 +6,10 @@ import { driverById } from "./drivers/index.mjs";
 const BUFFER = 500;
 const PERMISSION_TIMEOUT_MS = 30 * 60_000;
 
-export function createTurns({ runShell, resolveFolder, captureScreen }) {
+// The page names which stored key a turn should use; the value is looked up here (SB-05).
+const TURN_SECRETS = new Set(["XAI_API_KEY", "ANTHROPIC_API_KEY", "COMPAT_API_KEY"]);
+
+export function createTurns({ runShell, resolveFolder, captureScreen, secrets }) {
   const events = [];
   const subscribers = new Set();
   const turns = new Map();
@@ -52,7 +55,7 @@ export function createTurns({ runShell, resolveFolder, captureScreen }) {
         .map((item) => ({ role: item.role, content: item.content.slice(0, 8000) })),
       model: typeof body.model === "string" ? body.model.slice(0, 120) : "",
       base: typeof body.base === "string" ? body.base : "",
-      key: typeof body.key === "string" ? body.key : "",
+      key: TURN_SECRETS.has(body.secret) ? (secrets?.get(body.secret) ?? "") : "",
       cwd,
     };
     const io = {

@@ -4,6 +4,7 @@ import { getBlob } from "./db";
 import { fromDateTimeLocal, toDateTimeLocal } from "./device";
 import { highlight } from "./highlight";
 import { testDecisionModel } from "./decision";
+import type { SecretInfo } from "./secrets";
 import { harnessTtsVoices, type AgentDriver, type TtsProvider } from "./harness";
 import type { Key } from "./i18n";
 import { parseMarkdown, type Inline } from "./markdown";
@@ -746,12 +747,71 @@ export function ToolsPanel({
   );
 }
 
+/** A write-only key: the value goes to the harness or runner; the page shows only a preview. */
+function KeyField({
+  t,
+  name,
+  label,
+  keys,
+  available,
+  onSave,
+  onRemove,
+}: {
+  t: Copy;
+  name: string;
+  label: string;
+  keys: SecretInfo[];
+  available: boolean;
+  onSave: (name: string, value: string) => Promise<unknown>;
+  onRemove: (name: string) => Promise<unknown>;
+}) {
+  const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const info = keys.find((item) => item.name === name);
+  const fail = (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught));
+  return (
+    <>
+      <label>
+        {label}
+        <input
+          type="password"
+          value={value}
+          disabled={!available}
+          placeholder={info ? `${t("keyStored")} ${info.preview}` : name}
+          onChange={(event) => setValue(event.target.value)}
+          autoComplete="off"
+        />
+      </label>
+      <div className="actions">
+        <button
+          type="button"
+          disabled={!available || !value.trim()}
+          onClick={() => void onSave(name, value.trim()).then(() => (setValue(""), setError("")), fail)}
+        >
+          {t("saveKey")}
+        </button>
+        {info?.source === "file" ? (
+          <button type="button" onClick={() => void onRemove(name).then(() => setError(""), fail)}>
+            {t("clearKey")}
+          </button>
+        ) : null}
+        {info?.source === "env" ? <span className="hint">{t("keyFromEnv")}</span> : null}
+      </div>
+      {error ? <p className="hint">{error}</p> : null}
+    </>
+  );
+}
+
 export function SettingsPanel({
   t,
   settings,
   logs,
   canInstall,
   drivers,
+  keys,
+  keysAvailable,
+  onSaveKey,
+  onRemoveKey,
   onApplyDefaultTestProfile,
   onChange,
   onSavePin,
@@ -766,6 +826,10 @@ export function SettingsPanel({
   logs: LogItem[];
   canInstall: boolean;
   drivers: AgentDriver[];
+  keys: SecretInfo[];
+  keysAvailable: boolean;
+  onSaveKey: (name: string, value: string) => Promise<unknown>;
+  onRemoveKey: (name: string) => Promise<unknown>;
   onApplyDefaultTestProfile: (profile: TestProfileId) => void;
   onChange: (partial: Partial<Settings>) => void;
   onSavePin: (pin: string) => void;
@@ -775,8 +839,9 @@ export function SettingsPanel({
   onErase: () => void;
   onInstall: () => void;
 }) {
-  const [showKey, setShowKey] = useState(false);
   const [pin, setPin] = useState("");
+  const keyProps = { t, keys, available: keysAvailable, onSave: onSaveKey, onRemove: onRemoveKey };
+  const keyNames = new Set(keys.map((item) => item.name));
   const [decisionTest, setDecisionTest] = useState("");
   const [ttsVoices, setTtsVoices] = useState<{ id: string; label: string }[]>([]);
   const [ttsVoiceError, setTtsVoiceError] = useState("");
@@ -832,31 +897,8 @@ export function SettingsPanel({
             autoComplete="off"
           />
         </label>
-        <label>
-          {t("apiKey")}
-          <input
-            type={showKey ? "text" : "password"}
-            value={settings.apiKey}
-            onChange={(event) => onChange({ apiKey: event.target.value })}
-            autoComplete="off"
-          />
-        </label>
-        <div className="actions">
-          <button type="button" onClick={() => setShowKey((value) => !value)}>
-            {showKey ? t("hideKey") : t("showKey")}
-          </button>
-          <button type="button" onClick={() => onChange({ apiKey: "" })}>
-            {t("clearKey")}
-          </button>
-        </div>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={settings.useProxy}
-            onChange={(event) => onChange({ useProxy: event.target.checked })}
-          />
-          {t("useProxy")}
-        </label>
+        <p className="measure">{keysAvailable ? t("keysOnServer") : t("keysNeedServer")}</p>
+        <KeyField {...keyProps} name="XAI_API_KEY" label={t("apiKey")} />
         <p className="measure">{t("proxyHint")}</p>
         <h3>{t("providerCompat")}</h3>
         <p className="measure">{t("compatHint")}</p>
@@ -869,15 +911,7 @@ export function SettingsPanel({
             autoComplete="off"
           />
         </label>
-        <label>
-          {t("apiKey")}
-          <input
-            type={showKey ? "text" : "password"}
-            value={settings.compatKey ?? ""}
-            onChange={(event) => onChange({ compatKey: event.target.value })}
-            autoComplete="off"
-          />
-        </label>
+        <KeyField {...keyProps} name="COMPAT_API_KEY" label={t("apiKey")} />
         <h3>{t("providerAnthropic")}</h3>
         <p className="measure">{t("anthropicHint")}</p>
         <label>
@@ -889,15 +923,7 @@ export function SettingsPanel({
             autoComplete="off"
           />
         </label>
-        <label>
-          {t("apiKey")}
-          <input
-            type={showKey ? "text" : "password"}
-            value={settings.anthropicKey ?? ""}
-            onChange={(event) => onChange({ anthropicKey: event.target.value })}
-            autoComplete="off"
-          />
-        </label>
+        <KeyField {...keyProps} name="ANTHROPIC_API_KEY" label={t("apiKey")} />
         <label>
           {t("defaultAgentDriver")}
           <select value={settings.defaultAgentDriver ?? ""} onChange={(event) => onChange({ defaultAgentDriver: (event.target.value || undefined) as Settings["defaultAgentDriver"] })}>
@@ -930,27 +956,11 @@ export function SettingsPanel({
           </select>
         </label>
         {settings.ttsMode === "elevenlabs" ? (
-          <label>
-            {t("elevenLabsKey")}
-            <input
-              type={showKey ? "text" : "password"}
-              value={settings.elevenLabsKey ?? ""}
-              onChange={(event) => onChange({ elevenLabsKey: event.target.value })}
-              autoComplete="off"
-            />
-          </label>
+          <KeyField {...keyProps} name="ELEVENLABS_API_KEY" label={t("elevenLabsKey")} />
         ) : null}
         {settings.ttsMode === "fish" ? (
           <>
-            <label>
-              {t("fishKey")}
-              <input
-                type={showKey ? "text" : "password"}
-                value={settings.fishKey ?? ""}
-                onChange={(event) => onChange({ fishKey: event.target.value })}
-                autoComplete="off"
-              />
-            </label>
+            <KeyField {...keyProps} name="FISH_API_KEY" label={t("fishKey")} />
             <label>
               {t("fishModel")}
               <input
@@ -1009,15 +1019,7 @@ export function SettingsPanel({
               type="button"
               onClick={() => {
                 const provider = (settings.ttsMode === "browser" ? "xai" : settings.ttsMode) as TtsProvider;
-                const key =
-                  provider === "xai"
-                    ? settings.apiKey
-                    : provider === "elevenlabs"
-                      ? settings.elevenLabsKey
-                      : provider === "fish"
-                        ? settings.fishKey
-                        : undefined;
-                void harnessTtsVoices(provider, { key, baseUrl: settings.chatterboxBaseUrl })
+                void harnessTtsVoices(provider, { baseUrl: settings.chatterboxBaseUrl })
                   .then((result) => {
                     setTtsVoices(result.voices);
                     setTtsVoiceError("");
@@ -1060,15 +1062,7 @@ export function SettingsPanel({
             autoComplete="off"
           />
         </label>
-        <label>
-          {t("decisionKey")}
-          <input
-            type={showKey ? "text" : "password"}
-            value={settings.decisionKey ?? ""}
-            onChange={(event) => onChange({ decisionKey: event.target.value })}
-            autoComplete="off"
-          />
-        </label>
+        <KeyField {...keyProps} name="DECISION_API_KEY" label={t("decisionKey")} />
         <p className="hint">{t("decisionKeyHint")}</p>
         <button
           type="button"
@@ -1115,7 +1109,7 @@ export function SettingsPanel({
         </label>
         <ul className="profile-readiness">
           {TEST_PROFILE_IDS.map((id) => {
-            const status = profileReadiness(id, settings, drivers);
+            const status = profileReadiness(id, settings, drivers, keyNames);
             return (
               <li key={id}>
                 <strong>{t(profileLabelKey(id))}</strong>

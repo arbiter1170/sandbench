@@ -37,6 +37,8 @@ const server = createRunner({
   home: env.SANDBENCH_HOME || path.join(os.homedir(), ".sandbench"),
   uiDir: env.SANDBENCH_UI_DIR || "",
   publicOrigin: env.SANDBENCH_PUBLIC_ORIGIN || "",
+  // Model keys: environment variables (XAI_API_KEY, ANTHROPIC_API_KEY, ...) or this 0600 file.
+  secretsFile: env.SANDBENCH_SECRETS_FILE || undefined,
   // Other pages allowed to call /api from a browser, comma-separated exact origins
   // (for a laptop runner: the Vercel production URL). No wildcards.
   allowedOrigins: String(env.SANDBENCH_ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean),

@@ -10,6 +10,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { listDrivers } from "./drivers/index.mjs";
 import { listVoices as ttsListVoices, providerMeta, speak as ttsSpeak } from "./tts/index.mjs";
+import { proxyModel } from "./modelProxy.mjs";
+import { createSecretStore } from "./secrets.mjs";
 import { createTurns } from "./turns.mjs";
 
 const PORT = Number(process.env.SANDBENCH_HARNESS_PORT || 8799);
@@ -21,6 +23,10 @@ const WORKSPACE = path.join(SANDBENCH_HOME, "workspace");
 const SKILLS_DIR = path.join(SANDBENCH_HOME, "skills");
 const BOTS_DIR = path.join(SANDBENCH_HOME, "bots");
 const TOKEN = randomBytes(24).toString("hex");
+// API keys live here, not in the page or Firestore (SB-05). The page can add or remove a
+// key but only ever reads back its name and a short preview.
+const secrets = createSecretStore({ file: path.join(SANDBENCH_HOME, "secrets.json") });
+const TTS_SECRETS = { xai: "XAI_API_KEY", elevenlabs: "ELEVENLABS_API_KEY", fish: "FISH_API_KEY" };
 mkdirSync(SKILLS_DIR, { recursive: true });
 mkdirSync(BOTS_DIR, { recursive: true });
 
@@ -586,11 +592,16 @@ function send(res, status, body, type = "application/json") {
   res.end(type === "application/json" ? JSON.stringify(body) : body);
 }
 
-async function readJson(req) {
+function fillHeaders(headers) {
+  if (!headers || typeof headers !== "object") return {};
+  return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, secrets.fill(String(value))]));
+}
+
+async function readJson(req, limit = 256 * 1024) {
   let raw = "";
   for await (const chunk of req) {
     raw += chunk;
-    if (raw.length > 256 * 1024) throw new Error("Request too large.");
+    if (raw.length > limit) throw new Error("Request too large.");
   }
   return raw ? JSON.parse(raw) : {};
 }
@@ -598,6 +609,7 @@ async function readJson(req) {
 const agentTurns = createTurns({
   runShell,
   captureScreen,
+  secrets,
   resolveFolder: (folder) => {
     const cwd = folder ? workspacePath(folder) : WORKSPACE;
     if (cwd) mkdirSync(cwd, { recursive: true });
@@ -668,7 +680,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/tts/voices") {
       const provider = String(url.searchParams.get("provider") || "xai");
-      const key = String(url.searchParams.get("key") || "").trim();
+      const key = TTS_SECRETS[provider] ? (secrets.get(TTS_SECRETS[provider]) ?? "") : "";
       const baseUrl = String(url.searchParams.get("baseUrl") || "").trim();
       try {
         const voices = await ttsListVoices(provider, { key, baseUrl });
@@ -684,7 +696,7 @@ const server = createServer(async (req, res) => {
         const audio = await ttsSpeak(provider, {
           text: body.text,
           voiceId: body.voiceId,
-          key: body.key,
+          key: TTS_SECRETS[provider] ? (secrets.get(TTS_SECRETS[provider]) ?? "") : "",
           baseUrl: body.baseUrl,
           model: body.model,
           fishModel: body.fishModel,
@@ -771,13 +783,13 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/mcp/probe") {
       const body = await readJson(req);
-      return send(res, 200, await probeMcp(String(body.url || ""), body.headers && typeof body.headers === "object" ? body.headers : {}));
+      return send(res, 200, await probeMcp(String(body.url || ""), fillHeaders(body.headers)));
     }
     if (req.method === "POST" && url.pathname === "/mcp/call") {
       const body = await readJson(req);
       if (body.approved !== true) return send(res, 403, { error: "Tool call was not approved." });
       console.log(`[mcp] ${body.tool} @ ${body.url}`);
-      const headers = body.headers && typeof body.headers === "object" ? body.headers : {};
+      const headers = fillHeaders(body.headers);
       return send(res, 200, await callMcp(String(body.url || ""), headers, String(body.tool || ""), body.args));
     }
     if (req.method === "POST" && url.pathname === "/schedules") {
@@ -841,6 +853,31 @@ const server = createServer(async (req, res) => {
       });
       return send(res, 200, { ok: true });
     }
+    if (req.method === "GET" && url.pathname === "/secrets") {
+      return send(res, 200, { secrets: secrets.list() });
+    }
+    const secretRoute = /^\/secrets\/([A-Z][A-Z0-9_]{1,63})$/.exec(url.pathname);
+    if (req.method === "PUT" && secretRoute) {
+      const body = await readJson(req);
+      try {
+        return send(res, 200, secrets.set(secretRoute[1], body.value, body.scope || "shared"));
+      } catch (error) {
+        return send(res, 400, { error: error.message });
+      }
+    }
+    if (req.method === "DELETE" && secretRoute) {
+      try {
+        return send(res, 200, { ok: secrets.remove(secretRoute[1]) });
+      } catch (error) {
+        return send(res, 400, { error: error.message });
+      }
+    }
+    if (req.method === "POST" && url.pathname === "/model") {
+      const body = await readJson(req, 2 * 1024 * 1024);
+      const controller = new AbortController();
+      res.on("close", () => controller.abort());
+      return await proxyModel(body, res, { store: secrets, allowLocal: true, signal: controller.signal });
+    }
     if (req.method === "GET" && url.pathname === "/drivers") {
       return send(res, 200, { drivers: await listDrivers() });
     }
@@ -873,6 +910,8 @@ const server = createServer(async (req, res) => {
     }
     return send(res, 404, { error: "Not found." });
   } catch (error) {
+    // A streamed model reply that fails half way has already sent its headers.
+    if (res.headersSent) return res.end();
     const closed = error?.cause?.code === "UND_ERR_SOCKET" || error?.message === "terminated";
     return send(res, 500, { error: closed ? "The remote server closed the connection." : error instanceof Error ? error.message : String(error) });
   }

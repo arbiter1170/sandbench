@@ -11,6 +11,9 @@ interface ImportMetaEnv {
   readonly VITE_ALLOWED_EMAILS?: string;
   /** Hosted runner base, e.g. "/api". Unset means the local harness via the Vite proxy. */
   readonly VITE_RUNNER_URL?: string;
+  /** Tests only: Auth emulator URL (http://127.0.0.1:9099) and Firestore emulator host:port. */
+  readonly VITE_FIREBASE_AUTH_EMULATOR?: string;
+  readonly VITE_FIRESTORE_EMULATOR?: string;
 }
 
 interface ImportMeta {

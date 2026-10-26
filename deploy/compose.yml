@@ -28,6 +28,13 @@ services:
       SANDBENCH_PUBLIC_ORIGIN: ${SANDBENCH_PUBLIC_ORIGIN:-}
       SANDBENCH_ALLOWED_ORIGINS: ${SANDBENCH_ALLOWED_ORIGINS:-}
       SANDBENCH_BLOCKED_PROJECTS: ${SANDBENCH_BLOCKED_PROJECTS:-}
+      # Model and voice keys (optional here; they can also be added from Settings > Keys).
+      XAI_API_KEY: ${XAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COMPAT_API_KEY: ${COMPAT_API_KEY:-}
+      DECISION_API_KEY: ${DECISION_API_KEY:-}
+      ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
+      FISH_API_KEY: ${FISH_API_KEY:-}
       # Used from SB-02 on.
       DATABASE_URL: postgres://sandbench:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/sandbench
     volumes:
