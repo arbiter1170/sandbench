@@ -47,26 +47,42 @@ export function createDataRoutes(store) {
         busy = false;
       }
     };
-    // Subscribe before answering, so a LISTEN failure is a 500 rather than a dead stream.
-    const unsubscribe = await store.subscribe((who) => {
-      if (who === owner) void flush().catch(() => res.end());
-    });
-    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+    // Reserve the slot and attach cleanup before any await, so a client that leaves
+    // while we subscribe still frees its slot, and concurrent opens can't pass the cap.
     openStreams.set(owner, (openStreams.get(owner) ?? 0) + 1);
-    const beat = setInterval(() => res.write(": keep-alive\n\n"), HEARTBEAT_MS);
-    // The stream lives no longer than the ID token that opened it; the page reconnects
-    // with a fresh token and its last seq.
-    const expiry = user.exp ? setTimeout(() => res.end(), Math.max(0, user.exp * 1000 - Date.now())) : null;
-    // The response's close fires both when the client leaves and when the expiry ends it.
-    res.on("close", () => {
+    let unsubscribe = null;
+    let beat = null;
+    let expiry = null;
+    let released = false;
+    const release = () => {
+      if (released) return;
+      released = true;
       open = false;
-      clearInterval(beat);
+      if (beat) clearInterval(beat);
       if (expiry) clearTimeout(expiry);
-      unsubscribe();
+      unsubscribe?.();
       const count = (openStreams.get(owner) ?? 1) - 1;
       if (count > 0) openStreams.set(owner, count);
       else openStreams.delete(owner);
-    });
+    };
+    // The response's close fires when the client leaves, and when the expiry ends it.
+    res.on("close", release);
+    try {
+      // Subscribe before answering, so a LISTEN failure is a 500 rather than a dead stream.
+      const off = await store.subscribe((who) => {
+        if (who === owner) void flush().catch(() => res.end());
+      });
+      unsubscribe = off;
+    } catch (error) {
+      release();
+      throw error;
+    }
+    if (released || res.destroyed) return void unsubscribe();
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+    beat = setInterval(() => res.write(": keep-alive\n\n"), HEARTBEAT_MS);
+    // The stream lives no longer than the ID token that opened it; the page reconnects
+    // with a fresh token and its last seq.
+    expiry = user.exp ? setTimeout(() => res.end(), Math.max(0, user.exp * 1000 - Date.now())) : null;
     res.write(": ready\n\n");
     await flush();
   }

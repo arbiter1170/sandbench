@@ -251,3 +251,47 @@ test("each account can hold a limited number of open streams", { skip }, async (
   assert.equal(response.status, 200);
   again.abort();
 });
+
+test("streams abandoned during a slow subscribe free their slot, and concurrent opens never exceed the cap", { skip }, async () => {
+  const { createRunner } = await import("../api/server.mjs");
+  let pendingSubscribes = 0;
+  const slowStore = {
+    ...store,
+    async subscribe(fn) {
+      pendingSubscribes += 1;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      pendingSubscribes -= 1;
+      return store.subscribe(fn);
+    },
+  };
+  const slow = createRunner({ home: tmp, allowedEmails: ["vincent@example.test"], verifyIdToken: async () => USERS.laptop, store: slowStore });
+  await new Promise((resolve) => slow.listen(0, "127.0.0.1", resolve));
+  const url = `http://127.0.0.1:${slow.address().port}/api/stream?since=0`;
+  const open = (signal) => fetch(url, { headers: { authorization: "Bearer laptop" }, signal });
+  try {
+    // 8 clients connect and hang up while the runner is still subscribing.
+    const aborted = [];
+    for (let i = 0; i < 8; i += 1) {
+      const controller = new AbortController();
+      aborted.push(open(controller.signal).catch(() => null));
+      setTimeout(() => controller.abort(), 50);
+    }
+    await Promise.all(aborted);
+    while (pendingSubscribes > 0) await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    const after = new AbortController();
+    const response = await open(after.signal);
+    assert.equal(response.status, 200, "abandoned connects must not use up the account's streams");
+    after.abort();
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    // 10 opened at once: exactly 8 get a stream.
+    const controllers = Array.from({ length: 10 }, () => new AbortController());
+    const statuses = (await Promise.all(controllers.map((controller) => open(controller.signal)))).map((r) => r.status);
+    for (const controller of controllers) controller.abort();
+    assert.deepEqual(statuses.sort(), [200, 200, 200, 200, 200, 200, 200, 200, 429, 429]);
+  } finally {
+    slow.closeAllConnections?.();
+    slow.close();
+  }
+});
