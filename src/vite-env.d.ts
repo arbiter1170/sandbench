@@ -9,6 +9,8 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
   readonly VITE_FIREBASE_STORAGE_BUCKET?: string;
   readonly VITE_ALLOWED_EMAILS?: string;
+  /** Hosted runner base, e.g. "/api". Unset means the local harness via the Vite proxy. */
+  readonly VITE_RUNNER_URL?: string;
 }
 
 interface ImportMeta {

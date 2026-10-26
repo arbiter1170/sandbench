@@ -18,6 +18,7 @@ Open http://127.0.0.1:5173.
 - Firebase Google Auth (email allowlist) + Firestore workspace sync
 - Vercel SPA on branch `deploy/vercel`
 - Details: [docs/deploy-vercel.md](docs/deploy-vercel.md)
+- Hosted runner on a VM (SB-01, in progress): [docs/runner.md](docs/runner.md)
 
 Attachments stay on-device (IndexedDB). Model API keys sync with the cloud snapshot under your Firebase UID — keep the allowlist tight.
 

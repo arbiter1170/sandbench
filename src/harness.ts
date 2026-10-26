@@ -1,6 +1,18 @@
+import { getFirebaseAuth } from "./firebase";
 import type { Connector, PointerAction, Secret, TriggerRun, WebhookTrigger } from "./types";
 
 const HEADERS = { "x-sandbench-client": "1" };
+// Runner mode (SB-01): VITE_RUNNER_URL (e.g. "/api") points at the hosted runner, and each
+// call carries the signed-in user's Firebase ID token. Without it, the local harness is
+// reached through the Vite dev proxy at /harness.
+const RUNNER_URL = (import.meta.env.VITE_RUNNER_URL ?? "").replace(/\/$/, "");
+const BASE = RUNNER_URL || "/harness";
+
+async function authHeaders(): Promise<Record<string, string>> {
+  if (!RUNNER_URL) return HEADERS;
+  const token = await getFirebaseAuth()?.currentUser?.getIdToken();
+  return token ? { ...HEADERS, authorization: `Bearer ${token}` } : HEADERS;
+}
 
 export type HarnessHealth = { ok: boolean; platform: string; host: string; workspace: string };
 export type ProcessStat = { name: string; cpu: number; mem: number };
@@ -19,9 +31,9 @@ export type HarnessTriggers = {
 };
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/harness${path}`, {
+  const response = await fetch(`${BASE}${path}`, {
     ...init,
-    headers: { ...HEADERS, ...(init?.body ? { "content-type": "application/json" } : {}), ...(init?.headers ?? {}) },
+    headers: { ...(await authHeaders()), ...(init?.body ? { "content-type": "application/json" } : {}), ...(init?.headers ?? {}) },
   });
   if (!response.ok) {
     const body = (await response.json().catch(() => null)) as { error?: string } | null;
@@ -43,7 +55,7 @@ export function harnessProcesses(): Promise<ProcessReport> {
 }
 
 export async function harnessScreen(): Promise<Blob> {
-  const response = await fetch("/harness/screen", { headers: HEADERS });
+  const response = await fetch(`${BASE}/screen`, { headers: await authHeaders() });
   if (!response.ok) throw new Error(`Screen capture returned ${response.status}.`);
   return response.blob();
 }
@@ -72,9 +84,9 @@ export async function harnessTtsSpeak(input: {
   model?: string;
   fishModel?: string;
 }): Promise<Blob> {
-  const response = await fetch("/harness/tts/speak", {
+  const response = await fetch(`${BASE}/tts/speak`, {
     method: "POST",
-    headers: { ...HEADERS, "content-type": "application/json" },
+    headers: { ...(await authHeaders()), "content-type": "application/json" },
     body: JSON.stringify(input),
   });
   if (!response.ok) {
@@ -227,7 +239,7 @@ export function harnessPermit(permissionId: string, allow: boolean): Promise<{ o
 }
 
 export async function harnessEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
-  const response = await fetch(`/harness/events?turn=${turnId}&after=${after}`, { headers: HEADERS, signal });
+  const response = await fetch(`${BASE}/events?turn=${turnId}&after=${after}`, { headers: await authHeaders(), signal });
   if (!response.ok || !response.body) throw new Error(`The event stream returned ${response.status}.`);
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
