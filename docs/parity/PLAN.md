@@ -486,3 +486,4 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · acceptance result`.
 
 - 2026-10-26 · SB-21 (skeleton) · PR #2 · vitest for src/, node --test for harness/, CI workflow (typecheck, tests, build, no keys in dist/, gitleaks) · local typecheck, 11 tests and build pass; first CI run on the PR
+- 2026-10-26 · SB-01 · PR #3 · runner/ service (page + /api on one address, Firebase ID token + server allowlist), Dockerfile, compose (runner, postgres, cloudflared, no ports), runner mode in src/harness.ts · built; 401/403/200 proven with real Auth-emulator tokens and in CI; live acceptance (iPhone, VM port scan) pending the VM, Cloudflare and Firebase project, so the box stays unticked
