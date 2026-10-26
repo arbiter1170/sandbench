@@ -205,6 +205,12 @@ export function createStore(sql, { onLogged } = {}) {
       return { changes: out, last: changes.length ? Number(changes[changes.length - 1].seq) : Number(since) || 0, more: changes.length === cap };
     },
 
+    /** The newest change seq for this owner (0 if none): where a fresh device starts its feed. */
+    async head(owner) {
+      const [row] = await sql`select coalesce(max(seq), 0) as seq from changes where owner = ${owner}`;
+      return Number(row.seq);
+    },
+
     /** Call `fn(owner)` after any committed write; returns an unsubscribe function. */
     async subscribe(fn) {
       listeners.add(fn);

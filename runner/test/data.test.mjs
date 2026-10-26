@@ -295,3 +295,10 @@ test("streams abandoned during a slow subscribe free their slot, and concurrent 
     slow.close();
   }
 });
+
+test("changes/head is the newest seq for this user only", { skip }, async () => {
+  const mine = (await call("laptop", "GET", "/changes/head")).body.seq;
+  assert.equal(mine, (await call("laptop", "GET", "/changes?since=0&limit=2000")).body.last);
+  await call("other", "POST", "/data/contacts", { id: "c-head", data: { name: "x" } });
+  assert.equal((await call("laptop", "GET", "/changes/head")).body.seq, mine);
+});

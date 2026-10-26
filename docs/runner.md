@@ -44,7 +44,7 @@ With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Pos
   - `DELETE /api/data/:kind/:id?version=n` deletes one, leaving a tombstone that other devices see.
 - **No lost edits:** every row has a version, and an edit must name the version it read. A stale version gets **409** with the current row, so the page reloads that one row and retries. Edits to different rows never collide. Two devices changing different fields of the same row both survive after one retry.
 - **Change feed:** `GET /api/stream?since=<seq>` is an SSE stream of changes in commit order, pushed live through Postgres `LISTEN/NOTIFY`. `GET /api/changes?since=<seq>` returns the same changes as JSON, for catching up.
-- The page switches to these routes in SB-02b. Until then it still syncs the old way.
+- **The page (SB-02b):** in runner mode (`VITE_RUNNER_URL` set), the page loads these records instead of the Firestore snapshot. It saves only the records that changed, each with the version it read. On a 409 it re-sends its changed fields on top of the newer version, so edits to different fields on two devices both survive. Changes from other devices arrive live over `/api/stream`. IndexedDB stays as this device's cache, and Firestore is no longer read or written in this mode. The first device to sign in uploads its copy when the runner has none yet. `GET /api/changes/head` gives the feed position a device starts from.
 
 ## API keys (SB-05)
 

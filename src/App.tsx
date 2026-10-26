@@ -32,8 +32,10 @@ import {
   harnessWriteFile,
   type AgentDriver,
   type HarnessHealth,
+  runnerMode,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
+import { applyMessageChange, applyThreadChange, RecordSync, upsertItem, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
 import {
@@ -230,6 +232,8 @@ export function App({ user }: { user: User }) {
 
   const cloudUpdatedAtRef = useRef(0);
   const skipNextCloudPushRef = useRef(false);
+  // Runner mode (SB-02b): records on the runner replace the Firestore snapshot.
+  const recordSyncRef = useRef<RecordSync | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -277,7 +281,21 @@ export function App({ user }: { user: User }) {
         const found: LegacySecret[] = [...(await loadPendingSecrets().catch(() => [])), ...local.found];
         let snapshot = local.snapshot;
         let updatedAt = bundle.updatedAt;
-        try {
+        if (runnerMode) {
+          // The runner's records are the workspace; this device's copy is only a cache. The
+          // first device to sign in uploads its copy when the runner has none yet.
+          const sync = new RecordSync();
+          try {
+            const remote = await sync.load(local.snapshot);
+            if (remote) snapshot = remote;
+            else await sync.push(local.snapshot);
+            recordSyncRef.current = sync;
+            updatedAt = Date.now();
+            await saveSnapshot(snapshot, updatedAt).catch(() => undefined);
+          } catch {
+            // Runner unreachable: work from this device's copy; the next load syncs.
+          }
+        } else try {
           const pulled = await pullCloudSnapshot(user.uid);
           const cloudClean = pulled ? extractLegacySecrets(pulled.snapshot) : null;
           if (cloudClean) found.push(...cloudClean.found);
@@ -306,6 +324,7 @@ export function App({ user }: { user: User }) {
         }
         applySnapshot(snapshot);
         setHydrated(true);
+        recordSyncRef.current?.stream(applyRemoteChange);
       })
       .catch(() => {
         if (!active) return;
@@ -318,6 +337,8 @@ export function App({ user }: { user: User }) {
       });
     return () => {
       active = false;
+      recordSyncRef.current?.stopStream?.();
+      recordSyncRef.current = null;
     };
   }, [user.uid]);
 
@@ -330,6 +351,11 @@ export function App({ user }: { user: User }) {
       void saveSnapshot(snapshot)
         .then(async (updatedAt) => {
           cloudUpdatedAtRef.current = updatedAt;
+          if (runnerMode) {
+            // Only the records that changed go to the runner; Firestore is not written.
+            await recordSyncRef.current?.push(snapshot).catch(() => undefined);
+            return;
+          }
           if (skipNextCloudPushRef.current) {
             skipNextCloudPushRef.current = false;
             return;
@@ -600,6 +626,36 @@ export function App({ user }: { user: User }) {
     );
     if (syncSettings && profileTouchesCompatBase(profile)) {
       patchSettings(applyProfileToSettings(profile));
+    }
+  }
+
+  /** A change saved on another device, applied to the matching piece of state. */
+  function applyRemoteChange(change: RemoteRecord) {
+    switch (change.kind) {
+      case "agents":
+        return setBots((prev) => upsertItem(prev, change));
+      case "threads":
+        return setThreads((prev) => applyThreadChange(prev, change));
+      case "messages":
+        return setThreads((prev) => applyMessageChange(prev, change));
+      case "routines":
+        return setRoutines((prev) => upsertItem(prev, change));
+      case "tasks":
+        return setTasks((prev) => upsertItem(prev, change));
+      case "reminders":
+        return setReminders((prev) => upsertItem(prev, change));
+      case "events":
+        return setEvents((prev) => upsertItem(prev, change));
+      case "contacts":
+        return setContacts((prev) => upsertItem(prev, change));
+      case "logs":
+        return setLogs((prev) => upsertItem(prev, change));
+      case "computer":
+        return setComputer((prev) => upsertItem(prev, change));
+      case "settings":
+        return change.deleted ? undefined : setSettings((prev) => ({ ...prev, ...(change.data as Partial<Settings>) }));
+      case "studio":
+        return change.deleted ? undefined : setStudio((prev) => ({ ...prev, ...(change.data as Partial<Studio>) }));
     }
   }
 

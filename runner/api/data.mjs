@@ -6,6 +6,7 @@
 //   PATCH  /api/data/:kind/:id      { version, data }          -> merged fields, version + 1
 //   DELETE /api/data/:kind/:id?version=n                       -> tombstone
 //   GET    /api/changes?since=seq                              -> JSON catch-up
+//   GET    /api/changes/head                                   -> { seq } newest for this user
 //   GET    /api/stream?since=seq                               -> SSE change feed
 // A stale version gets 409 with { current }, so the page reloads that one row.
 import { StoreError } from "../db/store.mjs";
@@ -91,6 +92,9 @@ export function createDataRoutes(store) {
   return async function dataRoute(req, res, route, url, user) {
     const owner = user.uid;
     try {
+      if (req.method === "GET" && route === "/changes/head") {
+        return send(res, 200, { seq: await store.head(owner) }), true;
+      }
       if (req.method === "GET" && route === "/changes") {
         return send(res, 200, await store.changesSince(owner, url.searchParams.get("since"), url.searchParams.get("limit"))), true;
       }
