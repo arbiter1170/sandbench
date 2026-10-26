@@ -20,6 +20,20 @@ jobs:
     env:
       # Electron is only needed for the desktop build, not for CI.
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+      # SB-02 datastore tests run against this throwaway database (CI only).
+      TEST_DATABASE_URL: postgres://sandbench:ci-only@127.0.0.1:5432/sandbench_test
+    services:
+      postgres:
+        image: postgres:17-bookworm
+        env:
+          POSTGRES_USER: sandbench
+          POSTGRES_PASSWORD: ci-only
+          POSTGRES_DB: sandbench_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sandbench -d sandbench_test"
+          --health-interval 5s --health-timeout 3s --health-retries 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,7 +45,13 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - run: npm run typecheck
       - run: npm run test:web
+      - run: npm ci --prefix runner --no-audit --no-fund
       - run: npm run test:node
+      - name: The datastore tests ran (not skipped)
+        run: |
+          set -o pipefail
+          node --test runner/test/data.test.mjs 2>&1 | tee /tmp/data.log
+          grep -q "^# skipped 0" /tmp/data.log
       - run: npm run build
       - name: No API keys in the page bundle
         run: |

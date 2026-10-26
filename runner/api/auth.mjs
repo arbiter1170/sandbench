@@ -25,7 +25,8 @@ export function createAuth({ verifyIdToken, allowedEmails }) {
     if (!email || claims.email_verified !== true || !allowed.has(email)) {
       return { status: 403, error: "This account is not allowed to use this runner." };
     }
-    return { user: { uid: claims.uid, email } };
+    // `exp` (seconds) lets long-lived streams end when the token does.
+    return { user: { uid: claims.uid, email, ...(Number.isFinite(claims.exp) ? { exp: claims.exp } : {}) } };
   };
 }
 
