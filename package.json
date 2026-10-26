@@ -12,6 +12,10 @@
     "import-grok": "node scripts/import-grok-desktop.mjs",
     "import-openmaus": "node scripts/import-openmaus-team.mjs",
     "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:web && npm run test:node",
+    "test:web": "vitest run",
+    "test:node": "node --test \"harness/**/*.test.mjs\"",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "electron:dev": "node scripts/electron-dev.mjs",
     "electron:pack": "npm run build && electron-builder --win --dir"
@@ -30,7 +34,8 @@
     "electron-builder": "^26.15.3",
     "typescript": "^5.9.2",
     "vite": "^7.1.7",
-    "vite-plugin-pwa": "^1.0.3"
+    "vite-plugin-pwa": "^1.0.3",
+    "vitest": "^3.2.7"
   },
   "build": {
     "appId": "local.sandbench.app",
