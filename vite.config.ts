@@ -46,6 +46,11 @@ export default defineConfig({
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/api-proxy/, ""),
       },
+      // Runner mode in dev (VITE_RUNNER_URL=/api): a runner started with `npm run runner`.
+      // The runner checks the Firebase ID token itself, so no token is added here.
+      "/api/": {
+        target: "http://127.0.0.1:8080",
+      },
       "/harness": {
         target: "http://127.0.0.1:8799",
         rewrite: (path) => path.replace(/^\/harness/, ""),

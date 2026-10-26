@@ -38,6 +38,55 @@ jobs:
             exit 1
           fi
 
+  runner-auth:
+    name: Runner sign-in checks (Auth emulator)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: runner/package-lock.json
+      - run: npm ci --prefix runner --no-audit --no-fund
+      - name: Real ID tokens against the demo-sandbench emulator
+        working-directory: runner/test/emulator
+        run: >
+          npx --yes firebase-tools@14 emulators:exec --only auth --project demo-sandbench
+          "node --test ../emulator.test.mjs"
+
+  runner-image:
+    name: Runner image and compose file
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: compose.yml is valid (placeholder values, CI only)
+        env:
+          FIREBASE_PROJECT_ID: demo-sandbench
+          SANDBENCH_ALLOWED_EMAILS: ci@example.test
+          SANDBENCH_PUBLIC_ORIGIN: https://sandbench.example.test
+          POSTGRES_PASSWORD: ci-only
+          CLOUDFLARE_TUNNEL_TOKEN: ci-only
+        run: docker compose -f deploy/compose.yml config -q
+      - name: No service publishes a port
+        run: |
+          if grep -nE '^\s+ports:' deploy/compose.yml; then
+            echo "::error::deploy/compose.yml must not publish ports; the tunnel is the only way in."
+            exit 1
+          fi
+      - run: docker build -f runner/Dockerfile -t sandbench-runner:ci .
+      - name: Image starts, serves the UI, and /api needs a token
+        run: |
+          docker run -d --name runner -p 127.0.0.1:8080:8080 \
+            -e FIREBASE_PROJECT_ID=demo-sandbench -e SANDBENCH_ALLOWED_EMAILS=ci@example.test \
+            -e FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 sandbench-runner:ci
+          for i in $(seq 1 20); do curl -fsS http://127.0.0.1:8080/healthz && break; sleep 1; done
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/api/health)" = 401
+          curl -fsS http://127.0.0.1:8080/ | grep -q '<div id="root">'
+          docker logs runner
+
   secrets:
     name: Secret scan
     runs-on: ubuntu-24.04

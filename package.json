@@ -15,10 +15,11 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run test:web && npm run test:node",
     "test:web": "vitest run",
-    "test:node": "node --test \"harness/**/*.test.mjs\"",
+    "test:node": "node --test \"harness/**/*.test.mjs\" \"runner/**/*.test.mjs\"",
     "preview": "vite preview --host 127.0.0.1 --port 4173",
     "electron:dev": "node scripts/electron-dev.mjs",
-    "electron:pack": "npm run build && electron-builder --win --dir"
+    "electron:pack": "npm run build && electron-builder --win --dir",
+    "runner": "node runner/main.mjs"
   },
   "dependencies": {
     "firebase": "^11.10.0",
