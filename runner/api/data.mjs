@@ -12,6 +12,7 @@ import { StoreError } from "../db/store.mjs";
 import { readJson, send } from "./http.mjs";
 
 const HEARTBEAT_MS = 15_000;
+const MAX_STREAMS_PER_USER = 8;
 
 function fail(res, error) {
   if (error instanceof StoreError) return send(res, error.status, { error: error.message, ...(error.current ? { current: error.current } : {}) });
@@ -19,9 +20,12 @@ function fail(res, error) {
 }
 
 export function createDataRoutes(store) {
-  async function stream(req, res, url, owner) {
+  const openStreams = new Map();
+
+  async function stream(req, res, url, user) {
+    const owner = user.uid;
+    if ((openStreams.get(owner) ?? 0) >= MAX_STREAMS_PER_USER) return send(res, 429, { error: "Too many open change streams for this account." });
     let last = Number(url.searchParams.get("since") || 0);
-    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
     let busy = false;
     let again = false;
     let open = true;
@@ -43,14 +47,25 @@ export function createDataRoutes(store) {
         busy = false;
       }
     };
+    // Subscribe before answering, so a LISTEN failure is a 500 rather than a dead stream.
     const unsubscribe = await store.subscribe((who) => {
       if (who === owner) void flush().catch(() => res.end());
     });
+    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
+    openStreams.set(owner, (openStreams.get(owner) ?? 0) + 1);
     const beat = setInterval(() => res.write(": keep-alive\n\n"), HEARTBEAT_MS);
-    req.on("close", () => {
+    // The stream lives no longer than the ID token that opened it; the page reconnects
+    // with a fresh token and its last seq.
+    const expiry = user.exp ? setTimeout(() => res.end(), Math.max(0, user.exp * 1000 - Date.now())) : null;
+    // The response's close fires both when the client leaves and when the expiry ends it.
+    res.on("close", () => {
       open = false;
       clearInterval(beat);
+      if (expiry) clearTimeout(expiry);
       unsubscribe();
+      const count = (openStreams.get(owner) ?? 1) - 1;
+      if (count > 0) openStreams.set(owner, count);
+      else openStreams.delete(owner);
     });
     res.write(": ready\n\n");
     await flush();
@@ -64,7 +79,7 @@ export function createDataRoutes(store) {
         return send(res, 200, await store.changesSince(owner, url.searchParams.get("since"), url.searchParams.get("limit"))), true;
       }
       if (req.method === "GET" && route === "/stream") {
-        return await stream(req, res, url, owner), true;
+        return await stream(req, res, url, user), true;
       }
       const match = /^\/data\/([a-z]+)(?:\/([^/]+))?$/.exec(route);
       if (!match) return false;

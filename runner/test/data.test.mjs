@@ -19,6 +19,10 @@ const USERS = {
   laptop: { uid: "u-vincent", email: "vincent@example.test", email_verified: true },
   phone: { uid: "u-vincent", email: "vincent@example.test", email_verified: true },
   other: { uid: "u-other", email: "other@example.test", email_verified: true },
+  // A token that expires in about a second (exp is in seconds).
+  get brief() {
+    return { uid: "u-brief", email: "vincent@example.test", email_verified: true, exp: Math.floor(Date.now() / 1000) + 1 };
+  },
 };
 
 before(async () => {
@@ -134,6 +138,8 @@ test("deletes are tombstones the other device can see", { skip }, async () => {
 
 test("bad input is refused", { skip }, async () => {
   assert.equal((await call("laptop", "GET", "/data/secrets")).status, 404);
+  assert.equal((await call("laptop", "GET", "/data/constructor")).status, 404);
+  assert.equal((await call("laptop", "GET", "/data/tostring")).status, 404);
   assert.equal((await call("laptop", "POST", "/data/agents", { id: "../x", data: {} })).status, 400);
   assert.equal((await call("laptop", "POST", "/data/agents", { id: "ok", data: [1] })).status, 400);
   assert.equal((await call("laptop", "POST", "/data/messages", { id: "m-x", data: { text: "no thread" } })).status, 400);
@@ -179,4 +185,69 @@ test("another user's writes never reach this user's feed", { skip }, async () =>
   const before = (await call("laptop", "GET", "/changes?since=0&limit=2000")).body.last;
   await call("other", "POST", "/data/contacts", { id: "c1", data: { name: "Someone" } });
   assert.deepEqual((await call("laptop", "GET", `/changes?since=${before}`)).body.changes, []);
+});
+
+test("the feed never skips a write that commits after a later one (two devices saving at once)", { skip }, async () => {
+  const { createStore } = await import("../db/store.mjs");
+  let reachedLog;
+  const reached = new Promise((resolve) => (reachedLog = resolve));
+  let release;
+  const gate = new Promise((resolve) => (release = resolve));
+  // This store's writes pause after taking their change seq, before they commit.
+  const slow = createStore(sql, {
+    onLogged: async () => {
+      reachedLog();
+      await gate;
+    },
+  });
+  const owner = "u-race";
+  await store.create(owner, "agents", "x", { n: 0 });
+  await store.create(owner, "agents", "y", { n: 0 });
+  let cursor = (await store.changesSince(owner, 0)).last;
+  const first = slow.patch(owner, "agents", "x", 1, { n: 1 }); // device A: seq taken, not committed yet
+  await reached;
+  const second = store.patch(owner, "agents", "y", 1, { n: 1 }); // device B saves meanwhile
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const seen = new Set();
+  const early = await store.changesSince(owner, cursor); // a reader polls in between
+  for (const change of early.changes) seen.add(change.id);
+  cursor = early.last;
+  release();
+  await Promise.all([first, second]);
+  const late = await store.changesSince(owner, cursor);
+  for (const change of late.changes) seen.add(change.id);
+  assert.deepEqual([...seen].sort(), ["x", "y"], "every committed write reaches the reader");
+});
+
+test("a change stream ends when its sign-in token expires", { skip }, async () => {
+  const started = Date.now();
+  const response = await fetch(`${base}/stream?since=0`, { headers: { authorization: "Bearer brief" } });
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  const ended = (async () => {
+    while (!(await reader.read()).done);
+  })();
+  await Promise.race([ended, new Promise((_, reject) => setTimeout(() => reject(new Error("stream outlived its token")), 5000))]);
+  assert.ok(Date.now() - started < 5000);
+});
+
+test("each account can hold a limited number of open streams", { skip }, async () => {
+  const controllers = [];
+  try {
+    for (let i = 0; i < 8; i += 1) {
+      const controller = new AbortController();
+      controllers.push(controller);
+      const response = await fetch(`${base}/stream?since=0`, { headers: { authorization: "Bearer other" }, signal: controller.signal });
+      assert.equal(response.status, 200);
+    }
+    assert.equal((await fetch(`${base}/stream?since=0`, { headers: { authorization: "Bearer other" } })).status, 429);
+  } finally {
+    for (const controller of controllers) controller.abort();
+  }
+  // Closing them frees the slots again.
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  const again = new AbortController();
+  const response = await fetch(`${base}/stream?since=0`, { headers: { authorization: "Bearer other" }, signal: again.signal });
+  assert.equal(response.status, 200);
+  again.abort();
 });

@@ -35,7 +35,7 @@ export class StoreError extends Error {
 }
 
 function checkKind(kind) {
-  const spec = KINDS[kind];
+  const spec = Object.hasOwn(KINDS, kind) ? KINDS[kind] : null;
   if (!spec) throw new StoreError(404, `Unknown record kind: ${kind}.`);
   return spec;
 }
@@ -69,7 +69,8 @@ function toRecord(kind, row) {
   };
 }
 
-export function createStore(sql) {
+/** `onLogged` is a test hook, awaited inside the write transaction after its change row. */
+export function createStore(sql, { onLogged } = {}) {
   const listeners = new Set();
   let listening = null;
 
@@ -84,8 +85,14 @@ export function createStore(sql) {
   }
 
   async function logChange(tx, owner, kind, id, version) {
+    // `seq` is handed out at insert time, not at commit. Without this lock a write could
+    // take seq N but commit after N+1, and a reader whose cursor had moved to N+1 would
+    // never see it. Holding a per-owner lock from here until commit makes one owner's
+    // changes commit in seq order. Each write touches one row, so this cannot deadlock.
+    await tx`select pg_advisory_xact_lock(hashtextextended(${owner}, 0))`;
     const [change] = await tx`insert into changes (owner, kind, id, version) values (${owner}, ${kind}, ${id}, ${version}) returning seq`;
     await tx`select pg_notify(${CHANNEL}, ${owner})`;
+    if (onLogged) await onLogged(tx);
     return Number(change.seq);
   }
 
@@ -194,16 +201,28 @@ export function createStore(sql) {
         const record = await current(sql, change.kind, owner, change.id);
         if (record) out.push({ seq: Number(change.seq), ...record });
       }
-      return { changes: out, last: out.length ? out[out.length - 1].seq : Number(since) || 0, more: changes.length === cap };
+      // The cursor follows the change rows themselves, so it always moves forward.
+      return { changes: out, last: changes.length ? Number(changes[changes.length - 1].seq) : Number(since) || 0, more: changes.length === cap };
     },
 
     /** Call `fn(owner)` after any committed write; returns an unsubscribe function. */
     async subscribe(fn) {
       listeners.add(fn);
-      listening ??= sql.listen(CHANNEL, (owner) => {
-        for (const listener of listeners) listener(owner);
-      });
-      await listening;
+      // A failed LISTEN is not cached: the next subscriber tries again.
+      listening ??= sql
+        .listen(CHANNEL, (owner) => {
+          for (const listener of listeners) listener(owner);
+        })
+        .catch((error) => {
+          listening = null;
+          throw error;
+        });
+      try {
+        await listening;
+      } catch (error) {
+        listeners.delete(fn);
+        throw error;
+      }
       return () => listeners.delete(fn);
     },
   };
