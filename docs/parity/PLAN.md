@@ -138,7 +138,7 @@ Key choices:
   - **Depends on:** SB-01.
   - **Acceptance:** Vincent edits the Supervisor's instructions on his laptop while approving a QA card on his phone at the same moment, and both changes survive. A 300-message Supervisor thread loads in full on a second device, and logs are not capped at 40.
 
-- [ ] **SB-21 (skeleton) · P1 · Tests and CI · counted in SB-21 below**
+- [x] **SB-21 (skeleton) · P1 · Tests and CI · counted in SB-21 below**
   - Add `vitest` for `src/` and `node --test` for `runner/`, plus a GitHub Actions workflow that runs typecheck, unit tests and build on every PR. Every later item adds its own tests to this.
 
 ---
@@ -485,4 +485,4 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 
 Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · acceptance result`.
 
-- (none yet)
+- 2026-10-26 · SB-21 (skeleton) · PR #2 · vitest for src/, node --test for harness/, CI workflow (typecheck, tests, build, no keys in dist/, gitleaks) · local typecheck, 11 tests and build pass; first CI run on the PR
