@@ -14,11 +14,20 @@ if (allowedEmails.length === 0) throw new Error("Set SANDBENCH_ALLOWED_EMAILS; t
 if (!projectId) throw new Error("Set FIREBASE_PROJECT_ID to Sandbench's own Firebase project (or a demo-* id with the emulator).");
 if (isBlockedProject(projectId, env.SANDBENCH_BLOCKED_PROJECTS)) throw new Error(`${projectId} is off-limits for Sandbench.`);
 
+for (const origin of String(env.SANDBENCH_ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean)) {
+  if (origin.includes("*") || !/^https:\/\/[^/]+$|^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) {
+    throw new Error(`SANDBENCH_ALLOWED_ORIGINS holds exact https:// origins only (no path, no wildcard): ${origin}`);
+  }
+}
+
 const port = Number(env.PORT || 8080);
 const server = createRunner({
   home: env.SANDBENCH_HOME || path.join(os.homedir(), ".sandbench"),
   uiDir: env.SANDBENCH_UI_DIR || "",
   publicOrigin: env.SANDBENCH_PUBLIC_ORIGIN || "",
+  // Other pages allowed to call /api from a browser, comma-separated exact origins
+  // (for a laptop runner: the Vercel production URL). No wildcards.
+  allowedOrigins: String(env.SANDBENCH_ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean),
   allowedEmails,
   verifyIdToken: await firebaseVerifier(projectId),
 });

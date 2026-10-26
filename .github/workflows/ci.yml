@@ -75,7 +75,16 @@ jobs:
           SANDBENCH_PUBLIC_ORIGIN: https://sandbench.example.test
           POSTGRES_PASSWORD: ci-only
           CLOUDFLARE_TUNNEL_TOKEN: ci-only
-        run: docker compose -f deploy/compose.yml config -q
+          TS_AUTHKEY: ci-only
+        # The step name is a required check's job name; only the command changed.
+        run: |
+          docker compose -f deploy/compose.yml config -q
+          for profile in laptop cloudflare; do
+            docker compose -f deploy/compose.yml --profile "$profile" config -q
+          done
+          test "$(docker compose -f deploy/compose.yml --profile laptop config --services | sort | tr '\n' ' ')" = "postgres runner tailscale "
+          test "$(docker compose -f deploy/compose.yml --profile cloudflare config --services | sort | tr '\n' ' ')" = "cloudflared postgres runner "
+          python3 -c "import json; json.load(open('deploy/tailscale/serve.json'))"
       - name: No service publishes a port
         run: |
           if grep -nE '^\s+ports:' deploy/compose.yml; then
