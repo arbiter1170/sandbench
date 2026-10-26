@@ -16,7 +16,7 @@ phone / laptop ──https──> Cloudflare Access (Google sign-in, allowlist)
    - a valid token for an account that isn't on `SANDBENCH_ALLOWED_EMAILS`, or whose email isn't verified: **403**;
    - a request with an `Origin` that isn't `SANDBENCH_PUBLIC_ORIGIN`: **403**.
 3. **No ports are open.** `deploy/compose.yml` publishes no ports, and CI fails if one is added. Postgres sits on a network with no route out.
-4. The runner **refuses to start** with an empty allowlist or with one of the off-limits Firebase projects.
+4. The runner **refuses to start** with an empty allowlist or with one of the off-limits Firebase projects (listed by hash in `runner/guard.mjs`; add more with `SANDBENCH_BLOCKED_PROJECTS`).
 
 `/healthz` answers `{ok:true}` without a token, for Docker's health check only. `/api/health` needs a token and shows the VM host.
 

@@ -5,7 +5,7 @@ Unofficial local demo of the capabilities observed in the iOS app (bundle `co.an
 ## Run
 
 ```bash
-cd C:\Users\garof\rea-work\grokbot-poc
+cd sandbench
 npm install
 cp .env.example .env.local   # Firebase + allowlist (see docs/deploy-vercel.md)
 npm run dev

@@ -9,6 +9,6 @@ Rules in short:
 - One small PR per item, with tests and CI.
 - Never force-push, and never rebase a pushed branch.
 - No secrets in code, Firestore or the page bundle.
-- Never touch the Firebase projects `haven-57041`, `ourtime-529bd`, `studio-6245027179-b7f2d` or `walklings-4cc89`. Sandbench needs its own.
+- Never touch the off-limits Firebase projects (the Walklings game's project and three others; ids kept out of this public repo, blocked by hash in `runner/guard.mjs`). Sandbench needs its own. Ask Vincent if unsure; never write project ids, emails or player data into the repo.
 - Never commit private player data or private notes.
 - Ask Vincent before destructive actions or anything that costs money.

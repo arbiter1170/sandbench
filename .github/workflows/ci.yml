@@ -22,6 +22,8 @@ jobs:
       ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -44,6 +46,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -62,6 +66,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: compose.yml is valid (placeholder values, CI only)
         env:
           FIREBASE_PROJECT_ID: demo-sandbench
@@ -95,7 +101,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          persist-credentials: false
       - name: gitleaks (full history)
         run: >
           docker run --rm -v "$PWD:/repo" ghcr.io/gitleaks/gitleaks:v8.28.0
           git /repo --redact --no-banner --exit-code 1
+      - name: No personal email addresses in tracked files
+        run: |
+          if git ls-files -z -- . ':!:package-lock.json' ':!:runner/package-lock.json' \
+              | xargs -0 grep -nEI '[A-Za-z0-9._%+-]+@(gmail|googlemail|yahoo|hotmail|outlook|icloud|me|proton|protonmail)\.[a-z]{2,}'; then
+            echo "::error::A personal email address is committed. Use an env var (VITE_ALLOWED_EMAILS / SANDBENCH_ALLOWED_EMAILS) instead."
+            exit 1
+          fi
