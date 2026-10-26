@@ -3,8 +3,8 @@
 Private Google-gated SPA with Firestore workspace sync. Computer harness/CUA stays on desktop.
 
 **Live (production):** https://sandbench-ten.vercel.app  
-**GitHub (private):** https://github.com/arbiter1170/sandbench (`deploy/vercel` default)  
-**Allowlist starter:** `garofalov14@gmail.com` is set as `VITE_ALLOWED_EMAILS` on Vercel — add Firebase web config env vars, authorize the Vercel domain, publish `firestore.rules`, then `vercel --prod` (or push) to bake them in.
+**GitHub:** https://github.com/arbiter1170/sandbench (`deploy/vercel` default)  
+**Allowlist:** set `VITE_ALLOWED_EMAILS` in the Vercel project's environment variables (never in the repo) — add Firebase web config env vars, authorize the Vercel domain, publish `firestore.rules`, then `vercel --prod` (or push) to bake them in.
 
 ## 1. Firebase Console
 

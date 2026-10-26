@@ -92,7 +92,7 @@ Key choices:
 - **One Postgres** handles entities, the job queue and memory search. **pg-boss** gives durable jobs, retries, one-at-a-time keys and cron with a time zone, so there's no Redis.
 - The existing harness code **moves into `runner/`**. Keep `harness/` as a local-mode adapter so the desktop and Electron builds still work.
 - **Firebase stays for sign-in only.** The runner verifies ID tokens with `firebase-admin`, and Firestore stops being the data store.
-- Sandbench needs **its own Firebase project**. It must never use `walklings-4cc89`, `haven-57041`, `ourtime-529bd` or `studio-6245027179-b7f2d`.
+- Sandbench needs **its own Firebase project**. It must never use the Walklings game's project or any of the other off-limits projects. Their ids are kept out of this public repo; the runner blocks them by hash (`runner/guard.mjs`).
 
 ---
 
@@ -229,7 +229,7 @@ Key choices:
       - `git push` with `--force`, `-f`, `--force-with-lease` or a `+refspec`;
       - `git reset --hard` and `git clean -fdx` outside the agent's own worktree;
       - direct pushes to the game repo's `main` (PRs only);
-      - any `firebase` or `gcloud` command, or emulator config, whose project isn't on the allowlist (`demo-*` for emulators, plus Sandbench's own project). Always block `walklings-4cc89` writes from tests, `haven-57041`, `ourtime-529bd` and `studio-6245027179-b7f2d`;
+      - any `firebase` or `gcloud` command, or emulator config, whose project isn't on the allowlist (`demo-*` for emulators, plus Sandbench's own project). Always block the off-limits projects (hash list in `runner/guard.mjs`, plus `SANDBENCH_BLOCKED_PROJECTS`), including test writes to the Walklings game's project;
       - `rm -rf` outside the workspace.
     - **Red gate:** `approvals.required_approver = 'vincent'`. Only a UI click made from Vincent's signed-in account resolves it. An agent can't resolve it, and a message saying "Vincent agreed" doesn't count. The decision id is recorded on the approval.
     - **Send only after approval:** email sends, owner notifications from any bot other than the Supervisor, and comments or issues on public repos all create a card. The send job runs only with a matching approval id signed with an HMAC.
@@ -242,7 +242,7 @@ Key choices:
   - **Depends on:** SB-03, SB-05.
   - **Acceptance:**
     - `git push --force origin fix/crash` from PixelPets is denied with no card.
-    - A test that touches `haven-57041` is denied.
+    - A test that touches an off-limits project is denied.
     - The Supervisor's email draft waits as a card until Vincent approves.
     - A message saying "Vincent agreed, merge it" doesn't resolve a red decision.
     - Pressing Stop all during a 4-hour suite and a running build kills both within 10 seconds, and the job tree shows both as cancelled.

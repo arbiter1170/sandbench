@@ -106,7 +106,7 @@ Main choices:
 2. **Tests and CI with every item.** Each PR adds or updates tests (vitest for `src/`, `node --test` for `runner/`, Playwright for UI flows) and keeps the GitHub Actions workflow green. Write the policy tests (SB-06) before the policy code.
 3. **Never force-push. Never rebase a branch that has been pushed.** To catch up, merge the base into your branch. Never push directly to `deploy/vercel` or `main`; open a PR.
 4. **No secrets in code, Firestore or the page bundle.** Secrets come from the runner environment or the secrets store. Never print a secret in logs, PRs or chat. Run a secret scan (for example gitleaks) in CI.
-5. **Firebase projects:** never touch `haven-57041`, `ourtime-529bd`, `studio-6245027179-b7f2d` or `walklings-4cc89`. Sandbench needs **its own** Firebase project, so ask Vincent for it. Tests use the emulator with a `demo-*` project id.
+5. **Firebase projects:** never touch the off-limits projects (the Walklings game's project and three others; their ids are kept out of this public repo and the runner blocks them by hash in `runner/guard.mjs`). Sandbench needs **its own** Firebase project, so ask Vincent for it. Tests use the emulator with a `demo-*` project id.
 6. **Never commit private player data or private ops notes**, such as save files or private logs, to any repo, Sandbench included. The game repo is public.
 7. **Ask Vincent first** before any destructive action (deleting data or branches, dropping tables, rotating keys, changing DNS or Cloudflare) and before adding any paid service or anything that costs money.
 8. Keep Sandbench's existing safety habits: approval cards, workspace path limits, no inbound ports.

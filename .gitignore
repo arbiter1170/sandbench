@@ -10,3 +10,6 @@ sandbench-migration.json
 .DS_Store
 .vercel
 release
+
+# Private, never committed (e.g. the off-limits project list for local agents)
+CLAUDE.local.md
