@@ -3,6 +3,7 @@ import { BotMark } from "./bots";
 import { getBlob } from "./db";
 import { connectorHeaders, harnessProbe, harnessProcesses, harnessScreen, type HarnessHealth, type ProcessReport } from "./harness";
 import type { Key } from "./i18n";
+import { removeSecret, saveSecret } from "./secrets";
 import type { Bot, BotFile, ComputerEvent, Connector, Plugin, Routine, Secret, Studio, Thread } from "./types";
 import {
   applyMigration,
@@ -743,11 +744,12 @@ function ConnectorsTab({
   const [headerKey, setHeaderKey] = useState("Authorization");
   const [headerValue, setHeaderValue] = useState("");
   const [busy, setBusy] = useState("");
+  const [formError, setFormError] = useState("");
   const owned = bot?.connectorIds ?? [];
 
   async function test(connector: Connector) {
     setBusy(connector.id);
-    const headers = connectorHeaders(connector, studio.secrets);
+    const headers = connectorHeaders(connector);
     let next: Connector;
     try {
       const probe = await harnessProbe(connector.url, headers);
@@ -821,13 +823,19 @@ function ConnectorsTab({
             error: "",
             checkedAt: 0,
           };
-          const secrets = placeholder
-            ? studio.secrets
-            : [...studio.secrets.filter((item) => item.name !== secretName), { id: crypto.randomUUID(), name: secretName, value, createdAt: Date.now() }];
-          onStudio({ connectors: [...studio.connectors, connector], secrets });
-          setName("");
-          setUrl("");
-          setHeaderValue("");
+          const add = () => {
+            const secrets = placeholder
+              ? studio.secrets
+              : [...studio.secrets.filter((item) => item.name !== secretName), { id: crypto.randomUUID(), name: secretName, createdAt: Date.now() }];
+            onStudio({ connectors: [...studio.connectors, connector], secrets });
+            setName("");
+            setUrl("");
+            setHeaderValue("");
+            setFormError("");
+          };
+          // The header value goes to the harness or runner; the workspace keeps only {{NAME}}.
+          if (placeholder) add();
+          else void saveSecret(secretName, value).then(add, (caught) => setFormError(caught instanceof Error ? caught.message : String(caught)));
         }}
       >
         <h3>{t("addConnector")}</h3>
@@ -839,6 +847,7 @@ function ConnectorsTab({
         </div>
         <p className="hint">{t("headerSecretNote")}</p>
         <button type="submit">{t("add")}</button>
+        {formError ? <p className="hint">{formError}</p> : null}
       </form>
       <ComposioPreset t={t} studio={studio} onStudio={onStudio} />
     </div>
@@ -856,6 +865,7 @@ const COMPOSIO_CARDS = [
 function ComposioPreset({ t, studio, onStudio }: { t: Copy; studio: Studio; onStudio: (patch: Partial<Studio>) => void }) {
   const [url, setUrl] = useState("");
   const [key, setKey] = useState("");
+  const [error, setError] = useState("");
   const configured = studio.secrets.some((item) => item.name === "COMPOSIO_KEY");
 
   function addConnector(name: string, mcpUrl: string, apiKey: string) {
@@ -871,10 +881,15 @@ function ComposioPreset({ t, studio, onStudio }: { t: Copy; studio: Studio; onSt
       error: "",
       checkedAt: 0,
     };
-    const secrets = apiKey.trim()
-      ? [...studio.secrets.filter((item) => item.name !== "COMPOSIO_KEY"), { id: crypto.randomUUID(), name: "COMPOSIO_KEY", value: apiKey.trim(), createdAt: Date.now() }]
-      : studio.secrets;
-    onStudio({ connectors: [...studio.connectors, connector], secrets });
+    const add = () => {
+      const secrets = apiKey.trim()
+        ? [...studio.secrets.filter((item) => item.name !== "COMPOSIO_KEY"), { id: crypto.randomUUID(), name: "COMPOSIO_KEY", createdAt: Date.now() }]
+        : studio.secrets;
+      onStudio({ connectors: [...studio.connectors, connector], secrets });
+      setError("");
+    };
+    if (!apiKey.trim()) add();
+    else void saveSecret("COMPOSIO_KEY", apiKey.trim()).then(add, (caught) => setError(caught instanceof Error ? caught.message : String(caught)));
   }
 
   return (
@@ -916,6 +931,7 @@ function ComposioPreset({ t, studio, onStudio }: { t: Copy; studio: Studio; onSt
           <input type="password" value={key} onChange={(event) => setKey(event.target.value)} placeholder={configured ? t("secretConfigured") : ""} autoComplete="off" />
         </label>
         <button type="submit">{t("addComposio")}</button>
+        {error ? <p className="hint">{error}</p> : null}
       </form>
     </div>
   );
@@ -924,6 +940,8 @@ function ComposioPreset({ t, studio, onStudio }: { t: Copy; studio: Studio; onSt
 function SecretsTab({ t, secrets, onChange }: { t: Copy; secrets: Secret[]; onChange: (secrets: Secret[]) => void }) {
   const [name, setName] = useState("");
   const [value, setValue] = useState("");
+  const [error, setError] = useState("");
+  const fail = (caught: unknown) => setError(caught instanceof Error ? caught.message : String(caught));
   return (
     <div className="stack">
       <p className="hint">{t("secretNote")}</p>
@@ -935,7 +953,12 @@ function SecretsTab({ t, secrets, onChange }: { t: Copy; secrets: Secret[]; onCh
               <span>{t("secretConfigured")}</span>
             </div>
             <button type="button" onClick={() => { setName(secret.name); setValue(""); }}>{t("replaceSecret")}</button>
-            <button type="button" onClick={() => onChange(secrets.filter((item) => item.id !== secret.id))}>{t("remove")}</button>
+            <button
+              type="button"
+              onClick={() => void removeSecret(secret.name).then(() => onChange(secrets.filter((item) => item.id !== secret.id)), fail)}
+            >
+              {t("remove")}
+            </button>
           </li>
         ))}
       </ul>
@@ -945,15 +968,20 @@ function SecretsTab({ t, secrets, onChange }: { t: Copy; secrets: Secret[]; onCh
           event.preventDefault();
           const key = name.trim().toUpperCase().replace(/[^A-Z0-9_]/g, "_");
           if (!key || !value) return;
-          onChange([...secrets.filter((item) => item.name !== key), { id: crypto.randomUUID(), name: key, value, createdAt: Date.now() }]);
-          setName("");
-          setValue("");
+          // The value is sent once to the harness or runner and never kept in the page.
+          void saveSecret(key, value).then(() => {
+            onChange([...secrets.filter((item) => item.name !== key), { id: crypto.randomUUID(), name: key, createdAt: Date.now() }]);
+            setName("");
+            setValue("");
+            setError("");
+          }, fail);
         }}
       >
         <input value={name} onChange={(event) => setName(event.target.value)} aria-label={t("secretName")} placeholder={t("secretName")} />
         <input type="password" value={value} onChange={(event) => setValue(event.target.value)} aria-label={t("secretValue")} placeholder={t("secretValue")} autoComplete="off" />
         <button type="submit">{t("add")}</button>
       </form>
+      {error ? <p className="hint">{error}</p> : null}
     </div>
   );
 }

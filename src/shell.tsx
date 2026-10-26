@@ -55,6 +55,8 @@ export function Workspace(props: {
   dragging: boolean;
   streaming: boolean;
   settings: Settings;
+  /** Names of the API keys stored on the harness or runner. */
+  keys: ReadonlySet<string>;
   online: boolean;
   youLabel: string;
   banner: string;
@@ -160,9 +162,9 @@ export function Workspace(props: {
     return list.includes(settings.model) ? list : [settings.model, ...list];
   }, [settings.defaultTestProfile, settings.model]);
   const ready = [
-    settings.apiKey.trim() ? t("providerXai") : "",
-    settings.compatKey?.trim() && settings.compatBase?.trim() ? t("providerCompat") : "",
-    settings.anthropicKey?.trim() ? t("providerAnthropic") : "",
+    props.keys.has("XAI_API_KEY") ? t("providerXai") : "",
+    props.keys.has("COMPAT_API_KEY") && settings.compatBase?.trim() ? t("providerCompat") : "",
+    props.keys.has("ANTHROPIC_API_KEY") ? t("providerAnthropic") : "",
   ].filter(Boolean);
 
   useEffect(() => {
@@ -720,10 +722,10 @@ export function Workspace(props: {
               </ul>
               <h4>{t("catalogCloud")}</h4>
               <ul className="catalog-list">
-                <li className={settings.apiKey.trim() ? "catalog-row" : "catalog-row dim"}>
+                <li className={props.keys.has("XAI_API_KEY") ? "catalog-row" : "catalog-row dim"}>
                   <button type="button" onClick={() => props.onApplyTestProfile(bot.id, "xai", true)}>{t("providerXai")}</button>
                 </li>
-                <li className={settings.anthropicKey?.trim() ? "catalog-row" : "catalog-row dim"}>
+                <li className={props.keys.has("ANTHROPIC_API_KEY") ? "catalog-row" : "catalog-row dim"}>
                   <button type="button" onClick={() => props.onApplyTestProfile(bot.id, "claude-api", true)}>{t("providerAnthropic")}</button>
                 </li>
               </ul>
@@ -761,7 +763,7 @@ export function Workspace(props: {
             {(() => {
               const active = inferProfileFromBot(bot, settings);
               if (!active) return null;
-              const status = profileReadiness(active, settings, props.drivers);
+              const status = profileReadiness(active, settings, props.drivers, props.keys);
               return (
                 <p className="hint">
                   {status.ready ? t("testProfileReady") : status.missing.map((key) => t(key as Key)).join(" · ")}
@@ -774,7 +776,7 @@ export function Workspace(props: {
                 {models.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </label>
-            <p className="hint" id="default-model-note">{settings.apiKey.trim() ? t("api") : t("local")} · {online ? t("online") : t("offline")}</p>
+            <p className="hint" id="default-model-note">{props.keys.has("XAI_API_KEY") ? t("api") : t("local")} · {online ? t("online") : t("offline")}</p>
             <p className="hint provider-rail">{t("providersReady")}: {ready.length ? ready.join(", ") : t("noProviders")}</p>
           </div>
               ) : null}
@@ -1303,7 +1305,7 @@ export function Workspace(props: {
                 {models.map((model) => <option key={model} value={model}>{model}</option>)}
               </select>
             </label>
-            <p className="hint" id="default-model-note">{t("defaultModelLabel")} · {settings.apiKey.trim() ? t("api") : t("local")} · {online ? t("online") : t("offline")}</p>
+            <p className="hint" id="default-model-note">{t("defaultModelLabel")} · {props.keys.has("XAI_API_KEY") ? t("api") : t("local")} · {online ? t("online") : t("offline")}</p>
             <p className="hint">{t("createBot")}</p>
           </div>
         )}

@@ -22,6 +22,7 @@ before(async () => {
     uiDir: ui,
     publicOrigin: ORIGIN,
     allowedEmails: ["vincent@example.com"],
+    env: {},
     verifyIdToken: async (token) => {
       if (token === "good") return { uid: "u1", email: "vincent@example.com", email_verified: true };
       if (token === "other") return { uid: "u2", email: "other@example.com", email_verified: true };
@@ -102,4 +103,26 @@ test("static paths cannot climb out of the UI folder", async () => {
     const text = await (await fetch(`${base}${route}`)).text();
     assert.doesNotMatch(text, /do not serve/, route);
   }
+});
+
+test("secrets: the page can add and remove keys but only ever reads names and previews", async () => {
+  const put = await fetch(`${base}/api/secrets/ANTHROPIC_API_KEY`, as("good", { method: "PUT", body: JSON.stringify({ value: "test-only-value-0123456789" }) }));
+  assert.equal(put.status, 200);
+  assert.doesNotMatch(await put.text(), /0123456789/);
+  const listed = await (await fetch(`${base}/api/secrets`, as("good"))).text();
+  assert.match(listed, /ANTHROPIC_API_KEY/);
+  assert.doesNotMatch(listed, /0123456789/);
+  assert.equal((await fetch(`${base}/api/secrets`)).status, 401);
+  assert.equal((await fetch(`${base}/api/secrets/ANTHROPIC_API_KEY`, as("other", { method: "PUT", body: JSON.stringify({ value: "x-attacker-1234567" }) }))).status, 403);
+  assert.equal((await fetch(`${base}/api/secrets/bad-name`, as("good", { method: "PUT", body: "{}" }))).status, 404);
+  const removed = await fetch(`${base}/api/secrets/ANTHROPIC_API_KEY`, as("good", { method: "DELETE" }));
+  assert.deepEqual(await removed.json(), { ok: true });
+});
+
+test("model proxy on the runner refuses localhost bases and needs a stored key", async () => {
+  const local = await fetch(`${base}/api/model`, post("good", { provider: "openai_compat", base: "http://127.0.0.1:5432", path: "/chat/completions", payload: {} }));
+  assert.equal(local.status, 400);
+  const missing = await fetch(`${base}/api/model`, post("good", { provider: "xai", path: "/chat/completions", payload: {} }));
+  assert.equal(missing.status, 409);
+  assert.equal((await fetch(`${base}/api/model`, post(null, { provider: "xai", path: "/chat/completions" }))).status, 401);
 });

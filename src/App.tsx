@@ -4,7 +4,7 @@ import { completeText, routeFor, streamReply, streamText } from "./assistant";
 import { SignOutButton } from "./AuthGate";
 import { pickSyncWinner, pullCloudSnapshot, pushCloudSnapshot } from "./cloudSync";
 import { Workspace } from "./shell";
-import { deleteBlob, eraseDatabase, getBlob, loadSnapshot, saveBlob, saveSnapshot } from "./db";
+import { deleteBlob, eraseDatabase, getBlob, loadPendingSecrets, loadSnapshot, saveBlob, savePendingSecrets, saveSnapshot } from "./db";
 import {
   autoApproved,
   connectorHeaders,
@@ -34,6 +34,7 @@ import {
   type HarnessHealth,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
+import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
 import {
   downloadCalendar,
@@ -48,6 +49,7 @@ import { assembleBotSystem } from "./prompt";
 import { speakable } from "./speech";
 import {
   applyProfileToSettings,
+  MOCK_COMPAT_KEY,
   mergeBotProfile,
   profileTouchesCompatBase,
   type TestProfileId,
@@ -151,6 +153,10 @@ export function App({ user }: { user: User }) {
   const [computer, setComputer] = useState<ComputerEvent[]>([]);
   const [studio, setStudio] = useState<Studio>(() => defaultStudio());
   const [harness, setHarness] = useState<HarnessHealth | null>(null);
+  // API keys stay on the harness or runner (SB-05); the page knows names and previews only.
+  const [secretInfo, setSecretInfo] = useState<SecretInfo[]>([]);
+  const [keysAvailable, setKeysAvailable] = useState(false);
+  const keyNames = useMemo(() => new Set(secretInfo.map((item) => item.name)), [secretInfo]);
   const [drivers, setDrivers] = useState<AgentDriver[]>([]);
   const [triggerRuns, setTriggerRuns] = useState<TriggerRun[]>([]);
   const [hookPort, setHookPort] = useState<number | null>(null);
@@ -192,6 +198,8 @@ export function App({ user }: { user: User }) {
   const settingsRef = useRef(settings);
   const studioRef = useRef(studio);
   const harnessRef = useRef(harness);
+  const keyNamesRef = useRef(keyNames);
+  keyNamesRef.current = keyNames;
   const driversRef = useRef(drivers);
   const routinesRef = useRef(routines);
   const callRef = useRef(callActive);
@@ -263,16 +271,25 @@ export function App({ user }: { user: User }) {
     void snapshotPromise
       .then(async (bundle) => {
         if (!active) return;
-        let snapshot = bundle.snapshot;
+        // Keys saved by older builds come out of the snapshot here and wait on this device
+        // only until the harness or runner can take them (SB-05).
+        const local = extractLegacySecrets(bundle.snapshot);
+        const found: LegacySecret[] = [...(await loadPendingSecrets().catch(() => [])), ...local.found];
+        let snapshot = local.snapshot;
         let updatedAt = bundle.updatedAt;
         try {
-          const cloud = await pullCloudSnapshot(user.uid);
-          const picked = pickSyncWinner(bundle.snapshot, bundle.updatedAt, cloud);
+          const pulled = await pullCloudSnapshot(user.uid);
+          const cloudClean = pulled ? extractLegacySecrets(pulled.snapshot) : null;
+          if (cloudClean) found.push(...cloudClean.found);
+          const cloud = pulled && cloudClean ? { ...pulled, snapshot: cloudClean.snapshot } : null;
+          const picked = pickSyncWinner(local.snapshot, bundle.updatedAt, cloud);
           snapshot = picked.snapshot;
           updatedAt = picked.updatedAt;
           cloudUpdatedAtRef.current = picked.updatedAt;
-          skipNextCloudPushRef.current = !picked.pushLocal;
-          if (picked.pushLocal) {
+          // A cloud copy that still held keys is rewritten without them right away.
+          const scrubCloud = Boolean(cloudClean?.found.length);
+          skipNextCloudPushRef.current = !picked.pushLocal && !scrubCloud;
+          if (picked.pushLocal || scrubCloud) {
             await pushCloudSnapshot(user.uid, snapshot, updatedAt || Date.now());
             cloudUpdatedAtRef.current = updatedAt || Date.now();
           } else if (cloud && cloud.updatedAt > bundle.updatedAt) {
@@ -280,6 +297,12 @@ export function App({ user }: { user: User }) {
           }
         } catch {
           // Offline or rules not deployed yet — continue with local data.
+        }
+        if (found.length) {
+          const unique = [...new Map(found.map((item) => [item.name, item])).values()];
+          await savePendingSecrets(unique).catch(() => undefined);
+          await saveSnapshot(snapshot, updatedAt || Date.now()).catch(() => undefined);
+          void flushPendingSecrets();
         }
         applySnapshot(snapshot);
         setHydrated(true);
@@ -338,6 +361,10 @@ export function App({ user }: { user: User }) {
       window.clearInterval(handle);
     };
   }, []);
+
+  useEffect(() => {
+    void refreshKeys().then(flushPendingSecrets);
+  }, [harness]);
 
   useEffect(() => {
     const seen = () => {
@@ -576,16 +603,56 @@ export function App({ user }: { user: User }) {
     }
   }
 
+  function refreshKeys(): Promise<boolean> {
+    return listSecrets().then(
+      (list) => {
+        setSecretInfo(list);
+        setKeysAvailable(true);
+        return true;
+      },
+      () => {
+        setKeysAvailable(false);
+        return false;
+      },
+    );
+  }
+
+  /** Move keys left by an older build into the harness or runner, then forget them here. */
+  async function flushPendingSecrets() {
+    const pending = await loadPendingSecrets().catch(() => [] as LegacySecret[]);
+    if (pending.length === 0) return;
+    const left = await moveLegacySecrets(pending);
+    await savePendingSecrets(left).catch(() => undefined);
+    if (left.length < pending.length) {
+      setLogs((prev) => [{ id: crypto.randomUUID(), message: translate(settingsRef.current.locale, "keysMoved"), at: Date.now() }, ...prev].slice(0, 40));
+      void refreshKeys();
+    }
+    if (left.length) setBanner(translate(settingsRef.current.locale, "keysPending"));
+  }
+
+  async function saveKey(name: string, value: string) {
+    await saveSecret(name, value);
+    await refreshKeys();
+  }
+
+  async function removeKey(name: string) {
+    await removeSecret(name);
+    await refreshKeys();
+  }
+
   function applyDefaultTestProfile(profile: TestProfileId) {
     const current = settingsRef.current;
     const patch = applyProfileToSettings(profile);
     if (profileTouchesCompatBase(profile) && current.compatBase?.trim()) {
       if (!window.confirm(translate(current.locale, "testProfileOverwriteCompat"))) {
         delete patch.compatBase;
-        if (profile !== "mock") delete patch.compatKey;
       }
     }
     patchSettings(patch);
+    // The mock server takes any key; store one unless a real COMPAT_API_KEY is already there.
+    if (profile === "mock" && keysAvailable && !keyNamesRef.current.has("COMPAT_API_KEY")) {
+      void saveSecret("COMPAT_API_KEY", MOCK_COMPAT_KEY).then(refreshKeys, () => undefined);
+    }
   }
 
   function patchBot(id: string, patch: Partial<Bot>) {
@@ -797,7 +864,7 @@ export function App({ user }: { user: User }) {
     const lead = members.find((bot) => bot.id === channel.leadBotId) ?? members[0];
     const settings = settingsRef.current;
     if (settings.decisionEnabled) {
-      const decided = await pickWithDecisionModel(settings, channel, members, text);
+      const decided = await pickWithDecisionModel(settings, channel, members, text, keyNamesRef.current);
       if (decided?.everyone) {
         return { bot: lead, reason: `${t("pickedByDecision")} · ${Math.round(decided.probability * 100)}% · everyone`, everyone: true };
       }
@@ -808,12 +875,11 @@ export function App({ user }: { user: User }) {
         };
       }
     }
-    const route = routeFor(lead, settings);
-    if (route.apiKey.trim()) {
+    const route = routeFor(lead, settings, keyNamesRef.current);
+    if (route.ready) {
       try {
         const raw = await completeText({
           messages: [{ role: "user", content: routePrompt(members, text, channel.sharedInstructions) }],
-          apiKey: route.apiKey,
           apiBase: route.apiBase,
           model: route.model,
           useProxy: route.useProxy,
@@ -1082,7 +1148,7 @@ export function App({ user }: { user: User }) {
       createdAt: Date.now(),
       attachments: [],
       status: "streaming",
-      localStandIn: !routeFor(botsRef.current.find((item) => item.id === botId), settingsRef.current).apiKey.trim(),
+      localStandIn: !routeFor(botsRef.current.find((item) => item.id === botId), settingsRef.current, keyNamesRef.current).ready,
       fresh: true,
       authorBotId: botId,
     };
@@ -1162,8 +1228,8 @@ export function App({ user }: { user: User }) {
     let follow: StepAction | undefined;
     let prose = local;
     let modelSpoke = false;
-    const route = routeFor(bot, settingsRef.current);
-    if (!capped && route.apiKey.trim()) {
+    const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
+    if (!capped && route.ready) {
       try {
         const raw = await completeText({
           messages: [
@@ -1181,7 +1247,6 @@ export function App({ user }: { user: User }) {
               }),
             },
           ],
-          apiKey: route.apiKey,
           apiBase: route.apiBase,
           model: route.model,
           useProxy: route.useProxy,
@@ -1321,7 +1386,7 @@ export function App({ user }: { user: User }) {
         const connector = studioRef.current.connectors.find((item) => item.id === approval.tool?.connectorId);
         if (!connector) throw new Error("That connector was removed.");
         const started = performance.now();
-        const result = await harnessCallTool(connector.url, connectorHeaders(connector, studioRef.current.secrets), approval.tool.name, approval.tool.args);
+        const result = await harnessCallTool(connector.url, connectorHeaders(connector), approval.tool.name, approval.tool.args);
         patchMessage(threadId, messageId, (message) =>
           message.approval ? { ...message, approval: { ...message.approval, output: result.text, exitCode: result.isError ? 1 : 0 } } : message,
         );
@@ -1403,7 +1468,7 @@ export function App({ user }: { user: User }) {
     appendThinking: (step: string) => void;
   }): Promise<string> {
     const { bot, threadId } = args;
-    const route = routeFor(bot, settingsRef.current);
+    const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
     const { id: turnId, after } = await harnessStartTurn({
       driver: args.driver,
       prompt: args.prompt,
@@ -1414,7 +1479,7 @@ export function App({ user }: { user: User }) {
         route.provider === "anthropic"
           ? "https://api.anthropic.com/v1"
           : route.apiBase.trim() || (route.useProxy ? "https://api.x.ai/v1" : ""),
-      key: route.apiKey,
+      secret: route.secret,
       folder: args.folder,
       allow: studioRef.current.autoApprove,
       unattendedDeny: args.unattended && studioRef.current.unattended === "skip",
@@ -1547,15 +1612,9 @@ export function App({ user }: { user: User }) {
     const hosted =
       mode === "xai" || mode === "elevenlabs" || mode === "fish" || mode === "chatterbox" || mode === "system";
     if (hosted && harnessRef.current && (voiceId || mode === "system")) {
-      const key =
-        mode === "xai"
-          ? settings.apiKey.trim()
-          : mode === "elevenlabs"
-            ? (settings.elevenLabsKey || "").trim()
-            : mode === "fish"
-              ? (settings.fishKey || "").trim()
-              : "";
-      if ((mode === "xai" || mode === "elevenlabs" || mode === "fish") && !key) {
+      // The harness adds the voice provider's key; the page only checks that one is stored.
+      const needs = mode === "xai" ? "XAI_API_KEY" : mode === "elevenlabs" ? "ELEVENLABS_API_KEY" : mode === "fish" ? "FISH_API_KEY" : "";
+      if (needs && !keyNamesRef.current.has(needs)) {
         speakBrowser(text, bot, token, after);
         return;
       }
@@ -1568,7 +1627,6 @@ export function App({ user }: { user: User }) {
         provider: mode,
         text,
         voiceId,
-        key: key || undefined,
         baseUrl: settings.chatterboxBaseUrl,
         model: settings.chatterboxModel,
         fishModel: settings.fishModel,
@@ -1711,14 +1769,14 @@ export function App({ user }: { user: User }) {
       return chosen?.ok ? chosen : undefined;
     }
     const settings = settingsRef.current;
-    const route = routeFor(bot, settings);
+    const route = routeFor(bot, settings, keyNamesRef.current);
     const pick = (id: string) => list.find((item) => item.id === id && item.ok);
     if (settings.defaultAgentDriver) {
       const chosen = pick(settings.defaultAgentDriver);
       if (chosen) return chosen;
     }
-    if (route.provider === "anthropic" && settings.anthropicKey?.trim()) return pick("anthropic");
-    if (route.provider === "openai_compat" && settings.compatKey?.trim() && bot.skills.includes("computer")) return pick("http");
+    if (route.provider === "anthropic" && route.ready) return pick("anthropic");
+    if (route.provider === "openai_compat" && route.ready && bot.skills.includes("computer")) return pick("http");
     return undefined;
   }
 
@@ -1795,7 +1853,7 @@ export function App({ user }: { user: User }) {
       createdAt: Date.now(),
       attachments: [],
       status: "streaming",
-      localStandIn: !routeFor(bot, settingsRef.current).apiKey.trim(),
+      localStandIn: !routeFor(bot, settingsRef.current, keyNamesRef.current).ready,
       fresh: true,
       thinking: [],
       authorBotId: botId,
@@ -1899,7 +1957,7 @@ export function App({ user }: { user: User }) {
           );
         },
       });
-      const route = routeFor(bot, settingsRef.current);
+      const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
       if (bot.model?.trim() || bot.provider === "openai_compat" || bot.provider === "anthropic") {
         const label = route.provider === "xai" ? "xAI" : route.provider === "anthropic" ? "Anthropic" : "the OpenAI-compatible provider";
         appendThinking(`Answer with ${route.model} through ${label}.`);
@@ -1908,7 +1966,7 @@ export function App({ user }: { user: User }) {
       let chosen = guardAction(bot, planAction(plan));
       let modelAnswer: string | undefined;
       let modelTrigger: TriggerDraft | undefined;
-      if (route.apiKey.trim()) {
+      if (route.ready) {
         try {
           const raw = await completeText({
             messages: [
@@ -1926,7 +1984,6 @@ export function App({ user }: { user: User }) {
                 }),
               },
             ],
-            apiKey: route.apiKey,
             apiBase: route.apiBase,
             model: route.model,
             useProxy: route.useProxy,
@@ -1960,7 +2017,7 @@ export function App({ user }: { user: User }) {
       };
       if (modelAnswer !== undefined) {
         await streamText(modelAnswer, instant, controller.signal, writeReply);
-      } else if (route.apiKey.trim()) {
+      } else if (route.ready) {
         const prior = (existing?.messages ?? [])
           .filter((message) => message.status === "done" && message.text.trim())
           .map((message) => ({ role: message.role, content: message.text }));
@@ -1985,7 +2042,7 @@ export function App({ user }: { user: User }) {
         });
         await streamReply({
           messages: prior,
-          apiKey: route.apiKey,
+          ready: route.ready,
           apiBase: route.apiBase,
           model: route.model,
           useProxy: route.useProxy,
@@ -2338,6 +2395,7 @@ export function App({ user }: { user: User }) {
         dragging={dragging}
         streaming={streaming}
         settings={settings}
+        keys={keyNames}
         online={online}
         youLabel={youLabel}
         banner={banner}
@@ -2384,6 +2442,10 @@ export function App({ user }: { user: User }) {
             logs={logs}
             canInstall={canInstall}
             drivers={drivers}
+            keys={secretInfo}
+            keysAvailable={keysAvailable}
+            onSaveKey={saveKey}
+            onRemoveKey={removeKey}
             onApplyDefaultTestProfile={applyDefaultTestProfile}
             onChange={patchSettings}
             onSavePin={(pin) => {

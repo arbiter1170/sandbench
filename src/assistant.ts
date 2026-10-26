@@ -1,3 +1,5 @@
+import { modelFetch, type ModelRequest } from "./harness";
+
 export function localStandIn(userText: string, attachmentNames: string[]): string {
   const extras =
     attachmentNames.length > 0 ? `\n\nAttached on this machine: ${attachmentNames.join(", ")}.` : "";
@@ -19,7 +21,7 @@ export function localStandIn(userText: string, attachmentNames: string[]): strin
     return sample.join("\n");
   }
   if (!text && attachmentNames.length > 0) {
-    return `**Local stand-in.** I kept ${attachmentNames.join(", ")} in this browser. Reading the pixels or the audio needs your own API key in Settings.`;
+    return `**Local stand-in.** I kept ${attachmentNames.join(", ")} in this browser. Reading the pixels or the audio needs an API key, added under Settings > Keys.`;
   }
   const body = text.includes("\n") ? text : text ? `> ${text}` : "";
   const lines = [
@@ -27,14 +29,16 @@ export function localStandIn(userText: string, attachmentNames: string[]): strin
     "",
     body,
     "",
-    "The thread, files, reminders, and calendar stay in this browser. Add your own API key in Settings when you want a live model.",
+    "The thread, files, reminders, and calendar stay in this browser. Add an API key under Settings > Keys (it is kept on the harness or runner) when you want a live model.",
   ];
   if (extras) lines.push("", extras.trim());
   return lines.join("\n");
 }
 
 export type ModelRoute = {
-  apiKey: string;
+  /** The stored key this route needs, and whether the harness or runner has it. */
+  secret: "XAI_API_KEY" | "ANTHROPIC_API_KEY" | "COMPAT_API_KEY";
+  ready: boolean;
   apiBase: string;
   model: string;
   useProxy: boolean;
@@ -43,35 +47,38 @@ export type ModelRoute = {
 
 const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 
+/**
+ * Pick the provider for a bot. `ready` holds the names of the keys stored on the harness
+ * or runner (from GET /secrets); the page never sees the values.
+ */
 export function routeFor(
   bot: { model?: string; provider?: "xai" | "openai_compat" | "anthropic" } | undefined,
   settings: {
-    apiKey: string;
     apiBase: string;
     model: string;
     useProxy: boolean;
     compatBase?: string;
-    compatKey?: string;
-    anthropicKey?: string;
     anthropicModel?: string;
   },
+  ready: ReadonlySet<string>,
 ): ModelRoute {
   const chosen = bot?.model?.trim();
   const groq = settings.compatBase?.includes("api.groq.com");
   const model = chosen || (groq ? "openai/gpt-oss-120b" : settings.model);
-  if (bot?.provider === "anthropic" && settings.anthropicKey?.trim()) {
+  if (bot?.provider === "anthropic" && ready.has("ANTHROPIC_API_KEY")) {
     return {
-      apiKey: settings.anthropicKey,
+      secret: "ANTHROPIC_API_KEY",
+      ready: true,
       apiBase: "https://api.anthropic.com/v1",
       model: bot?.model?.trim() || settings.anthropicModel?.trim() || DEFAULT_ANTHROPIC_MODEL,
       useProxy: false,
       provider: "anthropic",
     };
   }
-  if (bot?.provider === "openai_compat" && settings.compatKey?.trim() && settings.compatBase?.trim()) {
-    return { apiKey: settings.compatKey, apiBase: settings.compatBase, model, useProxy: false, provider: "openai_compat" };
+  if (bot?.provider === "openai_compat" && ready.has("COMPAT_API_KEY") && settings.compatBase?.trim()) {
+    return { secret: "COMPAT_API_KEY", ready: true, apiBase: settings.compatBase, model, useProxy: false, provider: "openai_compat" };
   }
-  return { apiKey: settings.apiKey, apiBase: settings.apiBase, model, useProxy: settings.useProxy, provider: "xai" };
+  return { secret: "XAI_API_KEY", ready: ready.has("XAI_API_KEY"), apiBase: settings.apiBase, model, useProxy: settings.useProxy, provider: "xai" };
 }
 
 async function* anthropicStream(response: Response) {
@@ -100,16 +107,18 @@ async function* anthropicStream(response: Response) {
   }
 }
 
-function resolveBase(apiBase: string, useProxy: boolean): string {
-  const trimmed = apiBase.trim().replace(/\/$/, "");
-  if (trimmed) {
-    if (!trimmed.startsWith("https://") && !trimmed.startsWith("/") && !/^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/.test(trimmed)) {
-      throw new Error("The API base URL must start with https://, point at this computer (http://127.0.0.1 or http://localhost), or be the local /api-proxy path.");
-    }
-    return trimmed;
-  }
-  if (useProxy) return "/api-proxy/v1";
-  throw new Error("Add an https:// base URL, or turn on the dev proxy.");
+/** The model request the harness or runner forwards with its stored key. */
+function requestFor(route: { provider?: ModelRoute["provider"]; apiBase: string }, payload: unknown): ModelRequest {
+  if (route.provider === "anthropic") return { provider: "anthropic", path: "/messages", payload };
+  const base = route.apiBase.trim().replace(/\/$/, "");
+  if (route.provider === "openai_compat") return { provider: "openai_compat", base, path: "/chat/completions", payload };
+  // xAI: the default base, or a custom https:// one; the old /api-proxy path means the default.
+  return { provider: "xai", ...(base.startsWith("https://") ? { base } : {}), path: "/chat/completions", payload };
+}
+
+async function failed(response: Response): Promise<never> {
+  const detail = (await response.text()).slice(0, 280);
+  throw new Error(detail || `The model request failed (${response.status}).`);
 }
 
 export async function streamText(
@@ -132,7 +141,7 @@ export async function streamText(
 
 export async function streamReply(options: {
   messages: { role: "user" | "assistant"; content: string }[];
-  apiKey: string;
+  ready: boolean;
   apiBase: string;
   model: string;
   useProxy: boolean;
@@ -143,7 +152,7 @@ export async function streamReply(options: {
   onDelta: (chunk: string) => void;
 }): Promise<{ localStandIn: boolean }> {
   const lastUser = [...options.messages].reverse().find((item) => item.role === "user");
-  if (!options.apiKey.trim()) {
+  if (!options.ready) {
     const full = localStandIn(lastUser?.content ?? "", options.attachmentNames);
     if (options.instant) {
       options.onDelta(full);
@@ -161,48 +170,23 @@ export async function streamReply(options: {
   }
 
   if (options.provider === "anthropic") {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        "x-api-key": options.apiKey.trim(),
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: options.model.trim() || DEFAULT_ANTHROPIC_MODEL,
-        max_tokens: 4096,
-        stream: true,
-        messages: options.messages.map((item) => ({ role: item.role, content: item.content })),
-      }),
-    });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 280);
-      throw new Error(detail || `The model request failed (${response.status}).`);
-    }
+    const payload = {
+      model: options.model.trim() || DEFAULT_ANTHROPIC_MODEL,
+      max_tokens: 4096,
+      stream: true,
+      messages: options.messages.map((item) => ({ role: item.role, content: item.content })),
+    };
+    const response = await modelFetch(requestFor(options, payload), options.signal);
+    if (!response.ok) await failed(response);
     for await (const chunk of anthropicStream(response)) options.onDelta(chunk);
     return { localStandIn: false };
   }
 
-  const base = resolveBase(options.apiBase, options.useProxy);
-  const response = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    signal: options.signal,
-    headers: {
-      Authorization: `Bearer ${options.apiKey.trim()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: options.model.trim() || "grok-3",
-      stream: true,
-      messages: options.messages,
-    }),
-  });
-
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 280);
-    throw new Error(detail || `The model request failed (${response.status}).`);
-  }
+  const response = await modelFetch(
+    requestFor(options, { model: options.model.trim() || "grok-3", stream: true, messages: options.messages }),
+    options.signal,
+  );
+  if (!response.ok) await failed(response);
 
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json") && !contentType.includes("text/event-stream")) {
@@ -245,7 +229,6 @@ export async function streamReply(options: {
 
 export async function completeText(options: {
   messages: { role: "user" | "assistant"; content: string }[];
-  apiKey: string;
   apiBase: string;
   model: string;
   useProxy: boolean;
@@ -253,47 +236,23 @@ export async function completeText(options: {
   signal: AbortSignal;
 }): Promise<string> {
   if (options.provider === "anthropic") {
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      signal: options.signal,
-      headers: {
-        "x-api-key": options.apiKey.trim(),
-        "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: options.model.trim() || DEFAULT_ANTHROPIC_MODEL,
-        max_tokens: 4096,
-        messages: options.messages.map((item) => ({ role: item.role, content: item.content })),
-      }),
-    });
-    if (!response.ok) {
-      const detail = (await response.text()).slice(0, 280);
-      throw new Error(detail || `The model request failed (${response.status}).`);
-    }
+    const payload = {
+      model: options.model.trim() || DEFAULT_ANTHROPIC_MODEL,
+      max_tokens: 4096,
+      messages: options.messages.map((item) => ({ role: item.role, content: item.content })),
+    };
+    const response = await modelFetch(requestFor(options, payload), options.signal);
+    if (!response.ok) await failed(response);
     const json = (await response.json()) as { content?: { type: string; text?: string }[] };
     const text = json.content?.filter((block) => block.type === "text").map((block) => block.text ?? "").join("\n");
     if (!text?.trim()) throw new Error("The model returned an empty decision.");
     return text;
   }
-  const base = resolveBase(options.apiBase, options.useProxy);
-  const response = await fetch(`${base}/chat/completions`, {
-    method: "POST",
-    signal: options.signal,
-    headers: {
-      Authorization: `Bearer ${options.apiKey.trim()}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: options.model.trim() || "grok-3",
-      stream: false,
-      messages: options.messages,
-    }),
-  });
-  if (!response.ok) {
-    const detail = (await response.text()).slice(0, 280);
-    throw new Error(detail || `The model request failed (${response.status}).`);
-  }
+  const response = await modelFetch(
+    requestFor(options, { model: options.model.trim() || "grok-3", stream: false, messages: options.messages }),
+    options.signal,
+  );
+  if (!response.ok) await failed(response);
   const json = (await response.json()) as { choices?: { message?: { content?: string } }[] };
   const text = json.choices?.[0]?.message?.content;
   if (typeof text !== "string" || !text.trim()) throw new Error("The model returned an empty decision.");

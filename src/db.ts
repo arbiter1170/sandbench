@@ -173,3 +173,30 @@ export async function eraseDatabase(): Promise<void> {
     req.onblocked = () => resolve();
   });
 }
+
+/**
+ * Keys found in an older workspace that could not yet be moved to the harness or runner
+ * (SB-05). Kept on this device only, never synced, and cleared once they are moved.
+ */
+export async function loadPendingSecrets(): Promise<{ name: string; value: string }[]> {
+  const db = await openDb();
+  try {
+    const value = await run(db.transaction("kv", "readonly").objectStore("kv").get("pendingSecrets"));
+    return Array.isArray(value) ? value.filter((item) => typeof item?.name === "string" && typeof item?.value === "string") : [];
+  } finally {
+    db.close();
+  }
+}
+
+export async function savePendingSecrets(list: { name: string; value: string }[]): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction("kv", "readwrite");
+    const done = settled(tx);
+    if (list.length) tx.objectStore("kv").put(list, "pendingSecrets");
+    else tx.objectStore("kv").delete("pendingSecrets");
+    await done;
+  } finally {
+    db.close();
+  }
+}

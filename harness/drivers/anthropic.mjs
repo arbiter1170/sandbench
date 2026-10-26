@@ -105,7 +105,7 @@ async function step(turn, messages, io) {
 
 export function startTurn(turn, io) {
   const done = (async () => {
-    if (!String(turn.key || "").trim()) throw new Error("Add an Anthropic API key in Settings.");
+    if (!String(turn.key || "").trim()) throw new Error("Add ANTHROPIC_API_KEY under Settings > Keys; it is kept on the harness or runner, not in the page.");
     let messages = [...toAnthropicHistory(turn.history), { role: "user", content: turn.prompt }];
     io.emit({ type: "thinking", text: `Ask ${turn.model || "Claude"} with the run_command tool.` });
     for (let index = 0; index < MAX_STEPS; index += 1) {

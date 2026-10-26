@@ -19,6 +19,8 @@ const server = createRunner({
   home: env.SANDBENCH_HOME || path.join(os.homedir(), ".sandbench"),
   uiDir: env.SANDBENCH_UI_DIR || "",
   publicOrigin: env.SANDBENCH_PUBLIC_ORIGIN || "",
+  // Model keys: environment variables (XAI_API_KEY, ANTHROPIC_API_KEY, ...) or this 0600 file.
+  secretsFile: env.SANDBENCH_SECRETS_FILE || undefined,
   allowedEmails,
   verifyIdToken: await firebaseVerifier(projectId),
 });

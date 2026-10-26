@@ -20,7 +20,7 @@ Open http://127.0.0.1:5173.
 - Details: [docs/deploy-vercel.md](docs/deploy-vercel.md)
 - Hosted runner on a VM (SB-01, in progress): [docs/runner.md](docs/runner.md)
 
-Attachments stay on-device (IndexedDB). Model API keys sync with the cloud snapshot under your Firebase UID — keep the allowlist tight.
+Attachments stay on-device (IndexedDB). Model API keys are **not** synced: they are kept by the local harness (`~/.sandbench/secrets.json`, mode 0600) or the hosted runner, and the page only sees each key's name and a short preview. Without a harness or runner, replies are local stand-ins.
 
 **Test stack:** Settings and each bot’s **Test profile** switch between xAI, Claude API, Claude Code CLI, Ollama, and Groq. See [docs/test-stack.md](docs/test-stack.md).
 
@@ -61,8 +61,8 @@ npm run electron:dev   # loads http://127.0.0.1:5173 if Vite is running, else di
 
 By default a bot's turn is planned in the page: a local match or a JSON decision from the model picks one action. With the harness running, a bot's **Agent** setting (right column, under its model) can hand the whole turn to a driver in `harness/drivers/` instead:
 
-- **Anthropic (API)**: a Messages API tool loop using the Anthropic key from Settings and the bot's model (or the default Claude model). Same `run_command` approval flow as the HTTP driver.
-- **OpenAI-compatible tools (HTTP)**: an OpenAI-compatible tool-calling loop using the bot's model and key. The model calls `run_command` as often as it needs (up to six steps). Each call becomes an approval card, the approved command runs in the workspace (or the group chat's folder), and the output goes back to the model.
+- **Anthropic (API)**: a Messages API tool loop using the stored `ANTHROPIC_API_KEY` (added under Settings, kept by the harness) and the bot's model (or the default Claude model). Same `run_command` approval flow as the HTTP driver.
+- **OpenAI-compatible tools (HTTP)**: an OpenAI-compatible tool-calling loop using the bot's model and the stored key. The model calls `run_command` as often as it needs (up to six steps). Each call becomes an approval card, the approved command runs in the workspace (or the group chat's folder), and the output goes back to the model.
 - **Claude Code (local CLI)**: runs `claude -p --output-format stream-json` with the prompt on stdin. Tools Claude is not allowed to use come back as permission denials; each one becomes an approval card, and approved ones are added to a per-turn settings file before the session resumes. Install with `npm i -g @anthropic-ai/claude-code` (Claude Desktop is not the CLI), run `claude` in a terminal and complete `/login`, then restart the harness. On Windows the harness also looks under `%APPDATA%\\npm\\claude.cmd`. It shows as "not installed" until that binary is found. Only `claude-*` model ids are passed through; other test-stack models are ignored so the CLI uses its default. This driver was written from Claude Code's public headless docs.
 - **Codex (local CLI)**: runs `codex app-server` over NDJSON JSON-RPC (`thread/start` → `turn/start`). Shell and file approvals become Sandbench cards. Install the Codex CLI, sign in, then restart the harness. Override the binary with `SANDBENCH_CODEX_BIN`. Concurrent launches are capped on small hosts (`SANDBENCH_CODEX_LAUNCH_SLOTS`).
 - **Grok (local CLI)**: runs `grok … agent stdio` over ACP. Requires `grok login` (subscription auth in `~/.grok/auth.json`), not an xAI API key. Install from https://x.ai/cli, then restart the harness. Override with `SANDBENCH_GROK_BIN`.
