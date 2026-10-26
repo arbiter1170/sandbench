@@ -41,6 +41,8 @@ curl -X POST http://127.0.0.1:8801/hooks/<id> -H "Authorization: Bearer sbh_..."
 
 A delivery returns `202` and queues a turn with the first 4,000 characters of the body. A wrong secret returns `401`, a paused webhook `409`, and more than 20 waiting deliveries `429`. The bot runs the turn when the page is open, and each run appears under Recent runs. To reach it from the internet, put your own tunnel in front of port 8801.
 
+`npm test` runs the unit tests: vitest for `src/` (`npm run test:web`) and `node --test` for `harness/` (`npm run test:node`). GitHub Actions (`.github/workflows/ci.yml`) runs typecheck, both test sets, the build, a check that `dist/` holds no API keys, and a gitleaks secret scan on every PR.
+
 `npm run build` typechecks and writes a static build to `dist/`. `npm run preview` serves that build with the service worker. The install control in Settings turns on when the browser fires its install prompt, which happens on that preview (or any https host), not on the dev server.
 
 ### Desktop (Electron MVP)
