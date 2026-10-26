@@ -16,7 +16,14 @@ import { createAuth } from "./auth.mjs";
 import { readJson, send } from "./http.mjs";
 import { createStatic } from "./static.mjs";
 
-export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "" }) {
+// Browsers send these on the page's calls; nothing else is allowed cross-origin.
+const CORS_HEADERS = "authorization, content-type, x-sandbench-client";
+const CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
+
+export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [] }) {
+  // The runner's own address plus any page hosted elsewhere (e.g. the Vercel site).
+  // Exact matches only: no wildcards, no credentials or cookies (the ID token is a header).
+  const origins = new Set([publicOrigin, ...allowedOrigins].map((item) => String(item || "").trim().replace(/\/$/, "")).filter(Boolean));
   const workspace = path.join(home, "workspace");
   mkdirSync(workspace, { recursive: true });
   const workspacePath = (relative) => insideRoot(workspace, relative);
@@ -99,9 +106,24 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
       // Liveness for Docker only; says nothing about the host or the user.
       if (req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
       if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
-        // The UI is served from this address, so a cross-site Origin is never legitimate.
+        // Only listed origins may call the API from a browser. With no list, any Origin is
+        // refused, so a stray page can never use a visitor's token against this runner.
         const origin = req.headers.origin;
-        if (publicOrigin && origin && origin !== publicOrigin) return send(res, 403, { error: "Cross-site requests are refused." });
+        if (origin) {
+          if (!origins.has(origin)) return send(res, 403, { error: "Cross-site requests are refused." });
+          res.setHeader("access-control-allow-origin", origin);
+          res.setHeader("vary", "Origin");
+        }
+        if (req.method === "OPTIONS") {
+          if (!origin) return send(res, 403, { error: "Cross-site requests are refused." });
+          res.writeHead(204, {
+            "access-control-allow-methods": CORS_METHODS,
+            "access-control-allow-headers": CORS_HEADERS,
+            "access-control-max-age": "600",
+            "cache-control": "no-store",
+          });
+          return res.end();
+        }
         const auth = await authenticate(req);
         if (!auth.user) return send(res, auth.status, { error: auth.error });
         return await api(req, res, url, auth.user);
