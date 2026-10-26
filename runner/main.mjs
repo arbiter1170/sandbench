@@ -4,6 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { firebaseVerifier, parseAllowlist } from "./api/auth.mjs";
 import { createRunner } from "./api/server.mjs";
+import { migrate } from "./db/migrate.mjs";
+import { createStore } from "./db/store.mjs";
 import { isBlockedProject } from "./guard.mjs";
 
 const env = process.env;
@@ -20,6 +22,16 @@ for (const origin of String(env.SANDBENCH_ALLOWED_ORIGINS || "").split(",").map(
   }
 }
 
+// SB-02 records live in Postgres (DATABASE_URL, set by deploy/compose.yml).
+let store = null;
+if (env.DATABASE_URL) {
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(env.DATABASE_URL, { max: 10, onnotice: () => {} });
+  const applied = await migrate(sql);
+  if (applied.length) console.log(`Applied migrations: ${applied.join(", ")}`);
+  store = createStore(sql);
+}
+
 const port = Number(env.PORT || 8080);
 const server = createRunner({
   home: env.SANDBENCH_HOME || path.join(os.homedir(), ".sandbench"),
@@ -32,6 +44,7 @@ const server = createRunner({
   allowedOrigins: String(env.SANDBENCH_ALLOWED_ORIGINS || "").split(",").map((item) => item.trim()).filter(Boolean),
   allowedEmails,
   verifyIdToken: await firebaseVerifier(projectId),
+  store,
 });
 
 server.listen(port, env.HOST || "0.0.0.0", () => {

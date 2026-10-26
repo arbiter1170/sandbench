@@ -27,9 +27,24 @@ phone / browser ──https──> Tailscale Funnel (laptop)  or  Cloudflare Acc
 
 ## Routes so far
 
-`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys below). The first nine're ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
+`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys) and the SB-02 record routes (see Records). The first nine are ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
 
 Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills, memory, schedules, triggers and MCP move to the runner in SB-08, SB-14, SB-15 and SB-22.
+
+## Records (SB-02)
+
+With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Postgres as **one row per entity** instead of one snapshot where the newest write wins. Migrations in `runner/db/migrations/` are applied when the runner starts. Without `DATABASE_URL`, these routes return 503 and everything else still works.
+
+- **Kinds:** `agents`, `threads`, `messages` (one row each, no cap per thread), `routines`, and `tasks`, `reminders`, `events`, `contacts`, `logs`, `computer`, `settings`, `studio`. Rows are scoped to the signed-in user's Firebase uid.
+- **Routes:**
+  - `GET /api/data/:kind` lists records (`?thread=ID` for one thread's messages, oldest first).
+  - `GET /api/data/:kind/:id` reads one record.
+  - `POST /api/data/:kind` with `{id, data}` creates one.
+  - `PATCH /api/data/:kind/:id` with `{version, data}` merges the given fields.
+  - `DELETE /api/data/:kind/:id?version=n` deletes one, leaving a tombstone that other devices see.
+- **No lost edits:** every row has a version, and an edit must name the version it read. A stale version gets **409** with the current row, so the page reloads that one row and retries. Edits to different rows never collide. Two devices changing different fields of the same row both survive after one retry.
+- **Change feed:** `GET /api/stream?since=<seq>` is an SSE stream of changes in commit order, pushed live through Postgres `LISTEN/NOTIFY`. `GET /api/changes?since=<seq>` returns the same changes as JSON, for catching up.
+- The page switches to these routes in SB-02b. Until then it still syncs the old way.
 
 ## API keys (SB-05)
 
@@ -99,5 +114,6 @@ VITE_RUNNER_URL=/api npm run dev                               # the Vite proxy 
 ## Tests
 
 - `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits.
+- `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped.
 - `runner/test/emulator.test.mjs` checks real Firebase ID tokens against the Auth emulator (`demo-sandbench`). CI runs it in the `runner-auth` job.
 - The CI `runner-image` job checks that `deploy/compose.yml` is valid and publishes no ports. It also builds the image, starts it, and checks that `/healthz` answers, `/api/health` returns 401 and the page is served.

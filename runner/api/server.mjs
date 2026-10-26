@@ -15,14 +15,15 @@ import { createSecretStore } from "../../harness/secrets.mjs";
 import { createTurns } from "../../harness/turns.mjs";
 import { createShell, insideRoot } from "../shell.mjs";
 import { createAuth } from "./auth.mjs";
+import { createDataRoutes } from "./data.mjs";
 import { readJson, send } from "./http.mjs";
 import { createStatic } from "./static.mjs";
 
 // Browsers send these on the page's calls; nothing else is allowed cross-origin.
 const CORS_HEADERS = "authorization, content-type, x-sandbench-client";
-const CORS_METHODS = "GET, POST, PUT, DELETE, OPTIONS";
+const CORS_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 
-export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], secretsFile, env = process.env }) {
+export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, secretsFile, env = process.env }) {
   // The runner's own address plus any page hosted elsewhere (e.g. the Vercel site).
   // Exact matches only: no wildcards, no credentials or cookies (the ID token is a header).
   const origins = new Set([publicOrigin, ...allowedOrigins].map((item) => String(item || "").trim().replace(/\/$/, "")).filter(Boolean));
@@ -44,8 +45,15 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
     },
   });
 
+  // SB-02 records; without DATABASE_URL the runner still works, minus these routes.
+  const dataRoute = store ? createDataRoutes(store) : null;
+
   async function api(req, res, url, user) {
     const route = url.pathname.slice("/api".length) || "/";
+    if (/^\/(data|changes|stream)(\/|$)/.test(route)) {
+      if (!dataRoute) return send(res, 503, { error: "This runner has no database (set DATABASE_URL)." });
+      if (await dataRoute(req, res, route, url, user)) return;
+    }
     if (req.method === "GET" && route === "/health") {
       return send(res, 200, { ok: true, platform: process.platform, host: os.hostname(), workspace, user: user.email });
     }
