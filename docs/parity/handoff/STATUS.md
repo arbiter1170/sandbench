@@ -1,6 +1,6 @@
 # STATUS (rewritten by Claude at the end of every session; one screen)
 
-**Last updated:** 2026-10-26 22:05 ET by Session 1 (Claude Code) · **Last session number:** 1
+**Last updated:** 2026-10-26 22:08 ET by Session 1 (Claude Code) · **Last session number:** 1
 **Window:** Tue Oct 27 → Thu Oct 29 morning, 2026. Bots return Thursday.
 **Base branch:** `deploy/vercel`. Latest merged on it: #12 (handoff pack, `4b69bd5`).
 
@@ -8,7 +8,7 @@
 
 | Id | Item | State | Branch | PR | Notes |
 |---|---|---|---|---|---|
-| T01 | SB-09 workspaces and worktrees | PR open | `sb-09-workspaces` | #13 | reworked to the T01 spec; worktrees at `wt/<slug>/<repo>/<branch>` (Vincent's choice) |
+| T01 | SB-09 workspaces and worktrees | merged | `sb-09-workspaces` | #13 | reworked to the T01 spec; worktrees at `wt/<slug>/<repo>/<branch>` (Vincent's choice) |
 | T02 | SB-08 profile memory and skills | PR open (draft) | `sb-08-profile-memory` | #14 | built to the brief before #12 landed; draft until T01 merges, then reworked to the T02 spec |
 | T03 | SB-13 browser emulator | todo | `sb-13-browser-emulator` | n/a | independent (needs only SB-01) |
 | T04 | SB-03 PR 1 contracts, `003_jobs.sql`, route registry | todo | `sb-03a-contracts` | n/a | needs T02 merged (migration order) |
@@ -21,8 +21,9 @@
 | – | SB-04, SB-10, SB-11, SB-12, SB-06 wiring | blocked | – | – | not scheduled; Supervisor re-plans Thursday (see WORKPLAN §5) |
 
 ## Open PRs awaiting Vincent's merge
-- **#13** SB-09 (T01): merge when the 4 required checks are green on its head.
-- **#14** SB-08 (T02): **draft, do not merge yet**. It is reworked to the T02 spec after #13 merges.
+- **#13** SB-09 (T01): merged (`d6b4b27`).
+- **iOS sign-in fix** (out of plan, Vincent asked): check the Vercel preview on the iPhone, then merge.
+- **#14** SB-08 (T02): **draft, do not merge yet**. T02 is unblocked (#13 merged); the next session reworks it to the spec.
 - PR #10 "Parity gap audit" is open and is **not** Claude's: leave it.
 
 ## Blockers and questions
