@@ -26,6 +26,40 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 3 · 2026-10-26 22:55 ET · T03 SB-13 · done
+- **Branch / PR / head sha:** `sb-13-browser-emulator` · https://github.com/arbiter1170/sandbench/pull/17 · code head `060b5d0` (final head after the log commit is in the session summary)
+- **Checks on the head:** on `060b5d0`, all 4 required checks pass: Typecheck, test, build (1m38s); Secret scan; Runner sign-in checks (Auth emulator); Runner image and compose file (1m36s).
+- **What was done:**
+  - Merged #14 at Vincent's request (`264cf6d`). Brought #15 up to date with `deploy/vercel`, keeping both WORKLOG entries, newest first.
+  - `runner/Dockerfile`: runtime on `mcr.microsoft.com/playwright:v1.64.1-noble`. That image ships Node 24, so NodeSource's `node_22.x` repo replaces the base's and `nodejs` is reinstalled. The build fails unless `node -v` is 22.
+  - Also in the image: Java 21 (`openjdk-21-jre-headless`), `gh` from GitHub's apt repo, Python 3, tini and `firebase-tools@14.27.0`. It still runs as non-root (`pwuser`). `npm ci` uses `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1`. `playwright@1.64.1` (exact) is in `runner/package.json`.
+  - `runner/browser/ssrf.mjs`:
+    - `assertSafeUrl` allows only http(s), no credentials, and requires every resolved address to be public.
+    - The ranges are separate IPv4 and IPv6 `BlockList`s, because one list with `::ffff:0:0/96` refuses every IPv4 address.
+    - Also refused: `localhost` and `metadata.google.internal`, and odd numeric spellings.
+    - `startSafeProxy` is a local proxy, used as Chromium's only way out. It checks every request and redirect hop and connects to the exact address it checked.
+  - `runner/browser/screenshot.mjs`: 320/375/390 PNGs at scale 1, run through that proxy with loopback included (`<-loopback>`). `runner/browser/images.mjs`: the `saveImage({outDir, name, buffer}) → {path, bytes}` interface, for SB-18 to plug into.
+  - `runner/browser/emulator.mjs`: `demo-*` only, refuses guarded ids (including `SANDBENCH_BLOCKED_PROJECTS`), always passes `--project`, and uses a temporary 0600 config that is removed on stop.
+  - CI, inside existing jobs only: `npx playwright install --with-deps chromium` before `npm run test:node`, and `docker image ls` plus `node -v` after the image build.
+  - `docs/runner.md` "Browser and emulator"; a `PLAN.md` log line (box not ticked).
+- **Tests run (real results):**
+  - Locally (Windows, Chromium from `npx playwright install chromium`): `node --test runner/test/ssrf.test.mjs runner/test/screenshot.test.mjs runner/test/emulator-wrapper.test.mjs` → 13 pass, 0 fail, 0 skipped.
+  - CI on `060b5d0`: all 4 checks green. Image `sandbench-runner:ci` is **3.24GB**, Node in the image is **v22.23.4**, and the image job took 1m36s.
+  - Mutation check: the required two are caught (traffic through the checking proxy, and the `demo-` check). Also caught: guarded id, link-local and metadata range, IPv4-mapped IPv6, every resolved address checked, credentials, http(s) only, loopback only when listed.
+  - Setting `bypass` to `""` was not caught, because Playwright adds `<-loopback>` on its own. Setting `bypass` to `localhost,127.0.0.1,<local>` is caught (the redirect test fails).
+- **Not run / could not run:** the local image build (Docker doesn't work on this machine; CI built it). Local typecheck (this worktree has no root `node_modules`; no `src/` change, CI passed). Only one image variant was built, so there is no size for the multi-stage alternative.
+- **Decisions made and why:**
+  - **The SSRF check is a proxy, not just `page.route`.** First try: check each request in `page.route`. Chromium followed a redirect without asking the route, and the test timed out reaching `169.254.169.254`. Second try: `route.fetch` with redirects off, checking `Location`. That still let a two-hop chain through: a safe first hop, then a 302 to a refused host, which was actually requested. The proxy closes both, and DNS rebinding too. That was the second and last attempt on that test (STOP point 8 not reached).
+  - **Node 22 from NodeSource on the Playwright base**, the spec's first option. The multi-stage alternative was not tried, so its size is unknown.
+- **Deviations from the plan:**
+  - `startSafeProxy` lives in `ssrf.mjs`, because T03's Touch list has no proxy file.
+  - The CI image step also prints the image size and Node version. That edit is inside the existing job, and the spec asks for the size.
+  - Two failed image builds would have been a STOP; the first failed on Node 24 and the second passed.
+- **Open questions for Vincent or the Supervisor:**
+  1. The image is 3.24GB, since the base ships Chromium, Firefox and WebKit. A node:22-bookworm-slim build with only Chromium (`playwright install --with-deps chromium`) would likely be much smaller, but it moves off the planned base. Recommend trying it as a follow-up if laptop disk or build time matters.
+  2. On the first run, the test job took 10m03s, against its 15-minute limit, because of `playwright install --with-deps chromium`. The rerun took 1m38s. Watch it; caching the browser is a possible follow-up.
+- **Next step:** Vincent merges #17 when he's happy with the image size. T04 (SB-03 contracts) is unblocked, since #14 is merged. Other independent tasks: T05, T07, T08, T09.
+
 ### Session 2 · 2026-10-26 22:25 ET · T02 SB-08 · done
 - **Branch / PR / head sha:** `sb-08-profile-memory` · https://github.com/arbiter1170/sandbench/pull/14 · code head `74b11ca` (final head after the log commit is in the session summary)
 - **Checks on the head:** pending at the time of writing.

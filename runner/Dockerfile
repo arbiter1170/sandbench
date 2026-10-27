@@ -1,6 +1,5 @@
 # Sandbench runner image. Build from the repo root:
 #   docker build -f runner/Dockerfile -t sandbench-runner .
-# SB-13 moves the runtime stage onto the Playwright base with Java and firebase-tools.
 
 # 1. Build the UI so the runner can serve it at the same address as /api.
 FROM node:22-bookworm-slim AS ui
@@ -21,19 +20,43 @@ ARG VITE_FIREBASE_STORAGE_BUCKET=""
 ARG VITE_RUNNER_URL="/api"
 RUN npm run build
 
-# 2. Runtime.
-FROM node:22-bookworm-slim
+# 2. Runtime: Playwright's Ubuntu noble image (Chromium and its libraries), pinned to the same
+# version as `playwright` in runner/package.json. SB-13 adds Java 21 (Firebase emulators), gh and
+# firebase-tools.
+FROM mcr.microsoft.com/playwright:v1.64.1-noble
+# The base ships Node 24; the runner targets Node 22, like CI. Swap the base's NodeSource repo for
+# the node_22.x one and reinstall, then stop the build if the result is not Node 22.
 RUN apt-get update \
- && apt-get install -y --no-install-recommends bash ca-certificates git python3 tini \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource-22.gpg \
+ && rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources \
+ && echo "deb [signed-by=/etc/apt/keyrings/nodesource-22.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+ && apt-get update \
+ && apt-get remove -y nodejs \
+ && apt-get install -y --no-install-recommends nodejs \
  && rm -rf /var/lib/apt/lists/*
+RUN node -v && node -v | grep -q '^v22\.' || { echo "Expected Node 22"; exit 1; }
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends bash ca-certificates curl git gnupg openjdk-21-jre-headless python3 tini \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg \
+ && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends gh \
+ && rm -rf /var/lib/apt/lists/*
+RUN npm install -g --no-audit --no-fund firebase-tools@14.27.0 && npm cache clean --force
 WORKDIR /app
 COPY runner/package.json runner/package-lock.json ./runner/
-RUN cd runner && npm ci --omit=dev --no-audit --no-fund
+# Browsers come from the base image (PLAYWRIGHT_BROWSERS_PATH=/ms-playwright).
+RUN cd runner && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 npm ci --omit=dev --no-audit --no-fund
 COPY harness ./harness
 COPY runner ./runner
 COPY --from=ui /src/dist ./dist
-RUN mkdir -p /srv/sandbench && chown node:node /srv/sandbench
-USER node
+# pwuser is the base image's non-root user.
+RUN mkdir -p /srv/sandbench && chown pwuser:pwuser /srv/sandbench
+USER pwuser
 ENV NODE_ENV=production \
     PORT=8080 \
     SANDBENCH_HOME=/srv/sandbench \

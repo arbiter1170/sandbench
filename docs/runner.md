@@ -76,6 +76,21 @@ Screen capture, input, the process list and text-to-speech stay in the local har
   The agent must already exist as a record on the runner. Add `--owner <uid>` if more than one account has it.
 - **Backup:** `docker compose -f deploy/compose.yml exec runner node runner/agent/memory-backup.mjs --out /srv/sandbench/backup` writes `<agent>/profile.md` and `<agent>/journal.md`; copy them into the team repo. The nightly run is SB-14.
 
+## Browser and emulator (SB-13)
+
+The runner image is built on `mcr.microsoft.com/playwright:v1.64.1-noble`, which has headless Chromium and Node 22. `playwright` in `runner/package.json` is pinned to the same version. It adds Java 21 (for the Firebase emulators), `gh`, Python 3 and `firebase-tools` 14. None of this is reachable by agents yet: the `screenshot` and `emulator_*` tools come with SB-10, behind the policy layer (SB-06).
+
+- **Screenshots** (`runner/browser/screenshot.mjs`): `screenshot({ url, outDir, widths = [320, 375, 390], fullPage, waitFor })` saves one PNG per width (`<host>-<width>.png`, at scale 1) and returns `[{ width, path, bytes }]`.
+  - `outDir` will be the agent's own folder (SB-09 rules).
+  - Saving goes through a `saveImage({ outDir, name, buffer })` → `{ path, bytes }` interface (`runner/browser/images.mjs`), so attachments (SB-18) can plug in later.
+- **SSRF rules** (`runner/browser/ssrf.mjs`):
+  - Only `http` and `https`, with no user name or password in the URL.
+  - Every address the host resolves to must be public. Loopback, private, link-local (including the `169.254.169.254` metadata address), carrier-grade NAT, multicast and reserved ranges are refused, as are IPv4-mapped IPv6, odd numeric IPv4 spellings, `localhost` and `metadata.google.internal`.
+  - Chromium's only way out is a local checking proxy, loopback included. So every request, subresource and redirect hop is checked. The proxy connects to the exact address it checked, so a DNS answer that changes in between can't redirect it.
+  - `allowHosts` (for example the live game host) and `allowLoopbackFor` (tests) are explicit exceptions.
+- **Emulators** (`runner/browser/emulator.mjs`): `emulatorStart({ project })` runs `firebase emulators:start --only auth,firestore,database --project <project>` with a temporary config file (ports 9099, 8180 and 9000 by default, as in the game repo's `firebase.json`), and `emulatorStop` stops it and deletes the file. Only `demo-*` ids are accepted, never one blocked by `runner/guard.mjs` or `SANDBENCH_BLOCKED_PROJECTS`, and `--project` is always passed.
+- **Local tests:** `npx playwright install chromium` once in `runner/`. CI installs it before `npm run test:node`.
+
 ## Records (SB-02)
 
 With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Postgres as **one row per entity** instead of one snapshot where the newest write wins. Migrations in `runner/db/migrations/` are applied when the runner starts. Without `DATABASE_URL`, these routes return 503 and everything else still works.
