@@ -1,16 +1,17 @@
-// Git worktrees per agent (SB-09). Clones live in shared/repos/<repo> (put there by Vincent or a
-// setup step; nothing here clones). Each agent's worktrees live in wt/<slug>/<repo>/<branch>, so the
-// owner is the first folder and a slug like "qa" can never be read as part of "qa-lead".
-// git always runs through execFile with an argument list, never a shell string.
+// Git worktrees per agent (SB-09). Repos come from an allowlist (SANDBENCH_REPOS); each agent's
+// worktrees live in wt/<slug>/<repo>/<branch>, so the owner is its own folder and a slug like "qa"
+// can never claim "qa-lead"'s worktrees. git always runs through execFile with an argument list,
+// never a shell string, and every input is checked before the first git call.
+// Nothing calls these yet: the worktree_create / worktree_remove tools are SB-10, the nightly
+// prune is SB-14.
 import { execFile } from "node:child_process";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
-import { SLUG, resolveWorkspacePath, workspaceRoots } from "./paths.mjs";
+import { AGENT_SLUG, resolveWorkspacePath } from "./paths.mjs";
 
-const execFileAsync = promisify(execFile);
-const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
-const REPO = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+const REPO_NAME = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+export const BRANCH = /^[A-Za-z0-9._/-]{1,100}$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 export function validBranch(name) {
@@ -20,7 +21,21 @@ export function validBranch(name) {
   return name.split("/").every((part) => !part.startsWith(".") && !part.endsWith(".lock"));
 }
 
-function samePath(a, b) {
+/** `name=/abs/path[#base],name2=...` (base defaults to origin/main) -> { name: { path, base } }. */
+export function parseRepoAllowlist(text) {
+  const repos = {};
+  for (const entry of String(text || "").split(",").map((item) => item.trim()).filter(Boolean)) {
+    const match = /^([^=]+)=([^#]+)(?:#(.+))?$/.exec(entry);
+    const [name, dir, base = "origin/main"] = match ? [match[1].trim(), match[2].trim(), match[3]?.trim()] : [];
+    if (!match || !REPO_NAME.test(name) || !path.isAbsolute(dir) || !validBranch(base)) {
+      throw new Error(`SANDBENCH_REPOS: "${entry}" is not name=/absolute/path[#base].`);
+    }
+    repos[name] = { path: dir, base };
+  }
+  return repos;
+}
+
+const same = (a, b) => {
   const real = (p) => {
     try {
       return realpathSync(p);
@@ -29,108 +44,92 @@ function samePath(a, b) {
     }
   };
   return real(a) === real(b);
-}
+};
 
-export function createWorktrees({ home, repos = [], now = () => Date.now() }) {
-  const roots = workspaceRoots(home);
-  const allowed = new Set(repos.filter((name) => REPO.test(name)));
+export function createWorktrees({ roots, repos = {}, exec = promisify(execFile) }) {
+  const git = (args) =>
+    exec("git", args, { env: { ...process.env, GIT_TERMINAL_PROMPT: "0" }, timeout: 120_000, maxBuffer: 4 * 1024 * 1024, windowsHide: true }).then((out) =>
+      String(out?.stdout ?? "").trim(),
+    );
+  const ok = (args) => git(args).then(() => true, () => false);
 
-  async function git(cwd, args, { ok = false } = {}) {
-    try {
-      const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], {
-        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-        timeout: 120_000,
-        maxBuffer: 4 * 1024 * 1024,
-        windowsHide: true,
-      });
-      return ok ? true : stdout.trim();
-    } catch (error) {
-      if (ok) return false;
-      throw new Error(`git ${args[0]} failed: ${String(error.stderr || error.message).trim().slice(0, 400)}`);
-    }
-  }
-
-  function check({ agent, repo, branch, base }) {
-    if (typeof agent !== "string" || !SLUG.test(agent)) throw new Error("Unknown agent.");
-    if (!allowed.has(repo)) throw new Error("That repo is not on the worktree allowlist.");
+  function check({ agentSlug, repo, branch, base }) {
+    if (typeof agentSlug !== "string" || !AGENT_SLUG.test(agentSlug)) throw new Error("Unknown agent.");
+    if (typeof repo !== "string" || !Object.hasOwn(repos, repo)) throw new Error("That repo is not on the allowlist.");
     if (!validBranch(branch)) throw new Error("That branch name is not allowed.");
     if (base !== undefined && !validBranch(base)) throw new Error("That base is not allowed.");
-    const repoDir = path.join(roots.shared, "repos", repo);
-    if (!existsSync(path.join(repoDir, ".git"))) throw new Error(`No clone of ${repo} in shared/repos.`);
-    const relative = ["wt", agent, repo, ...branch.split("/")].join("/");
-    // The same check as the file routes, so a symlink the agent left in its wt folder can't
-    // send the checkout into another agent's folder.
-    const target = resolveWorkspacePath(home, agent, relative, { write: true });
-    if (!target) throw new Error("That worktree path is not allowed.");
-    return { repoDir, target, relative };
+    // The same rules as the file routes, so a link the agent left in its wt folder can't send
+    // the checkout into another agent's folder.
+    const dest = resolveWorkspacePath(roots, agentSlug, ["wt", agentSlug, repo, branch].join("/"), { write: true });
+    return { repoPath: repos[repo].path, dest };
   }
 
-  async function list(repoDir) {
-    const out = await git(repoDir, ["worktree", "list", "--porcelain"]);
-    return out.split(/\n\n+/).map((block) => {
-      const entry = {};
-      for (const line of block.split("\n")) {
-        if (line.startsWith("worktree ")) entry.path = line.slice(9);
-        else if (line.startsWith("branch refs/heads/")) entry.branch = line.slice(18);
-      }
-      return entry;
-    }).filter((entry) => entry.path);
+  async function list(repoPath) {
+    const out = await git(["-C", repoPath, "worktree", "list", "--porcelain"]);
+    return out
+      .split(/\n\n+/)
+      .map((block) => ({
+        path: /^worktree (.+)$/m.exec(block)?.[1],
+        branch: /^branch refs\/heads\/(.+)$/m.exec(block)?.[1],
+      }))
+      .filter((entry) => entry.path);
   }
 
-  async function worktreeCreate({ agent, repo, branch, base = "origin/main" }) {
-    const { repoDir, target, relative } = check({ agent, repo, branch, base });
-    if (existsSync(target)) throw new Error("That worktree already exists.");
-    if (!(await git(repoDir, ["check-ref-format", `refs/heads/${branch}`], { ok: true }))) throw new Error("That branch name is not allowed.");
-    if (base.startsWith("origin/")) await git(repoDir, ["fetch", "--quiet", "origin"]);
-    const exists = await git(repoDir, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`], { ok: true });
-    // git creates the parent folders. --no-track: a new branch must not push to the base it started from.
-    await git(repoDir, exists ? ["worktree", "add", target, branch] : ["worktree", "add", "--no-track", "-b", branch, target, base]);
-    await git(repoDir, ["config", `branch.${branch}.sandbenchBase`, base]);
-    await git(repoDir, ["config", `branch.${branch}.sandbenchCreated`, String(now())]);
-    return { path: target, relative, repo, branch, base };
+  async function create({ agentSlug, repo, branch, base }) {
+    const { repoPath, dest } = check({ agentSlug, repo, branch, base });
+    const from = base ?? repos[repo].base;
+    if (existsSync(dest)) throw new Error("That worktree already exists.");
+    if (!(await ok(["-C", repoPath, "check-ref-format", `refs/heads/${branch}`]))) throw new Error("That branch name is not allowed.");
+    if (from.startsWith("origin/")) await git(["-C", repoPath, "fetch", "--quiet", "origin"]);
+    // --no-track: a plain `git push` from the new branch can't land on the base it started from.
+    await git(["-C", repoPath, "worktree", "add", "--no-track", "-b", branch, dest, from]);
+    return { path: dest, branch };
   }
 
-  async function worktreeRemove({ agent, repo, branch }) {
-    const { repoDir, target } = check({ agent, repo, branch });
-    const known = (await list(repoDir)).some((entry) => samePath(entry.path, target));
-    if (!known) throw new Error("No such worktree.");
-    // No --force: git refuses when the worktree has uncommitted changes. The branch is kept.
-    await git(repoDir, ["worktree", "remove", target]);
-    return true;
+  async function remove({ agentSlug, repo, branch }) {
+    const { repoPath, dest } = check({ agentSlug, repo, branch });
+    if (!(await list(repoPath)).some((entry) => same(entry.path, dest))) throw new Error("No such worktree.");
+    // Never --force: git refuses when there are uncommitted changes. The branch is kept.
+    await git(["-C", repoPath, "worktree", "remove", dest]);
+    return { removed: true };
   }
 
-  // Removes worktrees whose branch is merged into its base and that have seen no commit and
-  // no creation for `olderThanDays`. Dirty worktrees are kept. Scheduling it is SB-14.
-  async function pruneWorktrees({ olderThanDays = 7 } = {}) {
+  /**
+   * Worktrees under wt/ whose branch is merged into the repo's base and whose folder hasn't
+   * changed for `olderThanDays`. Dry run by default: it only reports. With dryRun false it runs
+   * `git worktree remove` and `git branch -d` (never --force, never -D).
+   */
+  async function prune({ olderThanDays = 7, now = Date.now(), dryRun = true } = {}) {
     const removed = [];
     const kept = [];
-    for (const repo of allowed) {
-      const repoDir = path.join(roots.shared, "repos", repo);
-      if (!existsSync(path.join(repoDir, ".git"))) continue;
+    const cutoff = now - olderThanDays * DAY_MS;
+    for (const [name, repo] of Object.entries(repos)) {
+      if (!existsSync(repo.path)) continue;
       // A failed fetch only makes fewer branches look merged.
-      await git(repoDir, ["fetch", "--quiet", "origin"], { ok: true });
-      for (const entry of await list(repoDir)) {
-        const inside = path.relative(roots.wt, entry.path);
-        if (!entry.branch || inside.startsWith("..") || path.isAbsolute(inside)) continue;
-        const base = (await git(repoDir, ["config", "--get", `branch.${entry.branch}.sandbenchBase`]).catch(() => "")) || "origin/main";
-        const created = Number(await git(repoDir, ["config", "--get", `branch.${entry.branch}.sandbenchCreated`]).catch(() => "0")) || 0;
-        const lastCommit = Number(await git(entry.path, ["log", "-1", "--format=%ct", "HEAD"])) * 1000;
-        const why =
-          now() - Math.max(created, lastCommit) < olderThanDays * DAY_MS ? "recent"
-          : !validBranch(base) || !(await git(entry.path, ["merge-base", "--is-ancestor", "HEAD", base], { ok: true })) ? "not merged"
-          : (await git(entry.path, ["status", "--porcelain"])) ? "uncommitted changes"
+      await ok(["-C", repo.path, "fetch", "--quiet", "origin"]);
+      for (const entry of await list(repo.path)) {
+        const relative = path.relative(roots.wt, entry.path);
+        if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) continue;
+        const item = { repo: name, path: entry.path, branch: entry.branch };
+        const reason =
+          !entry.branch ? "no branch"
+          : statSync(entry.path).mtimeMs > cutoff ? "recent"
+          : !(await ok(["-C", repo.path, "merge-base", "--is-ancestor", entry.branch, repo.base])) ? "not merged"
+          : (await git(["-C", entry.path, "status", "--porcelain"])) ? "uncommitted changes"
           : "";
-        if (why) {
-          kept.push({ path: entry.path, branch: entry.branch, why });
+        if (reason) {
+          kept.push({ ...item, reason });
           continue;
         }
-        await git(repoDir, ["worktree", "remove", entry.path]);
-        removed.push({ path: entry.path, branch: entry.branch });
+        if (!dryRun) {
+          await git(["-C", repo.path, "worktree", "remove", entry.path]);
+          item.branchDeleted = await ok(["-C", repo.path, "branch", "-d", entry.branch]);
+        }
+        removed.push(item);
       }
-      await git(repoDir, ["worktree", "prune"], { ok: true });
     }
-    return { removed, kept };
+    return { removed, kept, dryRun };
   }
 
-  return { worktreeCreate, worktreeRemove, pruneWorktrees };
+  return { create, remove, prune };
 }

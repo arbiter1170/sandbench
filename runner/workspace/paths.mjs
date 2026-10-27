@@ -1,109 +1,100 @@
-// Per-agent workspaces (SB-09). Everything lives under SANDBENCH_HOME:
-//   shared/             handoff notes and repo clones; every agent reads, writes only shared/handoff
-//   agents/<slug>/      an agent's default working folder; only that agent reads or writes it
-//   wt/<slug>/<repo>/<branch>   that agent's git worktrees (worktrees.mjs)
-//   workspace/          the page's own folder, for calls that carry no agent yet (see server.mjs)
+// Per-agent workspaces (SB-09). Every root comes from SANDBENCH_HOME:
+//   workspace/                  legacy: the owner context (no agent), today's folder for page calls
+//   shared/                     every agent reads; agents write only under shared/handoff/
+//   agents/<slug>/              an agent's own folder (read and write)
+//   wt/<slug>/<repo>/<branch>/  that agent's git worktrees (read and write; worktrees.mjs)
 //
-// A requested path is relative. "shared/...", "agents/<slug>/..." and "wt/<slug>/..." name an
-// area; anything else is inside the caller's own folder. This limits the runner's file routes and
-// the folder a command starts in. It is not a sandbox: a shell command can still open any path
-// the runner's user can, so isolating commands needs OS-level users or containers.
+// For an agent, a path starting "shared/" or "wt/<slug>/" names that area; anything else is
+// inside its own folder, so another agent's folder can't even be named. This limits the runner's
+// file routes and where a command starts. It is not a sandbox: a shell command can still open any
+// path the runner's user can.
 import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 
-export const SLUG = /^[a-z0-9][a-z0-9-]{0,39}$/;
+export const AGENT_SLUG = /^[a-z0-9][a-z0-9-]{0,40}$/;
 
-// Shared folders an agent may write into; the rest of shared/ (repo clones) is read-only.
-const SHARED_WRITABLE = ["handoff"];
+export class WorkspaceError extends Error {
+  /** @param {"invalid" | "outside" | "forbidden"} code */
+  constructor(code, message) {
+    super(message);
+    this.name = "WorkspaceError";
+    this.code = code;
+  }
+}
 
 export function workspaceRoots(home) {
   return {
-    home,
+    legacy: path.join(home, "workspace"),
     shared: path.join(home, "shared"),
     agents: path.join(home, "agents"),
     wt: path.join(home, "wt"),
-    page: path.join(home, "workspace"),
   };
 }
 
-export function ownFolder(home, agentSlug) {
-  const roots = workspaceRoots(home);
-  return agentSlug ? path.join(roots.agents, agentSlug) : roots.page;
+// The relative path from base to target, or null when target is not strictly inside base.
+function within(base, target) {
+  const relative = path.relative(base, target);
+  if (!relative || path.isAbsolute(relative) || relative.split(path.sep)[0] === "..") return null;
+  return relative;
 }
 
-// What `agentSlug` may do at `parts` (path segments under home): "write", "read" or null.
-function access(parts, agentSlug, write) {
-  const [area, owner] = parts;
-  let level = null;
-  if (area === "shared") level = parts.length > 1 && SHARED_WRITABLE.includes(parts[1]) && parts.length > 2 ? "write" : "read";
-  else if ((area === "agents" || area === "wt") && agentSlug && owner === agentSlug) level = "write";
-  else if (area === "workspace" && !agentSlug) level = "write";
-  if (!level) return false;
-  return write ? level === "write" : true;
-}
-
-// Follows symlinks for the part of `target` that exists, so a link can't lead out of an area.
-// A link that points nowhere yet returns null: writing through it would create its target.
-function realTarget(target) {
-  let existing = target;
+// realpath of the deepest part of `target` that exists, plus the rest. A symlink that points
+// nowhere yet is refused: writing through it would create its target, wherever that is.
+function realOf(target) {
   const rest = [];
+  let existing = target;
   for (;;) {
     try {
       return path.join(realpathSync(existing), ...rest);
     } catch (error) {
       if (error?.code !== "ENOENT" && error?.code !== "ENOTDIR") throw error;
+      let link = false;
       try {
-        if (lstatSync(existing).isSymbolicLink()) return null;
+        link = lstatSync(existing).isSymbolicLink();
       } catch {
-        // not there at all; keep climbing
+        // not there at all
       }
+      if (link) throw new WorkspaceError("forbidden", "That path goes through a link to nowhere.");
       const parent = path.dirname(existing);
-      if (parent === existing) return null;
+      if (parent === existing) return target;
       rest.unshift(path.basename(existing));
       existing = parent;
     }
   }
 }
 
-function segmentsUnder(root, target) {
-  const inside = path.relative(root, target);
-  if (inside.startsWith("..") || path.isAbsolute(inside)) return null;
-  return inside ? inside.split(path.sep) : [];
-}
-
-// Returns the absolute path, or null when the agent may not reach it.
-export function resolveWorkspacePath(root, agentSlug, requested, { write = false } = {}) {
-  if (agentSlug !== null && (typeof agentSlug !== "string" || !SLUG.test(agentSlug))) return null;
-  if (typeof requested !== "string" || !requested.trim() || requested.length > 400) return null;
-  if (requested.includes("\0")) return null;
-  if (path.isAbsolute(requested) || /^[a-z]:/i.test(requested) || requested.startsWith("\\")) return null;
-  const normalized = requested.replace(/\\/g, "/");
-  if (normalized.split("/").includes("..")) return null;
-
-  const first = normalized.split("/")[0];
-  const named = first === "shared" || first === "agents" || first === "wt";
-  const base = named ? root : ownFolder(root, agentSlug);
-  const target = path.resolve(base, normalized);
-  const parts = segmentsUnder(root, target);
-  if (!parts || !access(parts, agentSlug, write)) return null;
-  // An area's root itself ("shared", "agents/qa") is a folder to list or start in, not a file.
-  if (parts.length < (parts[0] === "workspace" ? 2 : parts[0] === "shared" ? 2 : 3)) return null;
-
-  let realRoot;
-  try {
-    realRoot = realpathSync(root);
-  } catch {
-    return null;
+/**
+ * Returns the absolute path `agentSlug` may use, or throws WorkspaceError.
+ * `agentSlug === null` is the owner context: the legacy workspace folder, as before SB-09.
+ * The slug always comes from the server (SB-03 passes it from the job), never from a request.
+ */
+export function resolveWorkspacePath(roots, agentSlug, requested, { write = false } = {}) {
+  if (agentSlug !== null && (typeof agentSlug !== "string" || !AGENT_SLUG.test(agentSlug))) {
+    throw new WorkspaceError("invalid", "Unknown agent.");
   }
-  const real = realTarget(target);
-  const realParts = real && segmentsUnder(realRoot, real);
-  if (!realParts || !access(realParts, agentSlug, write)) return null;
-  return target;
-}
+  if (typeof requested !== "string" || !requested.trim() || requested.length > 240) throw new WorkspaceError("invalid", "No path.");
+  if (requested.includes("\0") || requested.includes("\\")) throw new WorkspaceError("invalid", "That path has characters that aren't allowed.");
+  if (requested.startsWith("/") || /^[a-z]:/i.test(requested)) throw new WorkspaceError("invalid", "Paths are relative.");
+  const parts = requested.split("/");
+  if (parts.includes("..")) throw new WorkspaceError("outside", "Paths can't use '..'.");
 
-// The folder a command or turn starts in: the caller's own folder by default, otherwise any
-// folder the caller may write to (its own worktrees included).
-export function resolveWorkFolder(root, agentSlug, folder) {
-  if (!folder) return ownFolder(root, agentSlug);
-  return resolveWorkspacePath(root, agentSlug, folder, { write: true });
+  // `base` is the folder the target must stay inside, before and after following links.
+  let base;
+  let rest;
+  if (agentSlug === null) {
+    [base, rest] = [roots.legacy, parts];
+  } else if (parts[0] === "shared") {
+    if (write && parts[1] !== "handoff") throw new WorkspaceError("forbidden", "Agents write only under shared/handoff/.");
+    [base, rest] = write ? [path.join(roots.shared, "handoff"), parts.slice(2)] : [roots.shared, parts.slice(1)];
+  } else if (parts[0] === "wt") {
+    if (parts[1] !== agentSlug) throw new WorkspaceError("forbidden", "Another agent's worktree can't be read or written.");
+    [base, rest] = [path.join(roots.wt, agentSlug), parts.slice(2)];
+  } else {
+    [base, rest] = [path.join(roots.agents, agentSlug), parts];
+  }
+
+  const target = path.resolve(base, ...rest.filter((part) => part && part !== "."));
+  if (!within(base, target)) throw new WorkspaceError("outside", "The path must stay inside the workspace folder.");
+  if (!within(realOf(base), realOf(target))) throw new WorkspaceError("forbidden", "That path leads outside its folder through a link.");
+  return target;
 }

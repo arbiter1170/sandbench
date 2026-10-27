@@ -1,18 +1,16 @@
-// SB-09 worktrees against real git, with local fixture repos only (no network, no real clones).
+// SB-09 worktrees with real git on local fixture repos (no network, no real repo).
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { resolveWorkspacePath } from "../workspace/paths.mjs";
-import { createWorktrees, validBranch } from "../workspace/worktrees.mjs";
+import { createWorktrees, parseRepoAllowlist, resolveWorkspacePath, validBranch, workspaceRoots } from "../workspace/index.mjs";
 
 const DAY = 24 * 60 * 60 * 1000;
 let tmp;
-let home;
+let roots;
 let clone;
-let clock;
 let worktrees;
 
 const git = (cwd, ...args) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf8" }).trim();
@@ -20,6 +18,10 @@ const commit = (cwd, file, text) => {
   writeFileSync(path.join(cwd, file), text);
   git(cwd, "add", file);
   git(cwd, "commit", "-q", "-m", `add ${file}`);
+};
+const age = (dir, days) => {
+  const when = new Date(Date.now() - days * DAY);
+  utimesSync(dir, when, when);
 };
 
 before(() => {
@@ -41,109 +43,116 @@ before(() => {
   git(seed, "remote", "add", "origin", origin);
   commit(seed, "README.md", "game\n");
   git(seed, "push", "-q", "origin", "main");
-
-  home = path.join(tmp, "home");
-  clone = path.join(home, "shared", "repos", "game");
-  mkdirSync(path.dirname(clone), { recursive: true });
+  clone = path.join(tmp, "clones", "game");
   execFileSync("git", ["clone", "-q", origin, clone]);
-  for (const slug of ["pixelpets", "review", "design", "qa"]) mkdirSync(path.join(home, "agents", slug), { recursive: true });
-  mkdirSync(path.join(home, "wt"), { recursive: true });
-  clock = Date.now();
-  worktrees = createWorktrees({ home, repos: ["game"], now: () => clock });
+
+  roots = workspaceRoots(path.join(tmp, "home"));
+  for (const folder of Object.values(roots)) mkdirSync(folder, { recursive: true });
+  mkdirSync(path.join(roots.shared, "handoff"), { recursive: true });
+  writeFileSync(path.join(roots.shared, "handoff", "changelog.md"), "build 20261026-0001\n");
+  worktrees = createWorktrees({ roots, repos: { game: { path: clone, base: "origin/main" } } });
 });
 
 after(() => rmSync(tmp, { recursive: true, force: true }));
 
-test("two agents build in separate worktrees off origin/main without touching each other", async () => {
+test("SANDBENCH_REPOS parses name=/abs/path[#base] and refuses anything else", () => {
+  const abs = path.join(tmp, "clones", "game");
+  assert.deepEqual(parseRepoAllowlist(`game=${abs}, design=${abs}#origin/develop`), {
+    game: { path: abs, base: "origin/main" },
+    design: { path: abs, base: "origin/develop" },
+  });
+  assert.deepEqual(parseRepoAllowlist(""), {});
+  for (const bad of ["game", "game=relative/path", `Game=${abs}`, `game=${abs}#-x`, `game=${abs}#a..b`]) {
+    assert.throws(() => parseRepoAllowlist(bad), /SANDBENCH_REPOS/, bad);
+  }
+});
+
+test("two agents build in separate worktrees off the same base without touching each other", async () => {
   const main = git(clone, "rev-parse", "origin/main");
-  const pp = await worktrees.worktreeCreate({ agent: "pixelpets", repo: "game", branch: "pp/feature" });
-  const rv = await worktrees.worktreeCreate({ agent: "review", repo: "game", branch: "review/feature" });
-  assert.equal(pp.path, path.join(home, "wt", "pixelpets", "game", "pp", "feature"));
-  assert.equal(pp.relative, "wt/pixelpets/game/pp/feature");
+  const pp = await worktrees.create({ agentSlug: "pixelpets", repo: "game", branch: "pp/shop" });
+  const rv = await worktrees.create({ agentSlug: "review", repo: "game", branch: "review/shop" });
+  assert.deepEqual(pp, { path: path.join(roots.wt, "pixelpets", "game", "pp", "shop"), branch: "pp/shop" });
   assert.equal(git(pp.path, "rev-parse", "HEAD"), main);
   assert.equal(git(rv.path, "rev-parse", "HEAD"), main);
-
-  commit(pp.path, "pp.txt", "pixelpets\n");
-  commit(rv.path, "review.txt", "review\n");
-  assert.equal(existsSync(path.join(rv.path, "pp.txt")), false);
-  assert.equal(existsSync(path.join(pp.path, "review.txt")), false);
-  assert.equal(git(pp.path, "branch", "--show-current"), "pp/feature");
-  assert.equal(git(rv.path, "branch", "--show-current"), "review/feature");
-  // The shared clone stays on main and clean.
+  commit(pp.path, "shop.js", "pixelpets\n");
+  commit(rv.path, "review.md", "review\n");
+  assert.equal(git(rv.path, "status", "--porcelain"), "");
+  assert.equal(git(pp.path, "status", "--porcelain"), "");
+  assert.equal(existsSync(path.join(rv.path, "shop.js")), false);
+  assert.equal(existsSync(path.join(pp.path, "review.md")), false);
+  // The clone itself stays clean on main, and the new branch does not track main.
   assert.equal(git(clone, "branch", "--show-current"), "main");
   assert.equal(git(clone, "status", "--porcelain"), "");
-  // A new branch does not track origin/main, so a plain push can't land on main.
-  assert.throws(() => git(clone, "config", "--get", "branch.pp/feature.merge"));
+  assert.throws(() => git(clone, "config", "--get", "branch.pp/shop.merge"));
+  await assert.rejects(worktrees.create({ agentSlug: "pixelpets", repo: "game", branch: "pp/shop" }), /already exists/);
 });
 
-test("a branch checked out by one agent can't be taken by another", async () => {
-  await assert.rejects(worktrees.worktreeCreate({ agent: "design", repo: "game", branch: "pp/feature" }), /git worktree failed/);
-  assert.equal(existsSync(path.join(home, "wt", "design", "game", "pp", "feature", "README.md")), false);
+test("QA reads the shared handoff; Design can't write into PixelPets' worktree", async () => {
+  assert.ok(resolveWorkspacePath(roots, "qa", "shared/handoff/changelog.md"));
+  assert.throws(() => resolveWorkspacePath(roots, "design", "wt/pixelpets/game/pp/shop/shop.js", { write: true }), /worktree/);
+  // Design leaves a link in its own wt folder pointing at PixelPets' worktrees, then asks for one.
+  mkdirSync(path.join(roots.wt, "design"), { recursive: true });
+  symlinkSync(path.join(roots.wt, "pixelpets", "game"), path.join(roots.wt, "design", "game"), "junction");
+  await assert.rejects(worktrees.create({ agentSlug: "design", repo: "game", branch: "sneak" }), /link/);
+  assert.equal(existsSync(path.join(roots.wt, "pixelpets", "game", "sneak")), false);
+  rmSync(path.join(roots.wt, "design", "game"), { recursive: true, force: true });
+  await assert.rejects(worktrees.remove({ agentSlug: "design", repo: "game", branch: "pp/shop" }), /No such worktree/);
+  assert.ok(existsSync(path.join(roots.wt, "pixelpets", "game", "pp", "shop", "shop.js")));
 });
 
-test("Design cannot write into PixelPets' worktree, even through a symlink", async () => {
-  assert.equal(resolveWorkspacePath(home, "design", "wt/pixelpets/game/pp/feature/pp.txt", { write: true }), null);
-  assert.ok(resolveWorkspacePath(home, "pixelpets", "wt/pixelpets/game/pp/feature/pp.txt", { write: true }));
-  // Design plants a link in its own wt folder that points at PixelPets' worktrees.
-  mkdirSync(path.join(home, "wt", "design"), { recursive: true });
-  rmSync(path.join(home, "wt", "design", "game"), { recursive: true, force: true });
-  symlinkSync(path.join(home, "wt", "pixelpets", "game"), path.join(home, "wt", "design", "game"), "junction");
-  await assert.rejects(worktrees.worktreeCreate({ agent: "design", repo: "game", branch: "design/sneak" }), /not allowed/);
-  assert.equal(existsSync(path.join(home, "wt", "pixelpets", "game", "design")), false);
-  rmSync(path.join(home, "wt", "design", "game"), { recursive: true, force: true });
-  // And it can't remove PixelPets' worktree either.
-  await assert.rejects(worktrees.worktreeRemove({ agent: "design", repo: "game", branch: "pp/feature" }), /No such worktree/);
-  assert.ok(existsSync(path.join(home, "wt", "pixelpets", "game", "pp", "feature", "pp.txt")));
-});
-
-test("branch names with '-', '..', spaces or shell characters are refused", async () => {
-  const bad = ["-x", "--upload-pack=touch", "a..b", "has space", "a;id", "$(id)", "a|b", "a&b", "a`id`", "../x", "/x", "x/", "a//b", ".hidden", "x/.y", "x.lock", "x.", "", "a".repeat(101), "a\nb", "a~1", "a^", "a:b", "a?", "a*", "a[b", "a\\b"];
+test("bad branch names, bases, repos and slugs are refused before any git call", async () => {
+  const calls = [];
+  const fake = createWorktrees({ roots, repos: { game: { path: clone, base: "origin/main" } }, exec: async (...args) => calls.push(args) });
+  const bad = ["-x", "a..b", "a b", "a;b", "$(x)", "a\nb", "a|b", "a&b", "a`b`", "../x", "/x", "x/", "a//b", ".hidden", "x.lock", "", "a".repeat(101), "a~1", "a:b"];
   for (const branch of bad) {
     assert.equal(validBranch(branch), false, JSON.stringify(branch));
-    await assert.rejects(worktrees.worktreeCreate({ agent: "qa", repo: "game", branch }), /not allowed/, JSON.stringify(branch));
+    await assert.rejects(fake.create({ agentSlug: "qa", repo: "game", branch }), /not allowed/, JSON.stringify(branch));
   }
-  await assert.rejects(worktrees.worktreeCreate({ agent: "qa", repo: "game", branch: "ok", base: "--output=/tmp/x" }), /base is not allowed/);
-  await assert.rejects(worktrees.worktreeCreate({ agent: "qa", repo: "other", branch: "ok" }), /allowlist/);
-  await assert.rejects(worktrees.worktreeCreate({ agent: "../qa", repo: "game", branch: "ok" }), /Unknown agent/);
+  await assert.rejects(fake.create({ agentSlug: "qa", repo: "game", branch: "ok", base: "--output=x" }), /base/);
+  await assert.rejects(fake.create({ agentSlug: "qa", repo: "other", branch: "ok" }), /allowlist/);
+  await assert.rejects(fake.create({ agentSlug: "qa", repo: "__proto__", branch: "ok" }), /allowlist/);
+  await assert.rejects(fake.create({ agentSlug: "../qa", repo: "game", branch: "ok" }), /Unknown agent/);
+  await assert.rejects(fake.remove({ agentSlug: "qa", repo: "game", branch: "-f" }), /not allowed/);
+  assert.deepEqual(calls, []);
   for (const branch of ["main", "qa/run-20261026", "fix_1.2", "Feature/X"]) assert.equal(validBranch(branch), true, branch);
-  // Nothing was created by the refused calls.
-  assert.equal(existsSync(path.join(home, "wt", "qa")), false);
-  assert.equal(git(clone, "branch", "--list", "ok"), "");
 });
 
-test("an owner removes its own worktree; uncommitted work stops the removal", async () => {
-  const qa = await worktrees.worktreeCreate({ agent: "qa", repo: "game", branch: "qa/check" });
+test("an agent removes its own worktree, never one with uncommitted work", async () => {
+  const qa = await worktrees.create({ agentSlug: "qa", repo: "game", branch: "qa/check" });
   writeFileSync(path.join(qa.path, "wip.txt"), "unsaved");
-  await assert.rejects(worktrees.worktreeRemove({ agent: "qa", repo: "game", branch: "qa/check" }), /git worktree failed/);
+  await assert.rejects(worktrees.remove({ agentSlug: "qa", repo: "game", branch: "qa/check" }));
+  assert.ok(existsSync(path.join(qa.path, "wip.txt")));
   rmSync(path.join(qa.path, "wip.txt"));
-  assert.equal(await worktrees.worktreeRemove({ agent: "qa", repo: "game", branch: "qa/check" }), true);
+  assert.deepEqual(await worktrees.remove({ agentSlug: "qa", repo: "game", branch: "qa/check" }), { removed: true });
   assert.equal(existsSync(qa.path), false);
-  // The branch is kept, so no committed work is lost.
   assert.equal(git(clone, "branch", "--list", "qa/check").replace(/^[*+ ]+/, ""), "qa/check");
 });
 
-test("prune removes only merged worktrees with no activity for 7 days", async () => {
-  const start = clock;
-  const merged = await worktrees.worktreeCreate({ agent: "design", repo: "game", branch: "design/merged" });
+test("prune removes only merged worktrees older than 7 days; dry run removes nothing", async () => {
+  const merged = await worktrees.create({ agentSlug: "design", repo: "game", branch: "design/spec" });
   commit(merged.path, "spec.md", "spec\n");
   git(merged.path, "push", "-q", "origin", "HEAD:main");
-  const unmerged = await worktrees.worktreeCreate({ agent: "design", repo: "game", branch: "design/open" });
-  commit(unmerged.path, "draft.md", "draft\n");
-  const dirty = await worktrees.worktreeCreate({ agent: "qa", repo: "game", branch: "qa/dirty" });
+  const open = await worktrees.create({ agentSlug: "design", repo: "game", branch: "design/draft" });
+  commit(open.path, "draft.md", "draft\n");
+  const young = await worktrees.create({ agentSlug: "qa", repo: "game", branch: "qa/young" });
+  const dirty = await worktrees.create({ agentSlug: "qa", repo: "game", branch: "qa/dirty" });
   writeFileSync(path.join(dirty.path, "notes.txt"), "not committed");
-  clock = start + 5 * DAY;
-  const recent = await worktrees.worktreeCreate({ agent: "qa", repo: "game", branch: "qa/recent" });
-  clock = start + 8 * DAY;
+  for (const dir of [merged.path, open.path, dirty.path]) age(dir, 8);
+  age(young.path, 3);
 
-  const { removed, kept } = await worktrees.pruneWorktrees({ olderThanDays: 7 });
-  assert.deepEqual(removed.map((item) => item.branch), ["design/merged"]);
-  const why = Object.fromEntries(kept.map((item) => [item.branch, item.why]));
-  assert.equal(why["design/open"], "not merged");
-  assert.equal(why["qa/dirty"], "uncommitted changes");
-  assert.equal(why["qa/recent"], "recent");
+  const dry = await worktrees.prune();
+  assert.equal(dry.dryRun, true);
+  assert.deepEqual(dry.removed.map((item) => item.branch), ["design/spec"]);
+  assert.ok(existsSync(merged.path), "a dry run removes nothing");
+
+  const result = await worktrees.prune({ dryRun: false });
+  assert.deepEqual(result.removed.map((item) => item.branch), ["design/spec"]);
+  const reasons = Object.fromEntries(result.kept.map((item) => [item.branch, item.reason]));
+  assert.equal(reasons["design/draft"], "not merged");
+  assert.equal(reasons["qa/young"], "recent");
+  assert.equal(reasons["qa/dirty"], "uncommitted changes");
   assert.equal(existsSync(merged.path), false);
-  for (const item of [unmerged, dirty, recent]) assert.ok(existsSync(item.path), item.branch);
-  assert.equal(readFileSync(path.join(dirty.path, "notes.txt"), "utf8"), "not committed");
-  // The shared clone itself is never a prune candidate.
+  for (const item of [open, young, dirty]) assert.ok(existsSync(item.path), item.branch);
+  // The shared clone itself is never a candidate.
   assert.ok(existsSync(path.join(clone, "README.md")));
 });
