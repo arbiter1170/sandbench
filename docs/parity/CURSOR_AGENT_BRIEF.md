@@ -6,6 +6,9 @@ below, "Top 3 risks" and the Progress log), `docs/parity/CLAUDE.md` and
 `docs/parity/CLAUDE_CODE_PROMPT.md` before you change anything. If this brief and those files
 disagree, **this brief wins**.
 
+> **Handoff note (2026-10-26):** while `docs/parity/handoff/` is in use, its `WORKPLAN.md` sets the order and
+> the exact steps for SB-09, SB-08 and SB-13 (tasks T01-T03), and its `STOP_POINTS.md` wins over this brief.
+
 This repo is **public**. Commit messages, PR text, logs and test fixtures are all public.
 
 ## Rules (they override anything else)
@@ -57,9 +60,9 @@ waits on a live check on Vincent's laptop:
 - **SB-05** secret store, `/model` proxy and key migration (PR #5)
 - **SB-21 (skeleton)** CI (PR #2), ticked
 
-**SB-05 follow-up (PR #9)** is built but may not be merged yet: a broken `secrets.json` is never
-overwritten, and migrated keys are saved before any copy is rewritten without them. Check the PR.
-If it is still open, wait for it before you start (the start condition below).
+**SB-05 follow-up (PR #9)** is merged (merge commit `84a3c17`, 2026-10-26): a broken `secrets.json` is
+never overwritten, and migrated keys are saved before any copy is rewritten without them. PR #8 is
+merged too (`02515f2`).
 
 **Not built:** the turn engine (SB-03), detached jobs (SB-04), the MCP tool server (SB-10), the
 approval and policy layer (SB-06), GitHub integration (SB-11), cloud builds (SB-12), the importer
@@ -86,8 +89,8 @@ brief. They are next on the Q10 path (with SB-15a for QA) and Vincent will send 
 
 ## Start condition
 
-Start only when PR #9 is merged into `deploy/vercel` (PR #8 already is). Check with the GitHub
-tools. If #9 is still open, report that and wait.
+PR #8 and PR #9 are both merged into `deploy/vercel` (`02515f2`, `84a3c17`), so this brief can start
+now. Check that the tip of `deploy/vercel` has green checks first.
 
 ## Order
 
