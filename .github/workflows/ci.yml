@@ -57,6 +57,8 @@ jobs:
           grep -q "^# skipped 0" /tmp/data.log
           node --test runner/test/memory.test.mjs 2>&1 | tee /tmp/memory.log
           grep -q "^# skipped 0" /tmp/memory.log
+          node --test runner/test/jobs-schema.test.mjs 2>&1 | tee /tmp/jobs.log
+          grep -q "^# skipped 0" /tmp/jobs.log
       - run: npm run build
       - name: No API keys in the page bundle
         run: |

@@ -58,6 +58,8 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       base: typeof body.base === "string" ? body.base : "",
       key: TURN_SECRETS.has(body.secret) ? (secrets?.get(body.secret) ?? "") : "",
       cwd,
+      // Driver extras (claude.mjs) are set by the engine in later items, never from the request.
+      extras: {},
     };
     const io = {
       signal: controller.signal,

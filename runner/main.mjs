@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { firebaseVerifier, parseAllowlist } from "./api/auth.mjs";
 import { createMemory } from "./agent/memory.mjs";
+import { loadRouteFactories } from "./api/routes/index.mjs";
 import { createRunner } from "./api/server.mjs";
 import { migrate } from "./db/migrate.mjs";
 import { createStore } from "./db/store.mjs";
@@ -51,6 +52,8 @@ const server = createRunner({
   memory,
   // A checkout of the private team repo: AGENTS.md and .claude/skills/*/SKILL.md (SB-08).
   teamDir: env.SANDBENCH_TEAM_DIR || "",
+  // SB-03 route registry: every module in runner/api/routes/ (none yet).
+  routes: await loadRouteFactories(),
 });
 
 server.listen(port, env.HOST || "0.0.0.0", () => {

@@ -45,6 +45,40 @@ export function mapCliModel(raw) {
   return null;
 }
 
+const SESSION_ID = /^[\w-]{8,80}$/;
+
+// The extension point for later items (SB-03 PR 1): extras = { settings?, mcpConfig?, maxTurns?,
+// resume? }. SB-06 fills settings (its hook), SB-10 mcpConfig, SB-04 maxTurns; nobody else edits
+// this file. With no extras the arguments are exactly what they were before.
+function checkExtras(extras) {
+  if (extras === null || typeof extras !== "object" || Array.isArray(extras)) throw new Error("Driver extras must be an object.");
+  if (extras.mcpConfig !== undefined && (typeof extras.mcpConfig !== "string" || !SAFE_ARG.test(extras.mcpConfig))) throw new Error("mcpConfig has characters the CLI cannot take.");
+  if (extras.maxTurns !== undefined && !(Number.isInteger(extras.maxTurns) && extras.maxTurns >= 1 && extras.maxTurns <= 200)) throw new Error("maxTurns must be a whole number from 1 to 200.");
+  if (extras.resume !== undefined && (typeof extras.resume !== "string" || !SESSION_ID.test(extras.resume))) throw new Error("resume must be a session id.");
+  if (extras.settings !== undefined && (extras.settings === null || typeof extras.settings !== "object" || Array.isArray(extras.settings))) throw new Error("settings must be an object.");
+}
+
+/** The `claude -p` arguments for one round. `model` is the already-mapped CLI model (or null). */
+export function buildClaudeArgs({ settingsFile, model, sessionId, extras = {} }) {
+  checkExtras(extras);
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile];
+  if (model) args.push("--model", model);
+  if (extras.mcpConfig !== undefined) args.push("--mcp-config", extras.mcpConfig);
+  if (extras.maxTurns !== undefined) args.push("--max-turns", String(extras.maxTurns));
+  const resume = extras.resume ?? sessionId;
+  if (resume) args.push("--resume", resume);
+  return args;
+}
+
+/**
+ * The settings file's JSON. `extras.settings` is merged in, but `permissions` is always the
+ * driver's own approved list: extras can never widen what Claude Code may run.
+ */
+export function buildClaudeSettings(allow, extras = {}) {
+  checkExtras(extras);
+  return JSON.stringify({ ...(extras.settings ?? {}), permissions: { allow } });
+}
+
 function isDesktopGui(full) {
   // Claude Desktop (AnthropicClaude\claude.exe) is a GUI Electron app, not the headless CLI.
   return /[/\\]AnthropicClaude[/\\]/i.test(full);
@@ -187,21 +221,19 @@ async function converse(bin, settingsFile, turn, io) {
   const allow = [];
   const approvedIds = new Map();
   const toolLabels = new Map();
-  let sessionId = "";
+  // A resumed session (extras.resume) starts the first round; later rounds resume the live one.
+  const { resume, ...extras } = turn.extras ?? {};
+  let sessionId = resume ?? "";
   let prompt = [turn.system, ...turn.history.map((item) => `${item.role === "user" ? "User" : "You"}: ${item.content}`), `User: ${turn.prompt}`].filter(Boolean).join("\n\n");
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    writeFileSync(settingsFile, JSON.stringify({ permissions: { allow } }));
-    const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile];
+    writeFileSync(settingsFile, buildClaudeSettings(allow, extras));
     // Map API / retired ids (e.g. claude-3-5-haiku-latest) onto Claude Code aliases.
     // Non-Claude ids from other test profiles are skipped so the CLI uses its default.
     const cliModel = mapCliModel(turn.model);
-    if (cliModel) {
-      args.push("--model", cliModel);
-      if (cliModel !== turn.model) {
-        io.emit({ type: "thinking", text: `Using Claude Code model ${cliModel} (mapped from ${turn.model}).` });
-      }
+    if (cliModel && cliModel !== turn.model) {
+      io.emit({ type: "thinking", text: `Using Claude Code model ${cliModel} (mapped from ${turn.model}).` });
     }
-    if (sessionId) args.push("--resume", sessionId);
+    const args = buildClaudeArgs({ settingsFile, model: cliModel, sessionId, extras });
     let result = null;
     await runOnce(bin, args, prompt, turn.cwd, io, (event) => {
       if (event.type === "session" && /^[\w-]{8,80}$/.test(event.sessionId || "")) sessionId = event.sessionId;

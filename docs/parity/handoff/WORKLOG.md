@@ -26,6 +26,50 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 4 · 2026-10-27 08:25 ET · T04 SB-03 PR 1 · done
+- **Branch / PR / head sha:** `sb-03a-contracts` · https://github.com/arbiter1170/sandbench/pull/18 · code head `3f4715f` (final head after the log commit is in the session summary)
+- **Checks on the head:** on `3f4715f`, all 4 required checks pass. "Typecheck, test, build" (1m39s) includes the datastore, memory and jobs-schema runs, none skipped. "Runner image and compose file" took 1m39s.
+- **What was done:**
+  - Merged #17 (T03) at Vincent's request (`8735ee8`).
+  - `runner/contracts/` (`index`, `job`, `turn`, `approval`, `tool`, `policy`, plus a shared `shape.mjs`):
+    - Plain JS validators that name the bad field and refuse unknown fields, so a turn request can't carry `owner` or `extras`.
+    - Valid fixtures in `runner/contracts/fixtures/`.
+    - The approval and policy contracts enforce that a red item needs Vincent.
+    - The policy result has the handoff's `blocked` flag.
+    - A tool descriptor whose `inputSchema` declares `agentId`, `agent_id`, `owner` (and similar) is refused.
+  - `runner/policy/default.mjs`: `yellow` / `card` / not blocked, for everything.
+  - `003_jobs.sql`:
+    - `jobs` has every contract column plus `attempt`, `singleton_key`, `session_id`, `queue_job_id` and `updated_at`.
+    - `parent_job_id` references `jobs(id)` on delete set null.
+    - `job_events` and `approvals` cascade on delete of their job.
+    - The checks cover the enums, `timeout_s > 0` and `seq > 0`, and red rows need Vincent.
+    - Indexes as specified. No `alter` of existing tables, and no pg-boss tables.
+  - `runner/api/routes/index.mjs`: `loadRouteFactories` (sorted, skips `index.mjs`; refuses duplicate names, overlapping prefixes and any prefix that touches a built-in path). `prefixMatches` is exported. The folder ships with no route modules.
+  - `server.mjs` gets the `routes` option and tries registry routes first, falling through on `false`. `main.mjs` loads them.
+  - `runner/tools/discover.mjs` (`discoverTools`, sorted; duplicates and invalid descriptors throw and name the files).
+  - `harness/drivers/claude.mjs`: pure, exported `buildClaudeArgs` and `buildClaudeSettings`; `converse()` uses them with `turn.extras`. `harness/turns.mjs` sets `extras: {}`.
+  - `.gitignore`: `secrets.json*`.
+  - CI: the jobs-schema run inside the existing datastore step.
+  - `data.test.mjs` list now includes `003_jobs.sql`.
+  - `docs/runner.md` "Extending the runner"; a `PLAN.md` log line.
+  - Ticked T01-T03 as merged in WORKPLAN.
+- **Tests run (real results):**
+  - `node --test runner/test/contracts.test.mjs runner/test/routes.test.mjs runner/test/tools-discovery.test.mjs harness/test/drivers.test.mjs harness/test/turns.test.mjs` → all pass: 6 contract, 4 route, 4 discovery, 9 driver (4 new) and 1 turns test.
+  - With PGlite: `jobs-schema.test.mjs` 6/6 and `memory.test.mjs` 9/9, each file run alone, because PGlite serves one connection at a time. CI ran them on stock Postgres 17 with `skipped 0`.
+  - Existing suites run locally: all pass except two that also fail on the unchanged base on Windows: `exec needs approval and runs in bash` (no `/bin/bash`) and `a secrets file that can't be read is never overwritten` (Windows file permissions). Both pass in CI.
+  - Mutation check, all 10 caught: default policy never allows; tool `inputSchema` can't declare `agentId`; unknown fields refused; red needs vincent; built-in paths reserved; overlapping prefixes; duplicate tool names; extras can't widen permissions; `maxTurns` range; `mcpConfig` safe characters.
+- **Not run / could not run:** the image build and gitleaks (Docker doesn't work here; CI ran them); local typecheck (no `src/` change; CI passed).
+- **Decisions made and why:**
+  - **Registry: new routes only.** The data and memory routes were not converted, so every existing route test passes unchanged.
+  - **`createRunner` builds the route modules itself.** It takes the factories that `main.mjs` loads and calls `create(deps)`, because the secret store and skills reader those deps include are created inside `createRunner`. `createRunner` stays synchronous.
+  - `extras.resume` starts the first round only; later rounds resume the live session.
+- **Deviations from the plan:**
+  - `runner/contracts/shape.mjs`, the shared validator, isn't on the Touch list. It's needed so the contract files don't import from `index.mjs`, which would be a cycle.
+  - JSON schemas (marked optional) were skipped; the validators are the contract.
+  - `runner/test/memory.test.mjs` now checks only that 001 and 002 apply first, instead of the full list (`data.test.mjs` pins the full list). That's a migration-list edit, allowed by the T04 stop rule, and it means future migrations don't touch that file.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Vincent merges #18. T10 (the turn engine) then becomes possible; until then the independent tasks are T05, T07, T08 and T09. T06 (team pack importer) is unblocked but its live part needs Q7.
+
 ### Session 3 · 2026-10-26 22:55 ET · T03 SB-13 · done
 - **Branch / PR / head sha:** `sb-13-browser-emulator` · https://github.com/arbiter1170/sandbench/pull/17 · code head `060b5d0` (final head after the log commit is in the session summary)
 - **Checks on the head:** on `060b5d0`, all 4 required checks pass: Typecheck, test, build (1m38s); Secret scan; Runner sign-in checks (Auth emulator); Runner image and compose file (1m36s).
