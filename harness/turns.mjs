@@ -33,11 +33,12 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     return rules.some((rule) => String(rule).trim().toLowerCase() === head);
   }
 
-  function start(body) {
+  // `context` comes from the server (the runner's agent, SB-09), never from the request body.
+  function start(body, context) {
     const driver = driverById(body.driver);
     if (!driver) throw new Error("Unknown driver.");
     if (typeof body.prompt !== "string" || !body.prompt.trim()) throw new Error("No prompt.");
-    const cwd = resolveFolder(body.folder);
+    const cwd = resolveFolder(body.folder, context);
     if (!cwd) throw new Error("The working folder must stay inside the workspace folder.");
     const id = randomBytes(8).toString("hex");
     const after = seq;

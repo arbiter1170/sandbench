@@ -27,9 +27,26 @@ phone / browser ──https──> Tailscale Funnel (laptop)  or  Cloudflare Acc
 
 ## Routes so far
 
-`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys) and the SB-02 record routes (see Records). The first nine are ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
+`/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys) and the SB-02 record routes (see Records). The first nine are ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside the caller's own folder (see Agent workspaces), still with the 30-second limit; SB-04 adds long jobs.
 
 Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills, memory, schedules, triggers and MCP move to the runner in SB-08, SB-14, SB-15 and SB-22.
+
+## Agent workspaces (SB-09)
+
+Everything an agent touches lives under `SANDBENCH_HOME` (`/srv/sandbench` in the image):
+
+| Folder | What it holds | Who can read | Who can write |
+| --- | --- | --- | --- |
+| `shared/handoff/` | handoff notes, changelogs | every agent | every agent |
+| `shared/repos/<repo>/` | clones of the game, design and team repos | every agent | nobody through the runner |
+| `agents/<slug>/` | an agent's default working folder | that agent | that agent |
+| `wt/<slug>/<repo>/<branch>/` | that agent's git worktrees | that agent | that agent |
+| `workspace/` | the page's own folder, for calls with no agent | the page | the page |
+
+- **Paths** in `/api/workspace/read`, `/api/workspace/write`, `/api/exec` (`folder`) and `/api/turns` (`folder`) are relative. A path starting with `shared/`, `agents/<slug>/` or `wt/<slug>/` names that folder; anything else is inside the caller's own folder. `..`, absolute paths, drive letters and null bytes are refused, and symlinks are followed, so a link can't lead into another agent's folder. Commands may only start in a folder the caller can write to.
+- **Which agent a call is for** comes from the server, never from the request body. Until the turn engine (SB-03) and the tool server (SB-10) pass it, every call from the page has no agent and uses `workspace/`, as before.
+- **Worktrees** (`runner/workspace/worktrees.mjs`): `worktreeCreate({ agent, repo, branch, base = "origin/main" })` fetches and adds `wt/<slug>/<repo>/<branch>` on a new branch that does not track its base. Repos must be on an allowlist and cloned in `shared/repos/` (nothing clones them automatically). `worktreeRemove` refuses another agent's worktree and any worktree with uncommitted changes, and keeps the branch. `pruneWorktrees({ olderThanDays: 7 })` removes only clean worktrees that are merged into their base and have had no new commit for 7 days. The SB-14 scheduler will run it nightly. The tools that expose these come with SB-10.
+- **Not a sandbox.** These rules limit the runner's file routes and where a command starts. A shell command can still open any path the runner's user can. Fully isolating agents from each other needs separate OS users or containers per agent, which no item has planned yet.
 
 ## Records (SB-02)
 
@@ -118,7 +135,7 @@ VITE_RUNNER_URL=/api npm run dev                               # the Vite proxy 
 
 ## Tests
 
-- `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits.
+- `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits. `workspace.test.mjs` and `worktrees.test.mjs` cover the SB-09 folder rules and worktrees with real `git` against local fixture repos.
 - `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped.
 - `runner/test/emulator.test.mjs` checks real Firebase ID tokens against the Auth emulator (`demo-sandbench`). CI runs it in the `runner-auth` job.
 - The CI `runner-image` job checks that `deploy/compose.yml` is valid and publishes no ports. It also builds the image, starts it, and checks that `/healthz` answers, `/api/health` returns 401 and the page is served.

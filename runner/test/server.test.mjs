@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, before, test } from "node:test";
@@ -158,6 +158,53 @@ test("CORS: the sign-in check still applies to an allowed site", async () => {
   // The browser can read the error because the origin header is sent on refusals too.
   assert.equal(none.headers.get("access-control-allow-origin"), SITE);
   assert.equal((await fetch(`${base}/api/health`, as("other", { headers: { origin: SITE } }))).status, 403);
+});
+
+test("SB-09: file and exec routes use the agent from server-side context, not the body", async () => {
+  let current = "qa";
+  const home = path.join(tmp, "agents-home");
+  const runner = createRunner({
+    home,
+    allowedEmails: ["vincent@example.test"],
+    env: {},
+    verifyIdToken: async () => ({ uid: "u1", email: "vincent@example.test", email_verified: true }),
+    // Stands in for SB-03/SB-10, which will look the agent up from the turn or tool session.
+    agentFor: () => current,
+  });
+  await new Promise((resolve) => runner.listen(0, "127.0.0.1", resolve));
+  const at = `http://127.0.0.1:${runner.address().port}/api`;
+  try {
+    writeFileSync(path.join(home, "shared", "handoff", "changelog.md"), "build 20261026-0001");
+    // The body names another agent; the server ignores it.
+    const own = await fetch(`${at}/workspace/write`, post("good", { path: "notes.md", content: "qa notes", approved: true, agent: "pixelpets", slug: "pixelpets" }));
+    assert.equal(own.status, 200);
+    assert.equal((await own.json()).path, "notes.md");
+    assert.equal(readFileSync(path.join(home, "agents", "qa", "notes.md"), "utf8"), "qa notes");
+    assert.equal(existsSync(path.join(home, "agents", "pixelpets", "notes.md")), false);
+
+    for (const bad of ["agents/pixelpets/x.md", "../pixelpets/x.md", "wt/pixelpets/game/main/x.md", "shared/repos/x.md", "/etc/x"]) {
+      assert.equal((await fetch(`${at}/workspace/write`, post("good", { path: bad, content: "x", approved: true }))).status, 400, bad);
+    }
+    const handoff = await (await fetch(`${at}/workspace/read?path=shared/handoff/changelog.md`, as("good"))).json();
+    assert.deepEqual(handoff, { exists: true, content: "build 20261026-0001" });
+    assert.equal((await fetch(`${at}/workspace/read?path=agents/pixelpets/notes.md`, as("good"))).status, 400);
+
+    current = "design";
+    const exec = await (await fetch(`${at}/exec`, post("good", { command: "pwd", approved: true }))).json();
+    assert.match(exec.stdout, /agents\/design\n$/);
+    mkdirSync(path.join(home, "wt", "pixelpets", "game", "main"), { recursive: true });
+    assert.equal((await fetch(`${at}/exec`, post("good", { command: "touch x", approved: true, folder: "wt/pixelpets/game/main" }))).status, 400);
+    assert.equal((await fetch(`${at}/workspace/read?path=../qa/notes.md`, as("good"))).status, 400);
+    const turn = await fetch(`${at}/turns`, post("good", { driver: "http", prompt: "hi", folder: "agents/qa" }));
+    assert.equal(turn.status, 500);
+    assert.match((await turn.json()).error, /working folder/);
+
+    current = "../escape";
+    assert.equal((await fetch(`${at}/exec`, post("good", { command: "pwd", approved: true }))).status, 500);
+    assert.equal(existsSync(path.join(home, "escape")), false);
+  } finally {
+    runner.close();
+  }
 });
 
 test("a runner with no origin list refuses every browser Origin", async () => {
