@@ -2,6 +2,7 @@
 
 This folder holds the plan to host the Walklings bot team in Sandbench with near-full parity with Grok Bot.
 
+- **Source of truth for the next sessions (from Oct 26, 2026): `docs/parity/handoff/SESSION_PROMPT.md` and `docs/parity/handoff/WORKPLAN.md`.** Read `docs/parity/handoff/STOP_POINTS.md` first. Where they disagree with anything below or in the briefs, the handoff wins (for example: do not tick plan boxes; only a live check does).
 - **Start here:** `docs/parity/CLAUDE_CODE_PROMPT.md` has the goal, the context, the working rules, and where to stop and report.
 - **The plan:** `docs/parity/PLAN.md` is the phased checklist (SB-01 to SB-28). Work on the first unchecked item whose dependencies are done. Tick its box and add a line to the Progress log in the same PR.
 

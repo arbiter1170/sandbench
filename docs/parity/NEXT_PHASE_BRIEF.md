@@ -7,6 +7,10 @@ time. Vincent (the repo owner) is your only stakeholder. He reviews and merges e
 `docs/parity/CLAUDE.md`, `docs/parity/CLAUDE_CODE_PROMPT.md` and `docs/parity/CURSOR_AGENT_BRIEF.md`
 before you change anything. If this brief and those files disagree, **this brief wins**.
 
+> **Handoff note (2026-10-26):** for Oct 27-29 only one Claude Code agent works, from `docs/parity/handoff/WORKPLAN.md`,
+> which schedules SB-03 PR 1, SB-15a and a few safe follow-ups and holds the rest for the Supervisor. Where that
+> file and this brief disagree, the handoff wins.
+
 This repo is **public**. Commit messages, PR text, logs and test fixtures are all public.
 
 ## Rules (they override anything else)
