@@ -145,6 +145,20 @@ export type Bot = {
   approvalMode?: ApprovalMode;
   visibility?: BotVisibility;
   usage?: BotUsage;
+  /**
+   * SB-08 agent profile, kept in the agent record's data (no column change) and read by the
+   * runner's prompt builder. All optional so older saves load; `model` and `driver` above are
+   * part of it too. camelCase like the rest of Bot; the team pack's snake_case is mapped by the
+   * importer (SB-15a).
+   */
+  slug?: string;
+  title?: string;
+  description?: string;
+  /** e.g. notify_owner, launch_build, merge, email; enforced by the policy layer (SB-06). */
+  capabilities?: string[];
+  maxSteps?: number;
+  budgetUsdDay?: number;
+  workspace?: string;
 };
 
 export type BotFile = {

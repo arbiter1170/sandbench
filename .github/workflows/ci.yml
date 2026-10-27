@@ -52,6 +52,8 @@ jobs:
           set -o pipefail
           node --test runner/test/data.test.mjs 2>&1 | tee /tmp/data.log
           grep -q "^# skipped 0" /tmp/data.log
+          node --test runner/test/memory.test.mjs 2>&1 | tee /tmp/memory.log
+          grep -q "^# skipped 0" /tmp/memory.log
       - run: npm run build
       - name: No API keys in the page bundle
         run: |

@@ -26,6 +26,48 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 2 · 2026-10-26 22:25 ET · T02 SB-08 · done
+- **Branch / PR / head sha:** `sb-08-profile-memory` · https://github.com/arbiter1170/sandbench/pull/14 · code head `74b11ca` (final head after the log commit is in the session summary)
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - #14 was opened in Session 1 to the brief, before #12 landed, and has been a draft since. #13 (T01) merged as `d6b4b27`. This session merged `deploy/vercel` into #14 (taking base's `server.mjs` and `PLAN.md` for the SB-09 conflicts) and reworked it to the T02 spec with new commits.
+  - `002_memory.sql`: `memory_items`, 8000-character items, `source_hash` with a unique `(owner, agent_id, source_hash)` index, plus the by-agent index and the GIN index.
+  - `runner/agent/memory.mjs`: `createMemory` returns `save`, `search` (`websearch_to_tsquery` with rank, limit 1-50), `recent` and `profile`. Every query filters on owner and agent.
+  - `runner/agent/skills.mjs`: `createSkills({dir})` returns `index` and `loadSkill`. Files are read on every call. Names follow `^[a-z0-9][a-z0-9-]{0,60}$`. A skill must be a real folder (checked with `lstat`) whose real path stays inside `.claude/skills`. With no folder it returns `[]` or `null`.
+  - `runner/agent/prompt.mjs`: an async `buildSystemPrompt`. Order: profile, AGENTS.md, skills, profile memory, 10 newest journal items. Each section is cut at a word with a marker, the total is at most 40,000 characters, and the output is deterministic.
+  - `runner/agent/memory-import.mjs` and `memory-backup.mjs`, both with CLIs.
+  - `runner/api/memory.mjs`: `/api/memory` (GET and POST), `/api/skills`, `/api/skills/:name` and `/api/prompt/:agentId`. `server.mjs` mounts them next to the data routes and answers 503 for memory and prompt without a database.
+  - `main.mjs`; camelCase `Bot` fields in `src/types.ts`.
+  - The compose read-only mount `${SANDBENCH_TEAM_HOST_DIR:-./team-empty}:/srv/team:ro`, `deploy/team-empty/.gitkeep`, and a commented line in `.env.example`.
+  - CI: two lines added inside the existing "datastore tests ran" step.
+  - `data.test.mjs` migration list, `docs/runner.md`, and a `PLAN.md` log line. The box is not ticked.
+  - Removed from the earlier version: `scripts/memory-*.mjs`, the Dockerfile change, `runner/api/agent.mjs`, and the separate CI step.
+- **Tests run (real results):**
+  - With `TEST_DATABASE_URL` pointing at PGlite (Postgres 17 in WASM, run from a scratch folder; Docker is not working on this machine): `node --test runner/test/memory.test.mjs runner/test/skills.test.mjs runner/test/prompt.test.mjs` → 18 pass, 0 fail, 0 skipped. `memory.test.mjs` ran 9 tests.
+  - `npm run typecheck` → clean. `npm run test:web` → 35 passed.
+  - Mutation check, all 13 caught: owner filter in search; agent filter in search; owner filter in profile; import dedupe; size limit; skill realpath containment; linked skill folder (lstat); re-read on every call; skill name rule; 40,000 cap; profile facts in prompt; owner from sign-in; 503 without a database.
+  - CLI smoke test on PGlite:
+    - The import refused with no agent record.
+    - It then inserted 3 items; a second run inserted 0.
+    - The backup wrote `qa/profile.md` (2 items) and `qa/journal.md` (1 item).
+- **Not run / could not run:**
+  - Stock Postgres 17, gitleaks, `docker compose config` and `docker build`. Docker Desktop doesn't start here (WSL has no distribution); CI runs them.
+  - `data.test.mjs` on PGlite (it uses LISTEN/NOTIFY); CI runs it.
+- **Decisions made and why:**
+  - `buildSystemPrompt` takes `owner` as well as the agent record, because memory is owner-scoped and the record doesn't carry its owner.
+  - Section budgets: description 8,000, AGENTS.md 12,000, skills 4,000, profile 10,000, journal 5,000, which adds up to under 40,000.
+  - The import CLI picks the owner only when exactly one account has that agent; otherwise it asks for `--owner`.
+- **Deviations from the plan:**
+  - The importer also reads `memory/*.md` as profile items. The harness keeps topic memory there, and skipping it would lose memory.
+  - `createRunner` builds skills from its `teamDir` option instead of taking a skills object.
+  - Both CLIs live under `runner/agent/`, as the spec says. The brief's `scripts/memory-backup.mjs` is replaced, also as the spec says.
+  - The rest stays inside T02's Touch list.
+- **Open questions for Vincent or the Supervisor:** none new. Docker on Windows and the isolation decision (#16) are tracked in STATUS.
+- **Next step:**
+  - Vincent merges #14 when its 4 checks are green. It also needs the compose and image checks, because `deploy/compose.yml` changed; CI runs those.
+  - #15 (iPhone sign-in) and #16 (isolation docs) are also waiting. Whichever of #14, #15 and #16 merges later gets a WORKLOG conflict that the next session resolves, keeping both entries with the newest first.
+  - Next tasks: T03 (SB-13, independent), and T04 once #14 is merged.
+
 ### Session 1 · 2026-10-26 22:05 ET · T01 SB-09 · done
 - **Branch / PR / head sha:** `sb-09-workspaces` · https://github.com/arbiter1170/sandbench/pull/13 · code head `4c6958d` (final head after the log commit is in the session summary). PR #12's merge commit on `deploy/vercel`: `4b69bd53bf7ee7df9403a627f4d7d358374e685a`.
 - **Checks on the head:** pending at the time of writing (the first version of this PR had all 4 required checks green on `7fa061c`).
