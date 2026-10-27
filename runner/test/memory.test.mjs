@@ -74,7 +74,8 @@ const call = (who, method, route, body) =>
   }).then(async (response) => ({ status: response.status, body: await response.json() }));
 
 test("the migration applies on an empty database, and a second run is a no-op", { skip }, async () => {
-  assert.deepEqual(await migrate(sql), ["001_init.sql", "002_memory.sql"]);
+  // data.test.mjs pins the full list; here only that 002 applies after 001 on an empty database.
+  assert.deepEqual((await migrate(sql)).slice(0, 2), ["001_init.sql", "002_memory.sql"]);
   assert.deepEqual(await migrate(sql), []);
 });
 

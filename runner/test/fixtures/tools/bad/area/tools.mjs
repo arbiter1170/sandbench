@@ -1,0 +1,1 @@
+export const tools = [{ name: "who_am_i", description: "Takes its agent id from arguments.", inputSchema: { type: "object", properties: { agentId: { type: "string" } } }, action: () => ({}), handler: async () => 0 }];

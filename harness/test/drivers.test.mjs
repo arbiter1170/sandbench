@@ -53,3 +53,31 @@ test("http normalizeEvent reads text and tool call deltas", () => {
   ]);
   assert.deepEqual(http.normalizeEvent({}), []);
 });
+
+test("claude buildClaudeArgs: no extras gives exactly the arguments from before", () => {
+  const base = ["-p", "--output-format", "stream-json", "--verbose", "--settings", "/tmp/s.json"];
+  assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: null, sessionId: "" }), base);
+  assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "sonnet", sessionId: "session-1234", extras: {} }), [...base, "--model", "sonnet", "--resume", "session-1234"]);
+});
+
+test("claude buildClaudeArgs: extras add --max-turns and --mcp-config, and resume replaces --resume", () => {
+  const args = claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "haiku", sessionId: "session-old1", extras: { maxTurns: 5, mcpConfig: "/srv/sandbench/mcp.json", resume: "session-new2" } });
+  assert.deepEqual(args.slice(6), ["--model", "haiku", "--mcp-config", "/srv/sandbench/mcp.json", "--max-turns", "5", "--resume", "session-new2"]);
+  assert.equal(args.filter((arg) => arg === "--resume").length, 1);
+});
+
+test("claude buildClaudeArgs: bad extras are refused", () => {
+  const build = (extras) => () => claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: null, sessionId: "", extras });
+  for (const maxTurns of [0, 201, 1.5, "5", "; rm"]) assert.throws(build({ maxTurns }), /maxTurns/, String(maxTurns));
+  for (const mcpConfig of ["/tmp/my config.json", "/tmp/a.json;rm -rf /", "$(id)", ""]) assert.throws(build({ mcpConfig }), /mcpConfig/, mcpConfig);
+  assert.throws(build({ resume: "short" }), /resume/);
+  assert.throws(build({ settings: [] }), /settings/);
+  assert.throws(build(null), /extras/);
+});
+
+test("claude buildClaudeSettings: extras.settings can't widen what is allowed", () => {
+  assert.equal(claude.buildClaudeSettings(["Bash(ls)"]), JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+  const merged = JSON.parse(claude.buildClaudeSettings(["Bash(ls)"], { settings: { hooks: { PreToolUse: [] }, permissions: { allow: ["Bash(*)"], defaultMode: "bypassPermissions" } } }));
+  assert.deepEqual(merged.permissions, { allow: ["Bash(ls)"] });
+  assert.deepEqual(merged.hooks, { PreToolUse: [] });
+});
