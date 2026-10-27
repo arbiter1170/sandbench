@@ -56,6 +56,26 @@ Screen capture, input, the process list and text-to-speech stay in the local har
 
 **Still to prove live:** PixelPets and a review agent building in real worktrees on the laptop runner. That needs SB-03 (the slug) and SB-10 (the tools).
 
+## Agent profile, skills and memory (SB-08)
+
+- **Profile:** an agent record's `data` may carry `slug`, `title`, `description`, `capabilities`, `model`, `driver`, `maxSteps`, `budgetUsdDay` and `workspace` (all optional; `Bot` in `src/types.ts`). It is the same JSON row, so there are no column changes.
+- **Memory:** `memory_items` in Postgres (`runner/db/migrations/002_memory.sql`), scoped to the signed-in account and the agent's record id. Items are up to 8000 characters. `profile` items go into every prompt; `journal` items are found with full-text search (English stemming: "width" finds "widths").
+  - `GET /api/memory?agent=<id>&q=<words>&kind=&limit=` searches, best match first, or lists newest first without `q`.
+  - `POST /api/memory` with `{agentId, kind, text}` saves one item (201).
+  - Without a database these answer 503.
+- **Skills:** `SANDBENCH_TEAM_DIR` is a read-only checkout of the private team repo. In compose it is `/srv/team`, mounted from `SANDBENCH_TEAM_HOST_DIR`, or from the empty `deploy/team-empty` folder when that is unset.
+  - `GET /api/skills` lists `.claude/skills/*/SKILL.md` (name and description), and `GET /api/skills/:name` returns one.
+  - Both read the files on every call, so editing a skill changes the next turn without a redeploy.
+  - Names are lowercase folder names. Links and anything outside the skills folder are refused.
+- **Prompt:** `GET /api/prompt/:agentId` shows the system prompt a turn would get now (`runner/agent/prompt.mjs`): the profile description (or the old instructions), the team `AGENTS.md`, the skills index, the profile memory and the 10 newest journal items, in that order. Each section has a size budget and is cut at a word with a marker; the whole prompt is at most 40,000 characters. The turn engine (SB-03) will use the same builder. The inbox summary waits for SB-07.
+- **Old file memory** (the harness's `/bots/:id/memory`, unchanged) becomes a one-time import. Each paragraph of `MEMORY.md` and `memory/*.md` becomes a profile item, and each paragraph of `memory/log/YYYY-MM-DD.md` becomes a journal item dated that day. A second run adds nothing. Postgres publishes no port, so run it inside the runner, one bot at a time:
+  ```bash
+  docker compose -f deploy/compose.yml cp ~/.sandbench/bots/<id> runner:/srv/sandbench/import/<id>
+  docker compose -f deploy/compose.yml exec runner node runner/agent/memory-import.mjs --dir /srv/sandbench/import/<id> --agent <id>
+  ```
+  The agent must already exist as a record on the runner. Add `--owner <uid>` if more than one account has it.
+- **Backup:** `docker compose -f deploy/compose.yml exec runner node runner/agent/memory-backup.mjs --out /srv/sandbench/backup` writes `<agent>/profile.md` and `<agent>/journal.md`; copy them into the team repo. The nightly run is SB-14.
+
 ## Records (SB-02)
 
 With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Postgres as **one row per entity** instead of one snapshot where the newest write wins. Migrations in `runner/db/migrations/` are applied when the runner starts. Without `DATABASE_URL`, these routes return 503 and everything else still works.
@@ -144,6 +164,6 @@ VITE_RUNNER_URL=/api npm run dev                               # the Vite proxy 
 ## Tests
 
 - `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits. `workspace.test.mjs` and `worktrees.test.mjs` cover the SB-09 path rules and worktrees, with real `git` on fixture repos in a temp folder.
-- `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped.
+- `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped. `runner/test/memory.test.mjs` (SB-08) works the same way, in its own schema, and CI fails if it skips too. `skills.test.mjs` and `prompt.test.mjs` need no database.
 - `runner/test/emulator.test.mjs` checks real Firebase ID tokens against the Auth emulator (`demo-sandbench`). CI runs it in the `runner-auth` job.
 - The CI `runner-image` job checks that `deploy/compose.yml` is valid and publishes no ports. It also builds the image, starts it, and checks that `/healthz` answers, `/api/health` returns 401 and the page is served.
