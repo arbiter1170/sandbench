@@ -43,6 +43,7 @@ Vite inlines these at **build** time. Changing the allowlist or the runner URL r
 
 ## 4. Cloud sync behavior
 
+- **Runner mode (`VITE_RUNNER_URL` set, SB-02b):** the workspace lives on the runner as one record per agent, thread, message and item, and syncs live across devices (see [runner.md](runner.md#records-sb-02)). Firestore is used for sign-in only and is not read or written. The rest of this section describes local mode, without a runner.
 - On sign-in, the app loads IndexedDB, then Firestore `users/{uid}/workspace/snapshot`.
 - Newer `updatedAt` wins; the other side is updated.
 - Attachments/blobs stay in IndexedDB on the device (not uploaded).
