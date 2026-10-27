@@ -68,6 +68,26 @@ ENTRIES START BELOW
   - #15 (iPhone sign-in) and #16 (isolation docs) are also waiting. Whichever of #14, #15 and #16 merges later gets a WORKLOG conflict that the next session resolves, keeping both entries with the newest first.
   - Next tasks: T03 (SB-13, independent), and T04 once #14 is merged.
 
+### Session 1 (cont.) · 2026-10-26 22:08 ET · out-of-plan fix: iOS Google sign-in loop · done
+- **Branch / PR / head sha:** `fix-ios-google-signin` · PR in the session summary · cut from `d6b4b27` (#13 merged)
+- **Checks on the head:** pending at the time of writing
+- **What was done:**
+  - Vincent reported in chat that on iPhone, at the Vercel site, "Continue with Google" returns to the sign-in page every time.
+  - Cause: `signInWithRedirect` returns through the Firebase auth domain, a different site from the page. iOS Safari's tracking prevention blocks that storage, so `getRedirectResult` finds nothing. The page also swallowed the error.
+  - Fix: `src/googleSignIn.ts` signs in with a popup first and uses the redirect only if a popup can't open. `src/AuthGate.tsx` uses it and shows sign-in and redirect errors. `docs/deploy-vercel.md`'s sign-in check is updated.
+- **Tests run (real results):**
+  - `npm run typecheck` → clean
+  - `npm run test:web` → 4 files, 39 tests passed, 4 of them new in `src/googleSignIn.test.ts`
+  - `npm run build` → ok
+- **Not run / could not run:** a real iPhone sign-in. Only Vincent can do that, on the Vercel preview of this PR.
+- **Decisions made and why:**
+  - A popup, rather than proxying `/__/auth` through Vercel with `authDomain` set to the Vercel host. The proxy needs the project id in `vercel.json` (not allowed in the repo) plus a Google OAuth redirect URI change in the console.
+- **Deviations from the plan:**
+  - Not a WORKPLAN task, and auth is STOP point 1. Vincent asked for it directly in chat. Only the page's sign-in button changed: no allowlist, token, rules or Firebase config change.
+- **Open questions for Vincent or the Supervisor:**
+  1. Try the PR's Vercel preview on the iPhone, in Safari and from the home-screen app. If the popup also fails in the home-screen app, the next step is the `/__/auth` proxy, which needs your console change.
+- **Next step:** Vincent merges this after the iPhone check. T02 (rework #14 to the spec) is now unblocked, since #13 is merged.
+
 ### Session 1 · 2026-10-26 22:05 ET · T01 SB-09 · done
 - **Branch / PR / head sha:** `sb-09-workspaces` · https://github.com/arbiter1170/sandbench/pull/13 · code head `4c6958d` (final head after the log commit is in the session summary). PR #12's merge commit on `deploy/vercel`: `4b69bd53bf7ee7df9403a627f4d7d358374e685a`.
 - **Checks on the head:** pending at the time of writing (the first version of this PR had all 4 required checks green on `7fa061c`).

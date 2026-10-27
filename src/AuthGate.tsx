@@ -1,13 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
-import {
-  GoogleAuthProvider,
-  getRedirectResult,
-  onAuthStateChanged,
-  signInWithRedirect,
-  signOut,
-  type User,
-} from "firebase/auth";
+import { getRedirectResult, onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { firebaseConfigured, getFirebaseAuth, isEmailAllowed } from "./firebase";
+import { signInErrorMessage, startGoogleSignIn } from "./googleSignIn";
 
 type GateState =
   | { status: "loading" }
@@ -18,6 +12,8 @@ type GateState =
 
 export function AuthGate({ children }: { children: (user: User) => ReactNode }) {
   const [state, setState] = useState<GateState>({ status: "loading" });
+  const [signInError, setSignInError] = useState("");
+  const [signingIn, setSigningIn] = useState(false);
 
   useEffect(() => {
     if (!firebaseConfigured()) {
@@ -31,7 +27,10 @@ export function AuthGate({ children }: { children: (user: User) => ReactNode }) 
     }
 
     let active = true;
-    void getRedirectResult(auth).catch(() => undefined);
+    // Only the fallback redirect lands here; show its failure instead of looping silently.
+    void getRedirectResult(auth).catch((error) => {
+      if (active) setSignInError(signInErrorMessage(error));
+    });
 
     const unsub = onAuthStateChanged(auth, async (user) => {
       if (!active) return;
@@ -105,14 +104,25 @@ export function AuthGate({ children }: { children: (user: User) => ReactNode }) 
         <button
           type="button"
           className="primary"
+          disabled={signingIn}
           onClick={() => {
             const auth = getFirebaseAuth();
             if (!auth) return;
-            void signInWithRedirect(auth, new GoogleAuthProvider());
+            setSignInError("");
+            setSigningIn(true);
+            // Called straight from the tap, so iOS lets the popup open.
+            startGoogleSignIn(auth)
+              .catch((error) => setSignInError(signInErrorMessage(error)))
+              .finally(() => setSigningIn(false));
           }}
         >
-          Continue with Google
+          {signingIn ? "Signing in…" : "Continue with Google"}
         </button>
+        {signInError && (
+          <p className="hint" role="alert">
+            {signInError}
+          </p>
+        )}
       </div>
     );
   }
