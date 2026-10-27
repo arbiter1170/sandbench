@@ -31,6 +31,31 @@ phone / browser ──https──> Tailscale Funnel (laptop)  or  Cloudflare Acc
 
 Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills, memory, schedules, triggers and MCP move to the runner in SB-08, SB-14, SB-15 and SB-22.
 
+## Workspaces (SB-09)
+
+**Roots.** All four come from `SANDBENCH_HOME` (`/srv/sandbench` in the image) and are created when the runner starts:
+
+| Root | Holds | Read | Write |
+| --- | --- | --- | --- |
+| `workspace/` | the page's own folder (the owner context, no agent) | the page | the page |
+| `shared/` | handoff notes, repo clones | every agent | agents only under `shared/handoff/` |
+| `agents/<slug>/` | an agent's own folder | that agent | that agent |
+| `wt/<slug>/<repo>/<branch>/` | that agent's git worktrees | that agent | that agent |
+
+**Rules** (`runner/workspace/paths.mjs`, `resolveWorkspacePath(roots, agentSlug, path, { write })`):
+- Paths are relative. Absolute paths, drive letters, backslashes, null bytes and any `..` segment are refused.
+- For an agent, a path starting `shared/` or `wt/<slug>/` names that root; anything else is inside its own folder, so another agent's folder can't even be named. Another agent's worktree is neither readable nor writable.
+- Links are followed: a path that leads out of its root through a symlink is refused, and so is a link that points at nothing yet (writing through it would create its target).
+- The slug comes from the server, never from a request. Until SB-03 passes it from the job, every page call (`/api/workspace/*`, `/api/exec`, `/api/turns`) is the owner context and works exactly as before in `workspace/`.
+- This is not a sandbox: a shell command can still open any path the runner's user can. Isolating agents from each other needs a separate OS user or container per agent.
+
+**Worktrees** (`runner/workspace/worktrees.mjs`). Repos come from an allowlist in `SANDBENCH_REPOS`, `name=/absolute/path[#base]` separated by commas, with the base defaulting to `origin/main`, for example `SANDBENCH_REPOS=game=/srv/sandbench/shared/game#origin/main,team=/srv/sandbench/shared/team`. Nothing reads it yet: the `worktree_create` and `worktree_remove` tools that use it come with SB-10.
+- `create({ agentSlug, repo, branch })` checks everything before any `git` call (branch names: letters, digits, `._/-`, up to 100 characters, no leading `-`, no `..`, `//`, trailing `/` or `.lock`), fetches, and runs `git worktree add --no-track -b <branch> wt/<slug>/<repo>/<branch> <base>`.
+- `remove(...)` refuses another agent's worktree and any worktree with uncommitted changes (never `--force`), and keeps the branch.
+- `prune({ olderThanDays: 7 })` finds worktrees whose branch is merged into the base and whose folder hasn't changed for 7 days. **It is a dry run by default.** With `dryRun: false` it runs `git worktree remove` and `git branch -d` (never `--force`, never `-D`). The nightly run is SB-14.
+
+**Still to prove live:** PixelPets and a review agent building in real worktrees on the laptop runner. That needs SB-03 (the slug) and SB-10 (the tools).
+
 ## Records (SB-02)
 
 With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Postgres as **one row per entity** instead of one snapshot where the newest write wins. Migrations in `runner/db/migrations/` are applied when the runner starts. Without `DATABASE_URL`, these routes return 503 and everything else still works.
@@ -118,7 +143,7 @@ VITE_RUNNER_URL=/api npm run dev                               # the Vite proxy 
 
 ## Tests
 
-- `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits.
+- `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits. `workspace.test.mjs` and `worktrees.test.mjs` cover the SB-09 path rules and worktrees, with real `git` on fixture repos in a temp folder.
 - `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped.
 - `runner/test/emulator.test.mjs` checks real Firebase ID tokens against the Auth emulator (`demo-sandbench`). CI runs it in the `runner-auth` job.
 - The CI `runner-image` job checks that `deploy/compose.yml` is valid and publishes no ports. It also builds the image, starts it, and checks that `/healthz` answers, `/api/health` returns 401 and the page is served.
