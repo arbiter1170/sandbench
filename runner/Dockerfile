@@ -31,8 +31,6 @@ COPY runner/package.json runner/package-lock.json ./runner/
 RUN cd runner && npm ci --omit=dev --no-audit --no-fund
 COPY harness ./harness
 COPY runner ./runner
-# SB-08 memory import and backup, run with `docker compose exec runner node scripts/...`.
-COPY scripts/memory-import.mjs scripts/memory-backup.mjs ./scripts/
 COPY --from=ui /src/dist ./dist
 RUN mkdir -p /srv/sandbench && chown node:node /srv/sandbench
 USER node
