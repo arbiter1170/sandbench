@@ -24,8 +24,19 @@ RUN npm run build
 # version as `playwright` in runner/package.json. SB-13 adds Java 21 (Firebase emulators), gh and
 # firebase-tools.
 FROM mcr.microsoft.com/playwright:v1.64.1-noble
-# The runner targets Node 22, like CI; stop here if the base image ever moves off it.
-RUN node -v && node -v | grep -q '^v22\.' || { echo "Expected Node 22 in the Playwright base image"; exit 1; }
+# The base ships Node 24; the runner targets Node 22, like CI. Swap the base's NodeSource repo for
+# the node_22.x one and reinstall, then stop the build if the result is not Node 22.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg \
+ && install -d -m 0755 /etc/apt/keyrings \
+ && curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key | gpg --dearmor -o /etc/apt/keyrings/nodesource-22.gpg \
+ && rm -f /etc/apt/sources.list.d/nodesource*.list /etc/apt/sources.list.d/nodesource*.sources \
+ && echo "deb [signed-by=/etc/apt/keyrings/nodesource-22.gpg] https://deb.nodesource.com/node_22.x nodistro main" > /etc/apt/sources.list.d/nodesource.list \
+ && apt-get update \
+ && apt-get remove -y nodejs \
+ && apt-get install -y --no-install-recommends nodejs \
+ && rm -rf /var/lib/apt/lists/*
+RUN node -v && node -v | grep -q '^v22\.' || { echo "Expected Node 22"; exit 1; }
 RUN apt-get update \
  && apt-get install -y --no-install-recommends bash ca-certificates curl git gnupg openjdk-21-jre-headless python3 tini \
  && install -d -m 0755 /etc/apt/keyrings \
