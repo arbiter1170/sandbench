@@ -170,7 +170,8 @@ Key choices:
     - Tools (SB-10): `job_start(cmd, cwd, timeout)`, `job_status`, `job_tail(n)` and `job_cancel`. When a job finishes, it wakes the agent that owns it (SB-07).
     - Make the `runShell` timeout per call (`harness/server.mjs:83`), with a 10-minute default for foreground commands. Longer work must use `job_start`.
     - Make `MAX_STEPS` a per-agent setting (`harness/drivers/anthropic.mjs:5`, `harness/drivers/http.mjs:7`, default 60) with a per-turn token and cost budget. For Claude Code, use `--max-turns`.
-  - **Depends on:** SB-03.
+    - Jobs run in the SB-29 `sandbox` service, as the owning agent's uid.
+  - **Depends on:** SB-03, SB-29.
   - **Acceptance:** QA starts the pp_verify suite against the live build at 320/375/390 detached (`node tools/pp_test.js --slow` in the game repo, about 4 hours), and Vincent closes every tab. The job survives a worker restart at hour 2. At the end QA wakes, reads the summary, attaches three failure screenshots and messages the Supervisor. The job page shows the full log.
 
 - [ ] **SB-09 · P0 · Per-agent workspaces, a shared filesystem and git worktrees · 2 d**
@@ -182,13 +183,23 @@ Key choices:
   - **Depends on:** SB-01.
   - **Acceptance:** PixelPets and a review agent build in separate worktrees off `origin/main` without touching each other's checkouts. QA can read the shared handoff changelog. Design can't write into PixelPets' worktree.
 
+- [ ] **SB-29 · P0 · Agent isolation: a sandbox service, one Linux user per agent, no secrets · 3 d**
+  - **Change:** the design in `docs/runner.md`, "Agent isolation (decided, SB-29)".
+    - A `sandbox` compose service (it replaces SB-04's planned `jobs` service) where every agent shell, detached job and engine process runs, each as its agent's own uid. Not on the `internal` network, no keys, no secrets file, no Postgres volume.
+    - `agents/<slug>/` and `wt/<slug>/` owned by the agent's uid, mode 0700; `shared/` readable, only `shared/handoff/` writable by agents.
+    - Spawned processes get an allowlisted environment. Engines reach the model through the runner's `/api/model` with the per-turn token.
+    - The runner drives the sandbox over an authenticated control API on a private network, never through the Docker socket.
+  - **Depends on:** SB-09. **Blocks:** SB-04, and every SB-10 tool that runs a shell, writes or runs git (SB-10's read-only tools can ship first).
+  - **Acceptance:** from agent `qa`'s shell, reading another agent's folder or worktree, printing a key from the environment, reading the secrets file, and opening a connection to Postgres all fail (real processes, in CI). An engine turn in the sandbox completes through `/api/model` with no key in its environment. Two agents can both write in `shared/handoff/` and nowhere else in `shared/`. Weakening one rule (for example mounting the secrets volume) makes a test fail, shown once in the PR. Live check: on the laptop runner, QA tries to read PixelPets' worktree and is refused.
+
 - [ ] **SB-10 · P0 · sandbench-tools MCP server, the agents' tool surface · 2 d**
   - **Change:**
     - Grow `scripts/mcp-server.mjs` (today it has health, list_bots, send_message and get_screen) into `runner/mcp/server.mjs`, a stdio MCP server.
     - Pass it to each Claude session with `claude --mcp-config`, and expose the same tools to the API drivers.
     - Other items register their tools here: messaging (SB-07), memory and skills (SB-08), jobs (SB-04), worktrees (SB-09), GitHub (SB-11), builds (SB-12), screenshots (SB-13), schedules (SB-14), email drafts (SB-17) and approvals/notifications (SB-06, SB-16).
     - Every tool handler calls the policy check (SB-06) first.
-  - **Depends on:** SB-03.
+    - Read-only tools can ship first. Tools that run a shell, write or run git wait for SB-29 (agent isolation).
+  - **Depends on:** SB-03; SB-29 for the tools that act.
   - **Acceptance:** in a QA session, `list_agents` returns the six Walklings bots with their titles, and every tool call shows up in the audit log with the agent's id.
 
 - [ ] **SB-13 · P0 · Headless browser with phone viewports, plus Playwright and the Firebase emulator in the runtime · 2 d**
@@ -495,3 +506,4 @@ Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · a
 - 2026-10-27 · SB-02b · PR #8 (review fixes) · a 409's other-device fields reach the page and later saves can't send old values back (also for saves taken before the page applied them); offline edits and an interrupted first upload are replayed on the runner's copy from a saved base instead of being overwritten; failed or partial loads (messages included) fail the load and are retried; lists paged with `after=`; first upload takes the newer of the local and Firestore copies, with a one-time backup before the runner's copy first replaces a local one · 11 new unit cases against a fake runner, 1 datastore paging test, and the two-browser run extended with an offline edit + reload that merged with another device's change
 - 2026-10-27 · SB-02b · PR #8 (review 2) · logs and computer events are append-only on the runner (the page's 40-item cap no longer deletes other devices' records; remote ones are placed by `at`; deleting a bot deletes its computer events explicitly); backup keyed by account; a browser another account has synced from doesn't upload its local copy to an empty runner · 3 new unit cases incl. the two-device trim repro
 - 2026-10-27 · SB-09 · PR #13 · per-agent paths under SANDBENCH_HOME (workspace/ owner context unchanged, shared/ read with writes only in shared/handoff/, agents/<slug>/, wt/<slug>/<repo>/<branch>/), one resolver for the runner's read, write, exec and turn folders (page calls stay in the owner context; the slug comes from the server only), git worktree create/remove/prune on a SANDBENCH_REPOS allowlist (prune is a dry run by default) · 9 path tests and 7 worktree tests with real git on fixture repos, 12 mutation checks; live check (PixelPets and a review agent in real worktrees) needs SB-03 and SB-10, so the box stays unticked
+- 2026-10-27 · SB-29 (decision) · docs PR · agent isolation decided: a `sandbox` compose service (replacing SB-04's planned `jobs` service) with one Linux user per agent, no keys, no secrets file and no route to Postgres; model calls through the runner's `/api/model`; SB-04 and SB-10's acting tools wait for it · design only, nothing built, so the box stays unticked

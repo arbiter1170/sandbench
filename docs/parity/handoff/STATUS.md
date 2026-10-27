@@ -18,6 +18,7 @@
 | T08 | SB-06 slice A policy classifier | todo | `sb-06a-classifier` | n/a | independent, not wired |
 | T09 | Prune dry run for logs and computer rows | todo | `sb-fu-prune-dry-run` | n/a | independent |
 | T10 | SB-03 PR 2 turn engine (stretch) | todo | `sb-03b-turn-engine` | n/a | needs T01, T04 merged; live part blocked on Q1 (API key) |
+| – | SB-29 agent isolation (build) | todo | – | – | decided 2026-10-27; blocks SB-04 and SB-10's acting tools |
 | – | SB-04, SB-10, SB-11, SB-12, SB-06 wiring | blocked | – | – | not scheduled; Supervisor re-plans Thursday (see WORKPLAN §5) |
 
 ## Open PRs awaiting Vincent's merge
@@ -27,7 +28,7 @@
 
 ## Blockers and questions
 1. Docker Desktop does not start on Vincent's Windows machine (WSL has no distribution installed). Local Postgres, gitleaks and image checks rely on CI until it is fixed. Postgres tests can run locally against PGlite (WASM Postgres) as a stopgap.
-2. Real isolation between agents (separate OS users or containers) should be decided before SB-10 gives agents `exec`. The SB-09 rules limit the runner's routes, not shell commands.
+2. Agent isolation: **decided 2026-10-27** (branch `sb-isolation-decision`, docs only). A `sandbox` compose service with one Linux user per agent, no keys and no route to Postgres, built as new item SB-29 (Track 3). SB-04 and SB-10's acting tools wait for it. Design: `docs/runner.md`, "Agent isolation".
 
 ## Live checks pending (Vincent, on the laptop runner)
 See `WORKPLAN.md` §7. Plan boxes stay unticked until he confirms.

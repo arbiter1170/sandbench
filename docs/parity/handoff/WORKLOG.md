@@ -26,6 +26,22 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 2 · 2026-10-27 · isolation decision (docs only) · done
+- **Branch / PR / head sha:** `sb-isolation-decision` · PR link in the session summary · docs-only commit on top of `d6b4b27`
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - Recorded the agent-isolation decision Vincent picked: a `sandbox` compose service with one Linux user per agent, no keys, no secrets file, no route to Postgres; model calls through `/api/model`. It replaces SB-04's planned `jobs` service.
+  - `docs/runner.md`: new section "Agent isolation (decided, SB-29)"; the "not a sandbox" bullet points to it.
+  - `docs/parity/PLAN.md`: new item SB-29 (unticked) with acceptance; SB-04 depends on it; SB-10's acting tools wait for it; one Progress log line.
+  - `docs/parity/NEXT_PHASE_BRIEF.md`: open question 4 answered, new open question 8 (answered), SB-29 in the scope, dependency and track tables (Track 3), gate lines in SB-04 and SB-10. The brief's Rules section is untouched.
+  - This entry and `STATUS.md`.
+- **Tests run (real results):** none needed (docs only). Secret scan runs in CI.
+- **Not run / could not run:** gitleaks locally (not installed here).
+- **Decisions made and why:** a shared sandbox service with a uid per agent over a container per agent (lighter on the laptop, no Docker socket for the runner) and over uids inside the runner container (that would leave agents on the Postgres network and next to the secrets volume).
+- **Deviations from the plan:** none; docs only.
+- **Open questions for Vincent or the Supervisor:** none new. Docker Desktop on Windows still needs a WSL distribution (`wsl --install -d Ubuntu`, then restart Docker Desktop).
+- **Next step:** Vincent reviews and merges this docs PR; SB-29 is built in Track 3 alongside SB-06 core.
+
 ### Session 1 · 2026-10-26 22:05 ET · T01 SB-09 · done
 - **Branch / PR / head sha:** `sb-09-workspaces` · https://github.com/arbiter1170/sandbench/pull/13 · code head `4c6958d` (final head after the log commit is in the session summary). PR #12's merge commit on `deploy/vercel`: `4b69bd53bf7ee7df9403a627f4d7d358374e685a`.
 - **Checks on the head:** pending at the time of writing (the first version of this PR had all 4 required checks green on `7fa061c`).

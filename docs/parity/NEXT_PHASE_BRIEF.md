@@ -81,6 +81,7 @@ Vincent stay in Grok Bot. The items, checked against `PLAN.md` on `deploy/vercel
 | SB-03 turn engine and job queue | Phase 1 | Yes |
 | SB-04 detached jobs, step cap | Phase 1 | Yes |
 | SB-10 sandbench-tools MCP server | Phase 1 | Yes |
+| SB-29 agent isolation (sandbox service) | Phase 1 | Yes (added 2026-10-27) |
 | SB-06 approval and safety layer | Phase 1 (core), Phase 2 (full) | **Core only** |
 | SB-15a importer | Phase 1 (QA only), Phase 3 (all six) | Yes |
 | SB-11 GitHub integration | Phase 2 | **Core only, no board** |
@@ -139,10 +140,11 @@ is where SB-09, SB-08 and SB-13 become tools an agent can call).
 | Item | Hard dependencies | Also uses | Unblocks | Track | Size |
 |---|---|---|---|---|---|
 | SB-03 | SB-02 | SB-05 (keys), SB-09 (cwd), SB-08 (prompt) | SB-04, SB-10, SB-06, and live use of SB-08, SB-09, SB-13 | 1 | L (two PRs) |
-| SB-04 | SB-03 | SB-09 (job cwd) | SB-12; the 4-hour QA run | 1 | M |
-| SB-10 | SB-03 | SB-09, SB-08, SB-13 (wrapped as tools) | SB-11; agents can use SB-09, SB-08, SB-13 | 2 | M |
+| SB-04 | SB-03, SB-29 | SB-09 (job cwd) | SB-12; the 4-hour QA run | 1 | M |
+| SB-10 | SB-03; SB-29 for tools that act | SB-09, SB-08, SB-13 (wrapped as tools) | SB-11; agents can use SB-09, SB-08, SB-13 | 2 | M |
 | SB-06 core | SB-03, SB-05 | SB-04 (`job.exec`), SB-10 (handlers) | SB-11; any real agent use of shell, git or GitHub | 3 | M |
 | SB-11 core | SB-05, SB-06, SB-10 | SB-09 (clone folders) | SB-12; Design committing to its repo | 2 | M |
+| SB-29 | SB-09 | SB-10 (per-turn token for `/api/model`) | SB-04; SB-10 tools that run a shell, write or run git | 3 | M |
 | SB-12 | SB-04, SB-09, SB-11 | SB-08 (team `AGENTS.md`, skills), SB-06 (`launch_build`) | Phase 3 done | 1 | L |
 | SB-15a | SB-02, SB-08 (and SB-14, see below) | SB-09 | QA and the team in Sandbox; Phase 1 and Phase 3 acceptance | 4 | M (QA slice S) |
 
@@ -158,7 +160,7 @@ at a time**, in the order the PRs merge.
 |---|---|---|---|
 | **1 Spine** | SB-03 PR 1, SB-03 PR 2, SB-04, SB-12 | `runner/worker/`, `runner/builds/`, `runner/contracts/`, `runner/api/routes/jobs.mjs` and `turns.mjs`, migration `003_jobs.sql`, `src/runnerTurns.ts`, the `driveTurn`/`askBot` code in `src/App.tsx`, `harness/drivers/*` (step cap, wording), `runner/Dockerfile` (adds the pinned `claude` CLI) | `runner/policy/`, `runner/mcp/`, `runner/github/` |
 | **2 Tools** | SB-10, then SB-11 core | `runner/mcp/`, `runner/*/tools.mjs` (new files in the SB-09, SB-08, SB-13 and SB-04 folders), `runner/github/`, `deploy/` GitHub App settings docs | `runner/worker/`, `runner/policy/` |
-| **3 Safety** | SB-06 core | `runner/policy/`, migration `004_audit.sql`, `runner/api/routes/policy.mjs` and `approvals.mjs`, `src/ApprovalInbox.tsx`, the `Approval` type in `src/types.ts` | `runner/worker/`, `runner/mcp/` |
+| **3 Safety** | SB-06 core, SB-29 | `runner/policy/`, `runner/sandbox/` and the `sandbox` service in `deploy/compose.yml` (SB-29), migration `004_audit.sql`, `runner/api/routes/policy.mjs` and `approvals.mjs`, `src/ApprovalInbox.tsx`, the `Approval` type in `src/types.ts` | `runner/worker/`, `runner/mcp/` |
 | **4 Data** | SB-15a, then the carried follow-ups | `scripts/import-team-pack.mjs`, `docs/team-pack.md`, `runner/agent/import.mjs`, `src/recordSync.ts`, `runner/db/store.mjs` (pruning), `docs/parity/PLAN.md` (stale text) | `runner/worker/`, `runner/policy/` |
 
 ### Contracts that land first
@@ -327,7 +329,8 @@ read another's jobs); approvals survive a restart.
 - Tool handlers `job_start`, `job_status`, `job_tail`, `job_cancel` in `runner/worker/tools.mjs`
   (SB-10 loads them). When a job ends it **wakes the agent that owns it** by queueing an
   `agent.turn` ("Job N finished"). This does not use SB-07.
-- Where jobs run is open question 4. Default: a separate `jobs` compose service.
+- Where jobs run is open question 4, now answered: in the SB-29 `sandbox` service, as the owning
+  agent's uid. SB-04 does not merge before SB-29.
 
 **Out:** the jobs page and live log UI (SB-19), agent-to-agent wake-ups (SB-07), schedules.
 
@@ -358,6 +361,8 @@ timeout; cancel; log tail paging; owner isolation; wake-up.
   idle, working or paused, from the records and `jobs`). The SB-04 and SB-11 tools register
   themselves the same way.
 - `scripts/mcp-server.mjs` (local mode) stays as it is.
+- **Isolation gate (open question 8):** read-only tools can merge first. Any tool that runs a shell,
+  writes or runs git waits until SB-29 has merged.
 
 **Out:** `send_message` and `read_inbox` (SB-07), `schedule_*` (SB-14), `email_*` (SB-17),
 notification and approval tools (SB-16, SB-06 stays server-side).
@@ -570,7 +575,8 @@ says otherwise. **Blocks start** means it should be answered before the wave nam
 3. **GitHub App, blocks the live part of SB-11.** Use a GitHub App as `PLAN.md` says, created by
    Vincent. **Default: yes, installed on a scratch repo first.** Vincent decides when to install it
    on the game, design and team repos. The agents never create an account or an App.
-4. **Where detached jobs run, blocks SB-04.** Jobs cannot survive a restart of the container they
+4. **Where detached jobs run, blocks SB-04.** **Answered 2026-10-27 with question 8:** the separate
+   service is the SB-29 `sandbox` service. Jobs cannot survive a restart of the container they
    run in. **Default: a separate `jobs` compose service**, so restarting the API, the engine or
    the page host does not touch a running job. Restarting the `jobs` service itself, or the laptop
    sleeping, interrupts them (they are marked interrupted, and a job marked resumable restarts
@@ -585,6 +591,13 @@ says otherwise. **Blocks start** means it should be answered before the wave nam
    private team repo**, cloned on the laptop and mounted read-only into the runner container at
    `SANDBENCH_TEAM_DIR` (a bind mount in the laptop compose profile, with the host path in
    `deploy/.env`). It is never copied into this repo.
+
+8. **Agent isolation, blocks SB-04 and SB-10's acting tools. Answered 2026-10-27.** The SB-09 path
+   rules only cover the runner's routes; a shell or engine process runs as the runner's user with
+   its keys and `DATABASE_URL`. **Decision: a `sandbox` compose service with one Linux user per
+   agent**, no keys, no secrets file and no route to Postgres, with model calls through the runner's
+   `/api/model`. It replaces the `jobs` service in question 4. Built as SB-29 (Track 3); the design
+   is in `docs/runner.md`, "Agent isolation (decided, SB-29)".
 
 Two choices are already made here, so they are not questions: SB-03 is two PRs (contracts first),
 and queueing uses pg-boss as in `PLAN.md`.
