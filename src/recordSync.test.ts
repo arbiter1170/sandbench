@@ -9,6 +9,7 @@ import {
   mergeRecords,
   RecordSync,
   toRecords,
+  upsertByTime,
   upsertItem,
   type BaseStore,
   type Data,
@@ -52,7 +53,9 @@ describe("toRecords / fromRecords", () => {
     const after = fromRecords(records.values(), snapshot());
     expect(after.threads[0].messages.map((m) => m.id)).toEqual(["m1", "m2"]);
     expect(after.bots).toEqual([{ id: "qa", name: "QA" }]);
-    expect(after.logs).toHaveLength(60);
+    // All 60 are records on the runner; the page shows the newest 40, newest first.
+    expect(after.logs).toHaveLength(40);
+    expect(after.logs[0].id).toBe("log59");
   });
 
   it("keeps items without a usable id on this device", () => {
@@ -178,6 +181,8 @@ function fakeRunner({ pageSize = 2 } = {}) {
 function applyToSnapshot(state: Snapshot, change: RemoteRecord, fields: Data | null): Snapshot {
   if (change.kind === "agents") return { ...state, bots: upsertItem(state.bots, change, fields) };
   if (change.kind === "tasks") return { ...state, tasks: upsertItem(state.tasks, change, fields) };
+  if (change.kind === "logs") return { ...state, logs: upsertByTime(state.logs, change, fields) };
+  if (change.kind === "computer") return { ...state, computer: upsertByTime(state.computer, change, fields) };
   if (change.kind === "threads") return { ...state, threads: applyThreadChange(state.threads, change, fields) };
   if (change.kind === "messages") return { ...state, threads: applyMessageChange(state.threads, change, fields) };
   return state;
@@ -384,5 +389,66 @@ describe("RecordSync against a fake runner", () => {
     await expect(back.sync.open(() => back.state)).rejects.toThrow(/messages/);
     expect(back.sync.ready).toBe(false);
     expect(back.state.threads[0].messages).toHaveLength(1);
+  });
+
+  describe("logs and computer events (the page keeps the newest 40, the runner keeps all)", () => {
+    const log = (id: string, at: number) => ({ id, message: id, at });
+    const logs = (...list: { id: string; at: number }[]) => list as unknown as Snapshot["logs"];
+    /** What the page does when it logs something: newest first, trimmed to 40. */
+    const addLog = (id: string, at: number) => (state: Snapshot) => ({ ...state, logs: logs(log(id, at), ...state.logs).slice(0, 40) });
+    const forty = () => logs(...Array.from({ length: 40 }, (_, i) => log(`l${String(i).padStart(2, "0")}`, 100 - i)));
+
+    it("a trimmed log is never deleted on the runner, and another device's newest log is kept in order", async () => {
+      const runner = fakeRunner({ pageSize: 50 });
+      const laptop = device(runner, snapshot({ logs: forty() }));
+      await laptop.open();
+      const phone = device(runner);
+      await phone.open();
+      phone.edit(addLog("p1", 200));
+      await phone.save();
+      // The laptop hears about p1, then logs k1 itself.
+      laptop.sync.receive({ ...runner.rows.get("logs/p1")!, seq: 1 });
+      expect(laptop.state.logs[0].id).toBe("p1");
+      runner.calls.length = 0;
+      laptop.edit(addLog("k1", 300));
+      await laptop.save();
+      expect(runner.calls.filter((call) => call.startsWith("DELETE"))).toEqual([]);
+      expect(runner.calls).toEqual(["POST /data/logs"]);
+      expect(runner.data("logs/p1")).toBeTruthy();
+      expect(runner.data("logs/l39")).toBeTruthy();
+      expect(laptop.state.logs.slice(0, 2).map((item) => item.id)).toEqual(["k1", "p1"]);
+      expect(laptop.state.logs).toHaveLength(40);
+    });
+
+    it("a reload replays no deletes for logs that fell off this device, and loads the newest 40", async () => {
+      const runner = fakeRunner({ pageSize: 50 });
+      const laptop = device(runner, snapshot({ logs: forty() }));
+      await laptop.open();
+      for (let i = 0; i < 5; i += 1) {
+        laptop.edit(addLog(`n${i}`, 1000 + i));
+        await laptop.save();
+      }
+      runner.calls.length = 0;
+      const back = laptop.reload();
+      await back.open();
+      expect(runner.calls.filter((call) => !call.startsWith("GET"))).toEqual([]);
+      expect([...runner.rows.values()].filter((row) => row.kind === "logs" && !row.deleted)).toHaveLength(45);
+      expect(back.state.logs).toHaveLength(40);
+      expect(back.state.logs[0].id).toBe("n4");
+    });
+
+    it("deleting a bot removes its computer events on the runner, including ones this page trimmed", async () => {
+      const runner = fakeRunner({ pageSize: 100 });
+      const events = Array.from({ length: 45 }, (_, i) => ({ id: `e${i}`, botId: i % 2 ? "qa" : "sup", at: i }));
+      for (const event of events) runner.rows.set(`computer/${event.id}`, { kind: "computer", id: event.id, version: 1, deleted: false, data: event } as RemoteRecord);
+      runner.rows.set("settings/settings", { kind: "settings", id: "settings", version: 1, deleted: false, data: {} } as RemoteRecord);
+      const laptop = device(runner);
+      await laptop.open();
+      expect(laptop.state.computer).toHaveLength(40);
+      await laptop.sync.removeWhere("computer", (data) => data.botId === "qa");
+      const left = [...runner.rows.values()].filter((row) => row.kind === "computer" && !row.deleted);
+      expect(left.every((row) => row.data.botId === "sup")).toBe(true);
+      expect(left).toHaveLength(23);
+    });
   });
 });

@@ -234,18 +234,35 @@ export async function saveSyncBase<T>(uid: string, records: T[]): Promise<void> 
   }
 }
 
-/** A copy of this device's workspace from before the runner's records first replaced it; kept once. */
-export async function saveBackupOnce(snapshot: Snapshot): Promise<void> {
+/**
+ * A copy of this device's workspace from before the runner's records first replaced it,
+ * kept once per user.
+ */
+export async function saveBackupOnce(uid: string, snapshot: Snapshot): Promise<void> {
   const db = await openDb();
   try {
     const tx = db.transaction("kv", "readwrite");
     const done = settled(tx);
     const store = tx.objectStore("kv");
-    const existing = store.get("backupBeforeRunner");
+    const existing = store.get(`backupBeforeRunner:${uid}`);
     existing.onsuccess = () => {
-      if (existing.result === undefined) store.put({ savedAt: Date.now(), snapshot }, "backupBeforeRunner");
+      if (existing.result === undefined) store.put({ savedAt: Date.now(), snapshot }, `backupBeforeRunner:${uid}`);
     };
     await done;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * True when another account has synced with a runner from this browser. The local copy is
+ * shared by everyone who signs in here, so it is then likely theirs, not this account's.
+ */
+export async function hasOtherSyncBase(uid: string): Promise<boolean> {
+  const db = await openDb();
+  try {
+    const keys = await run(db.transaction("kv", "readonly").objectStore("kv").getAllKeys());
+    return keys.some((key) => typeof key === "string" && key.startsWith("syncBase:") && key !== `syncBase:${uid}`);
   } finally {
     db.close();
   }

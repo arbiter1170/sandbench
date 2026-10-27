@@ -8,6 +8,7 @@ import {
   deleteBlob,
   eraseDatabase,
   getBlob,
+  hasOtherSyncBase,
   loadPendingSecrets,
   loadSnapshot,
   loadSyncBase,
@@ -48,7 +49,7 @@ import {
   runnerMode,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
-import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
+import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
 import {
@@ -320,12 +321,14 @@ export function App({ user }: { user: User }) {
               // Firestore copy older builds kept.
               firstCopy: async () => {
                 const pulled = await pullCloudSnapshot(user.uid).catch(() => null);
-                if (!pulled || pulled.updatedAt <= bundle.updatedAt) return local.snapshot;
-                const cloud = extractLegacySecrets(pulled.snapshot);
-                found.push(...cloud.found);
-                return cloud.snapshot;
+                if (pulled && pulled.updatedAt > bundle.updatedAt) {
+                  const cloud = extractLegacySecrets(pulled.snapshot);
+                  found.push(...cloud.found);
+                  return cloud.snapshot;
+                }
+                return (await ownLocalCopy()) ? local.snapshot : emptyWorkspace();
               },
-              backup: (copy) => saveBackupOnce(copy),
+              backup: (copy) => saveBackupOnce(user.uid, copy),
             });
             updatedAt = Date.now();
             await saveSnapshot(snapshot, updatedAt).catch(() => undefined);
@@ -377,14 +380,34 @@ export function App({ user }: { user: User }) {
         setBanner(translate(defaultSettings().locale, "dbError"));
         setHydrated(true);
       });
+    // On a browser shared by two accounts the local copy may be the other one's: it is not
+    // uploaded to this account's empty runner.
+    const ownLocalCopy = () => hasOtherSyncBase(user.uid).then((other) => !other, () => true);
+    const emptyWorkspace = (): Snapshot => ({
+      threads: [],
+      reminders: [],
+      events: [],
+      contacts: [],
+      settings: defaultSettings(),
+      logs: [],
+      bots: [],
+      tasks: [],
+      routines: [],
+      computer: [],
+      studio: defaultStudio(),
+    });
     /** Try the runner again; the workspace as it is then is merged with the runner's copy. */
     function retryRunner(sync: RecordSync, delay: number) {
       retryTimer = window.setTimeout(() => {
         if (!active) return;
+        const current = () => {
+          if (!workspaceRef.current) throw new Error("The workspace is not loaded yet.");
+          return workspaceRef.current;
+        };
         void sync
-          .open(() => {
-            if (!workspaceRef.current) throw new Error("The workspace is not loaded yet.");
-            return workspaceRef.current;
+          .open(current, {
+            firstCopy: async () => ((await ownLocalCopy()) ? current() : emptyWorkspace()),
+            backup: (copy) => saveBackupOnce(user.uid, copy),
           })
           .then(async (next) => {
             if (!active) return;
@@ -720,9 +743,9 @@ export function App({ user }: { user: User }) {
       case "contacts":
         return setContacts((prev) => upsertItem(prev, change, fields));
       case "logs":
-        return setLogs((prev) => upsertItem(prev, change, fields));
+        return setLogs((prev) => upsertByTime(prev, change, fields));
       case "computer":
-        return setComputer((prev) => upsertItem(prev, change, fields));
+        return setComputer((prev) => upsertByTime(prev, change, fields));
       case "settings":
         return change.deleted ? undefined : setSettings((prev) => applyFields(prev, fields ?? (change.data as Data)));
       case "studio":
@@ -917,6 +940,8 @@ export function App({ user }: { user: User }) {
     threadsRef.current = nextThreads;
     setThreads(nextThreads);
     setComputer((prev) => prev.filter((event) => event.botId !== id));
+    // Computer events trimmed from this page are kept on the runner, so delete them there too.
+    void recordSyncRef.current?.removeWhere("computer", (data) => data.botId === id).catch(() => undefined);
     setReminders((prev) => prev.filter((item) => item.botId !== id));
     const gone = studioRef.current.files.filter((file) => file.botId === id);
     for (const file of gone) void deleteBlob(file.id);

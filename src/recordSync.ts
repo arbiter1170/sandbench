@@ -62,6 +62,12 @@ const LISTS = [
 ] as const satisfies readonly (readonly [RecordKind, keyof Snapshot])[];
 const ORDER: RecordKind[] = ["settings", "studio", "agents", "threads", "messages", "routines", "tasks", "reminders", "events", "contacts", "logs", "computer"];
 const ID = /^[A-Za-z0-9_-]{1,80}$/;
+/**
+ * Kinds the page keeps only the newest KEEP of (logs, computer events). The runner keeps them
+ * all: an item trimmed here is never a delete, and removals go through `removeWhere`.
+ */
+export const APPEND_ONLY: ReadonlySet<RecordKind> = new Set<RecordKind>(["logs", "computer"]);
+export const KEEP = 40;
 const PAGE = 1000;
 
 export const keyOf = (kind: RecordKind, id: string) => `${kind}/${id}`;
@@ -116,7 +122,8 @@ export function fromRecords(records: Iterable<LocalRecord>, base: Snapshot): Sna
     messages: (messages.get(String(thread.id)) ?? []).sort(byTime),
   })) as unknown as Thread[];
   const next = { ...base, threads, settings, studio } as unknown as Record<string, unknown>;
-  for (const [kind, field] of LISTS) next[field] = lists.get(kind) ?? [];
+  const newest = (a: Data, b: Data) => Number(b.at ?? 0) - Number(a.at ?? 0);
+  for (const [kind, field] of LISTS) next[field] = APPEND_ONLY.has(kind) ? (lists.get(kind) ?? []).sort(newest).slice(0, KEEP) : (lists.get(kind) ?? []);
   return next as unknown as Snapshot;
 }
 
@@ -168,7 +175,9 @@ export function diffRecords(synced: Map<string, LocalRecord>, next: Map<string, 
       if (Object.keys(fields).length) ops.push({ op: "patch", record, fields });
     }
   }
-  for (const [key, record] of synced) if (!next.has(key)) ops.push({ op: "delete", kind: record.kind, id: record.id });
+  for (const [key, record] of synced) {
+    if (!next.has(key) && !APPEND_ONLY.has(record.kind)) ops.push({ op: "delete", kind: record.kind, id: record.id });
+  }
   // Threads before their messages, so a fresh device never sees a message without a thread.
   const rank = (op: Op) => ORDER.indexOf(op.op === "delete" ? op.kind : op.record.kind);
   return ops.sort((a, b) => rank(a) - rank(b));
@@ -202,6 +211,11 @@ export function upsertItem<T extends { id: string }>(list: T[], change: RemoteRe
   if (known) return list.map((entry) => (entry.id !== change.id ? entry : fields ? applyFields(entry, fields) : (change.data as unknown as T)));
   // A change to an item this device deleted: the delete wins (it goes out with the next save).
   return fields ? list : [...list, change.data as unknown as T];
+}
+
+/** Apply a log or computer-event change: newest first by `at`, trimmed to the newest KEEP. */
+export function upsertByTime<T extends { id: string; at: number }>(list: T[], change: RemoteRecord, fields: Data | null = null): T[] {
+  return [...upsertItem(list, change, fields)].sort((a, b) => Number(b.at ?? 0) - Number(a.at ?? 0)).slice(0, KEEP);
 }
 
 /** Apply a thread change; the thread keeps the messages this device already has. */
@@ -356,6 +370,20 @@ export class RecordSync {
   }
 
   /**
+   * Delete every record of `kind` whose data matches, as far as the runner's copy is known.
+   * For logs and computer events this is the only way to delete (see APPEND_ONLY). Queued
+   * with the pushes; nothing is sent before `open` succeeds.
+   */
+  removeWhere(kind: RecordKind, match: (data: Data) => boolean): Promise<void> {
+    if (!this.ready) return Promise.resolve();
+    const run = this.queue.then(async () => {
+      for (const record of [...this.synced.values()]) if (record.kind === kind && match(record.data)) await this.remove(kind, record.id);
+    });
+    this.queue = run.catch(() => undefined);
+    return run;
+  }
+
+  /**
    * A snapshot taken before the page applied a change must not send it back: for records
    * changed since `revision`, use the runner's values for the fields that changed.
    */
@@ -395,6 +423,11 @@ export class RecordSync {
     const kept = toRecords(localCopy(snapshot));
     let changed = false;
     for (const key of new Set([...this.synced.keys(), ...kept.keys(), ...this.base.keys()])) {
+      // A log this device no longer keeps needs no base: a missing one is never replayed.
+      if (!kept.has(key) && APPEND_ONLY.has(key.split("/")[0] as RecordKind)) {
+        if (this.base.delete(key)) changed = true;
+        continue;
+      }
       const theirs = this.synced.get(key);
       if (!sameRecord(kept.get(key), theirs)) continue;
       const known = this.base.get(key);
