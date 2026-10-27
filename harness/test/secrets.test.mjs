@@ -69,3 +69,20 @@ test("fill resolves {{NAME}} placeholders on the server and leaves unknown ones"
   assert.equal(store.fill("Bearer {{COMPOSIO_KEY}}"), `Bearer ${FAKE}`);
   assert.equal(store.fill("{{MISSING}}"), "{{MISSING}}");
 });
+
+test("a secrets file that can't be read is never overwritten, and the last good copy is kept as .bak", () => {
+  const file = path.join(tmp, "broken.json");
+  const store = createSecretStore({ file, env: {} });
+  store.set("XAI_API_KEY", FAKE);
+  store.set("ANTHROPIC_API_KEY", FAKE);
+  assert.match(readFileSync(`${file}.bak`, "utf8"), /XAI_API_KEY/);
+  assert.equal(statSync(`${file}.bak`).mode & 0o777, 0o600);
+  // A hand edit breaks the JSON: lookups go on without file keys, but no write replaces it.
+  writeFileSync(file, '{ "secrets": { "XAI_API_KEY": { "value": "x" }, ', { mode: 0o600 });
+  assert.equal(store.get("XAI_API_KEY"), null);
+  assert.throws(() => store.set("COMPAT_API_KEY", FAKE), /can't be read/);
+  assert.throws(() => store.remove("XAI_API_KEY"), /can't be read/);
+  assert.match(readFileSync(file, "utf8"), /^\{ "secrets"/, "the broken file is left as it was");
+  writeFileSync(file, "[]", { mode: 0o600 });
+  assert.throws(() => store.set("COMPAT_API_KEY", FAKE), /not a secrets file/);
+});

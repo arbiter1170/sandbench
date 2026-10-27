@@ -7,7 +7,7 @@
 // File shape: { "secrets": { "ANTHROPIC_API_KEY": { "value": "...", "scope": "shared", "updatedAt": 0 } } }
 // Scope is "shared" (any agent and the owner's page) or an agent slug (only that agent
 // and the owner's page). An environment variable with the same name wins over the file.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 export const NAME = /^[A-Z][A-Z0-9_]{1,63}$/;
@@ -31,11 +31,25 @@ export function preview(value) {
 }
 
 export function createSecretStore({ file, env = process.env, envPrefix = "" } = {}) {
-  function readFile() {
+  /** The file's secrets. Throws if the file exists but can't be read as a secrets file. */
+  function readStrict() {
     if (!file || !existsSync(file)) return {};
+    let parsed;
     try {
-      const parsed = JSON.parse(readFileSync(file, "utf8"));
-      return parsed && typeof parsed.secrets === "object" && parsed.secrets ? parsed.secrets : {};
+      parsed = JSON.parse(readFileSync(file, "utf8"));
+    } catch {
+      throw new Error(`${path.basename(file)} can't be read; fix it or restore ${path.basename(file)}.bak before changing keys.`);
+    }
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed) || (parsed.secrets !== undefined && (typeof parsed.secrets !== "object" || !parsed.secrets))) {
+      throw new Error(`${path.basename(file)} is not a secrets file; fix it or restore ${path.basename(file)}.bak before changing keys.`);
+    }
+    return parsed.secrets ?? {};
+  }
+
+  /** Lookups go on with no file keys when the file is broken; writes refuse (readStrict). */
+  function readFile() {
+    try {
+      return readStrict();
     } catch {
       return {};
     }
@@ -44,6 +58,11 @@ export function createSecretStore({ file, env = process.env, envPrefix = "" } = 
   function writeFile(secrets) {
     if (!file) throw new Error("This store has no secrets file; set the value in the environment instead.");
     mkdirSync(path.dirname(file), { recursive: true });
+    // The previous file is kept as .bak (0600), so a bad write can be undone by hand.
+    if (existsSync(file)) {
+      copyFileSync(file, `${file}.bak`);
+      chmodSync(`${file}.bak`, 0o600);
+    }
     const tmp = `${file}.tmp`;
     writeFileSync(tmp, JSON.stringify({ secrets }, null, 2), { mode: 0o600 });
     renameSync(tmp, file);
@@ -94,7 +113,7 @@ export function createSecretStore({ file, env = process.env, envPrefix = "" } = 
       if (value.length > MAX_VALUE) throw new Error("That secret is too long.");
       if (!SCOPE.test(String(scope))) throw new Error("Scope is shared or an agent slug.");
       if (fromEnv(name)) throw new Error(`${name} is set in the server environment; change it there.`);
-      const secrets = readFile();
+      const secrets = readStrict();
       secrets[name] = { value: value.trim(), scope, updatedAt: Date.now() };
       writeFile(secrets);
       return { name, preview: preview(value.trim()), scope, source: "file", updatedAt: secrets[name].updatedAt };
@@ -102,7 +121,7 @@ export function createSecretStore({ file, env = process.env, envPrefix = "" } = 
 
     remove(name) {
       if (fromEnv(name)) throw new Error(`${name} is set in the server environment; remove it there.`);
-      const secrets = readFile();
+      const secrets = readStrict();
       if (!secrets[name]) return false;
       delete secrets[name];
       writeFile(secrets);

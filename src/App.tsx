@@ -34,7 +34,7 @@ import {
   type HarnessHealth,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
-import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, type LegacySecret, type SecretInfo } from "./secrets";
+import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
 import {
   downloadCalendar,
@@ -230,6 +230,8 @@ export function App({ user }: { user: User }) {
 
   const cloudUpdatedAtRef = useRef(0);
   const skipNextCloudPushRef = useRef(false);
+  // Keys from an older build that could not be kept on this device or the server yet (SB-05).
+  const heldKeysRef = useRef<LegacySecret[]>([]);
 
   useEffect(() => {
     let active = true;
@@ -273,23 +275,31 @@ export function App({ user }: { user: User }) {
         if (!active) return;
         // Keys saved by older builds come out of the snapshot here and wait on this device
         // only until the harness or runner can take them (SB-05).
+        // Nothing that holds a key is rewritten until the key is kept elsewhere (pending list
+        // on this device, or the server); keys that can't be kept stay in memory meanwhile.
         const local = extractLegacySecrets(bundle.snapshot);
         const found: LegacySecret[] = [...(await loadPendingSecrets().catch(() => [])), ...local.found];
+        let held = await secureLegacySecrets(found, savePendingSecrets);
         let snapshot = local.snapshot;
         let updatedAt = bundle.updatedAt;
         try {
           const pulled = await pullCloudSnapshot(user.uid);
           const cloudClean = pulled ? extractLegacySecrets(pulled.snapshot) : null;
-          if (cloudClean) found.push(...cloudClean.found);
+          if (cloudClean?.found.length) {
+            found.push(...cloudClean.found);
+            held = await secureLegacySecrets(found, savePendingSecrets);
+          }
           const cloud = pulled && cloudClean ? { ...pulled, snapshot: cloudClean.snapshot } : null;
           const picked = pickSyncWinner(local.snapshot, bundle.updatedAt, cloud);
           snapshot = picked.snapshot;
           updatedAt = picked.updatedAt;
           cloudUpdatedAtRef.current = picked.updatedAt;
-          // A cloud copy that still held keys is rewritten without them right away.
-          const scrubCloud = Boolean(cloudClean?.found.length);
+          // A cloud copy that still held keys is rewritten without them right away, once the
+          // keys are kept elsewhere. Until then the cloud copy is not written at all.
+          const keysSafe = held.length === 0;
+          const scrubCloud = keysSafe && Boolean(cloudClean?.found.length);
           skipNextCloudPushRef.current = !picked.pushLocal && !scrubCloud;
-          if (picked.pushLocal || scrubCloud) {
+          if (keysSafe && (picked.pushLocal || scrubCloud)) {
             await pushCloudSnapshot(user.uid, snapshot, updatedAt || Date.now());
             cloudUpdatedAtRef.current = updatedAt || Date.now();
           } else if (cloud && cloud.updatedAt > bundle.updatedAt) {
@@ -298,10 +308,9 @@ export function App({ user }: { user: User }) {
         } catch {
           // Offline or rules not deployed yet — continue with local data.
         }
+        heldKeysRef.current = held;
         if (found.length) {
-          const unique = [...new Map(found.map((item) => [item.name, item])).values()];
-          await savePendingSecrets(unique).catch(() => undefined);
-          await saveSnapshot(snapshot, updatedAt || Date.now()).catch(() => undefined);
+          if (!held.length) await saveSnapshot(snapshot, updatedAt || Date.now()).catch(() => undefined);
           void flushPendingSecrets();
         }
         applySnapshot(snapshot);
@@ -330,6 +339,8 @@ export function App({ user }: { user: User }) {
       void saveSnapshot(snapshot)
         .then(async (updatedAt) => {
           cloudUpdatedAtRef.current = updatedAt;
+          // Keys found in the cloud copy that are kept nowhere else yet: leave that copy alone.
+          if (heldKeysRef.current.length) return;
           if (skipNextCloudPushRef.current) {
             skipNextCloudPushRef.current = false;
             return;
@@ -619,10 +630,16 @@ export function App({ user }: { user: User }) {
 
   /** Move keys left by an older build into the harness or runner, then forget them here. */
   async function flushPendingSecrets() {
-    const pending = await loadPendingSecrets().catch(() => [] as LegacySecret[]);
+    const saved = await loadPendingSecrets().catch(() => [] as LegacySecret[]);
+    const pending = [...new Map([...saved, ...heldKeysRef.current].map((item) => [item.name, item])).values()];
     if (pending.length === 0) return;
     const left = await moveLegacySecrets(pending);
-    await savePendingSecrets(left).catch(() => undefined);
+    try {
+      await savePendingSecrets(left);
+      heldKeysRef.current = [];
+    } catch {
+      heldKeysRef.current = left;
+    }
     if (left.length < pending.length) {
       setLogs((prev) => [{ id: crypto.randomUUID(), message: translate(settingsRef.current.locale, "keysMoved"), at: Date.now() }, ...prev].slice(0, 40));
       void refreshKeys();
