@@ -29,7 +29,24 @@ phone / browser ──https──> Tailscale Funnel (laptop)  or  Cloudflare Acc
 
 `/api/health`, `/api/drivers`, `/api/turns`, `/api/turns/:id/interrupt`, `/api/permissions/:id`, `/api/events`, `/api/workspace/read`, `/api/workspace/write`, `/api/exec`, plus `/api/secrets` and `/api/model` (see API keys) and the SB-02 record routes (see Records). The first nine are ported from `harness/server.mjs` and use the same driver and turn code (`harness/drivers`, `harness/turns.mjs`). Commands run in bash inside `/srv/sandbench/workspace`, still with the 30-second limit; SB-04 adds long jobs.
 
-Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills, memory, schedules, triggers and MCP move to the runner in SB-08, SB-14, SB-15 and SB-22.
+Screen capture, input, the process list and text-to-speech stay in the local harness, because the VM has no desktop. Skills and memory moved to the runner in SB-08 (see below); schedules, triggers and MCP move in SB-14, SB-15 and SB-22.
+
+## Agent profile, skills and memory (SB-08)
+
+- **Profile:** an agent record's `data` can carry `slug`, `title`, `description`, `capabilities` (`notify_owner`, `launch_build`, `merge`, `email`), `model`, `driver`, `max_steps`, `budget_usd_day` and `workspace` (all optional; see `Bot` in `src/types.ts`). No column changes: it is the same JSON row.
+- **Memory:** `memory_items` in Postgres (`runner/db/migrations/002_memory.sql`), scoped to the signed-in account and keyed by the agent's record id. `profile` items go into every prompt; `journal` items are found with full-text search (English stemming, so "width" finds "widths"). Items are limited to 16 KB each; nothing prunes the table yet.
+  - `GET /api/memory/:agent?q=...&kind=...` searches, or lists newest first without `q`.
+  - `POST /api/memory/:agent` with `{kind, text}` saves one item.
+  - `POST /api/memory/:agent/import` with `{files: [{path, content}]}` imports harness-style memory files.
+- **Skills:** with `SANDBENCH_TEAM_DIR` set to a checkout of the private team repo, `GET /api/skills` lists `.claude/skills/*/SKILL.md` (name and description from the front matter) and `GET /api/skills/:name` returns one. Both read the files on every call, so editing a skill changes the next turn without a redeploy. Only plain folders count: `..`, nested paths and symlinked skills are refused.
+- **Prompt:** `GET /api/agents/:id/prompt` shows the system prompt a turn would get now: the profile description (or the old instructions), the team `AGENTS.md`, the skills index, every profile memory item and the 8 newest journal entries. The turn engine (SB-03) will use the same builder (`runner/agent/prompt.mjs`); the inbox summary waits for SB-07.
+- **Old file memory:** the harness's `/bots/:id/memory` files are now only a source for a one-time import, which is safe to run again (each paragraph is saved once). Postgres publishes no port, so run it inside the runner:
+  ```bash
+  docker compose -f deploy/compose.yml cp ~/.sandbench/bots runner:/srv/sandbench/import-bots
+  docker compose -f deploy/compose.yml exec runner node scripts/memory-import.mjs /srv/sandbench/import-bots
+  ```
+  Only bots that already exist as agent records on the runner are imported. Add `--owner <uid>` if more than one account has agents.
+- **Backup:** `docker compose ... exec runner node scripts/memory-backup.mjs /srv/sandbench/shared/repos/team/memory-backup` writes `memory.jsonl` and `profile.md` per agent; commit them in the team repo. Running it nightly is SB-14.
 
 ## Records (SB-02)
 
@@ -119,6 +136,6 @@ VITE_RUNNER_URL=/api npm run dev                               # the Vite proxy 
 ## Tests
 
 - `npm run test:node` runs `runner/test/*.test.mjs`, which needs no network and no dependencies. It covers the 401/403 rules, the Origin check, workspace path limits, exec approval and static-file path limits.
-- `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped.
+- `runner/test/data.test.mjs` runs the SB-02 datastore against a real Postgres. Set `TEST_DATABASE_URL` to a database whose name ends in `_test`, because its schema is wiped; without it, the test is skipped. CI runs it in the `Typecheck, test, build` job with a Postgres 17 service, and fails if it was skipped. `runner/test/memory.test.mjs` (SB-08 memory, import, prompt and backup) works the same way in its own schema, and CI fails if it was skipped too. `runner/test/skills.test.mjs` needs no database.
 - `runner/test/emulator.test.mjs` checks real Firebase ID tokens against the Auth emulator (`demo-sandbench`). CI runs it in the `runner-auth` job.
 - The CI `runner-image` job checks that `deploy/compose.yml` is valid and publishes no ports. It also builds the image, starts it, and checks that `/healthz` answers, `/api/health` returns 401 and the page is served.

@@ -145,7 +145,21 @@ export type Bot = {
   approvalMode?: ApprovalMode;
   visibility?: BotVisibility;
   usage?: BotUsage;
+  /**
+   * SB-08 agent profile, read by the runner from the agent record (runner/agent/prompt.mjs).
+   * All optional so older saves load. `model` and `driver` above are part of it too.
+   */
+  slug?: string;
+  title?: string;
+  description?: string;
+  capabilities?: AgentCapability[];
+  max_steps?: number;
+  budget_usd_day?: number;
+  workspace?: string;
 };
+
+/** What an agent may do beyond its own work (SB-08; enforced by the policy layer, SB-06). */
+export type AgentCapability = "notify_owner" | "launch_build" | "merge" | "email";
 
 export type BotFile = {
   id: string;

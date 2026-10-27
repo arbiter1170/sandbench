@@ -35,6 +35,9 @@ services:
       DECISION_API_KEY: ${DECISION_API_KEY:-}
       ELEVENLABS_API_KEY: ${ELEVENLABS_API_KEY:-}
       FISH_API_KEY: ${FISH_API_KEY:-}
+      # SB-08: a checkout of the private team repo inside the data volume, for AGENTS.md and
+      # .claude/skills (for example /srv/sandbench/shared/repos/team). Empty: no team skills.
+      SANDBENCH_TEAM_DIR: ${SANDBENCH_TEAM_DIR:-}
       # Used from SB-02 on.
       DATABASE_URL: postgres://sandbench:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD}@postgres:5432/sandbench
     volumes:
