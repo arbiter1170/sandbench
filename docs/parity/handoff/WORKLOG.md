@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 5 · 2026-10-28 · SB-29 simplified for a single user (PR #16) · done
+- **Branch / PR / head sha:** `sb-isolation-decision` · https://github.com/arbiter1170/sandbench/pull/16 · on top of the Session 4 merge commit
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** Vincent is the only user, and chose to drop the per-agent Linux users from SB-29. The sandbox container stays: no keys, no secrets file, no route to Postgres, model calls through `/api/model`. Updated `docs/runner.md` (points 2, 6, 8 and the diagram), the SB-29 item in `PLAN.md` (title, change, size 3 d to 2 d, acceptance, live check, log line), the brief (question 8, the SB-04 line, SB-29 size) and `STATUS.md`.
+- **Tests run (real results):** none needed (docs only).
+- **Not run / could not run:** none.
+- **Decisions made and why:** per-agent users dropped. The risk with one human user is a tricked agent reaching keys, the DB or other services, which the container already blocks. Agents reading each other's folders is accepted, with per-agent users as a follow-up if a second person joins.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** Vincent merges #16.
+
 ### Session 4 · 2026-10-28 · isolation decision (docs only, PR #16) · done (merged deploy/vercel to clear conflicts; renumbered from Session 2)
 - **Branch / PR / head sha:** `sb-isolation-decision` · https://github.com/arbiter1170/sandbench/pull/16 · docs-only commit on top of `d6b4b27`
 - **Checks on the head:** pending at the time of writing.

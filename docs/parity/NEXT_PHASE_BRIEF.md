@@ -144,7 +144,7 @@ is where SB-09, SB-08 and SB-13 become tools an agent can call).
 | SB-10 | SB-03; SB-29 for tools that act | SB-09, SB-08, SB-13 (wrapped as tools) | SB-11; agents can use SB-09, SB-08, SB-13 | 2 | M |
 | SB-06 core | SB-03, SB-05 | SB-04 (`job.exec`), SB-10 (handlers) | SB-11; any real agent use of shell, git or GitHub | 3 | M |
 | SB-11 core | SB-05, SB-06, SB-10 | SB-09 (clone folders) | SB-12; Design committing to its repo | 2 | M |
-| SB-29 | SB-09 | SB-10 (per-turn token for `/api/model`) | SB-04; SB-10 tools that run a shell, write or run git | 3 | M |
+| SB-29 | SB-09 | SB-10 (per-turn token for `/api/model`) | SB-04; SB-10 tools that run a shell, write or run git | 3 | S/M |
 | SB-12 | SB-04, SB-09, SB-11 | SB-08 (team `AGENTS.md`, skills), SB-06 (`launch_build`) | Phase 3 done | 1 | L |
 | SB-15a | SB-02, SB-08 (and SB-14, see below) | SB-09 | QA and the team in Sandbox; Phase 1 and Phase 3 acceptance | 4 | M (QA slice S) |
 
@@ -329,8 +329,7 @@ read another's jobs); approvals survive a restart.
 - Tool handlers `job_start`, `job_status`, `job_tail`, `job_cancel` in `runner/worker/tools.mjs`
   (SB-10 loads them). When a job ends it **wakes the agent that owns it** by queueing an
   `agent.turn` ("Job N finished"). This does not use SB-07.
-- Where jobs run is open question 4, now answered: in the SB-29 `sandbox` service, as the owning
-  agent's uid. SB-04 does not merge before SB-29.
+- Where jobs run is open question 4, now answered: in the SB-29 `sandbox` service. SB-04 does not merge before SB-29.
 
 **Out:** the jobs page and live log UI (SB-19), agent-to-agent wake-ups (SB-07), schedules.
 
@@ -594,8 +593,8 @@ says otherwise. **Blocks start** means it should be answered before the wave nam
 
 8. **Agent isolation, blocks SB-04 and SB-10's acting tools. Answered 2026-10-27.** The SB-09 path
    rules only cover the runner's routes; a shell or engine process runs as the runner's user with
-   its keys and `DATABASE_URL`. **Decision: a `sandbox` compose service with one Linux user per
-   agent**, no keys, no secrets file and no route to Postgres, with model calls through the runner's
+   its keys and `DATABASE_URL`. **Decision: one `sandbox` compose service, run as one non-root
+   user** (simplified 2026-10-28: one human user, so no per-agent users), no keys, no secrets file and no route to Postgres, with model calls through the runner's
    `/api/model`. It replaces the `jobs` service in question 4. Built as SB-29 (Track 3); the design
    is in `docs/runner.md`, "Agent isolation (decided, SB-29)".
 

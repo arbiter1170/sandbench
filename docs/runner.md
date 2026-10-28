@@ -95,12 +95,12 @@ The runner image is built on `mcr.microsoft.com/playwright:v1.64.1-noble`, which
 
 **Why.** Today every shell (`runner/shell.mjs`) and every engine process (`harness/drivers/*.mjs`) runs as the one `node` user in the runner container and inherits its whole environment. Once agents can run commands, an agent could read another agent's folder, read the model keys from its environment or the secrets file, and use `DATABASE_URL` to read every account's rows in Postgres. The SB-09 path rules cannot stop that, because they only cover the runner's own routes.
 
-**Decision (2026-10-27).** One `sandbox` compose service, with one Linux user per agent inside it. It takes the place of the `jobs` service that SB-04 planned (brief, open question 4), so the laptop runs one extra container, not one per agent.
+**Decision (2026-10-27, simplified 2026-10-28 for a single user).** One `sandbox` compose service, run as one non-root user. It takes the place of the `jobs` service that SB-04 planned (brief, open question 4), so the laptop runs one extra container, not one per agent.
 
 ```
             edge network                 sandbox network (no Postgres)
 phone ──> runner:8080 ── control API ──> sandbox
-            │  keys, secrets file           │  uid per agent, no keys, no DB
+            │  keys, secrets file           │  one non-root user, no keys, no DB
             │  /api/model adds the key <────┘  engines call the model through the runner
          internal network
             │
@@ -108,13 +108,13 @@ phone ──> runner:8080 ── control API ──> sandbox
 ```
 
 1. **Where things run.** Every agent shell, detached job and engine process (Claude Code, Codex, Grok CLI) runs in `sandbox`, never in `runner`. The page's own owner-context calls stay in `runner` as today.
-2. **One user per agent.** Each agent slug maps to a fixed uid (from 10001 up), chosen by the runner, never from a request. `agents/<slug>/` and `wt/<slug>/` belong to that uid with mode 0700. `shared/` is readable by all agents; only `shared/handoff/` is writable by them. `workspace/` is not mounted in the sandbox.
+2. **One user for all agents.** Everything in the sandbox runs as one non-root user. `agents/`, `wt/` and `shared/` are mounted; `workspace/` is not. Agents are not separated from each other inside it. Sandbench has one human user, so the risk is an agent tricked by something it reads (a web page, a GitHub comment) reaching the keys, the database or other services, not one person reaching another's data. Points 3 and 4 cover that.
 3. **No secrets in the sandbox.** No API keys in its environment, the secrets file and the Postgres volume are not mounted, and it is not on the `internal` network, so Postgres can't be reached. A spawned process gets an environment built from an allowlist, not a copy of the parent's.
 4. **Model calls go through the runner.** Engines point at the runner's `/api/model` (`harness/modelProxy.mjs`), for example with `ANTHROPIC_BASE_URL`, and carry the per-turn token from SB-10. The runner adds the real key. GitHub access comes with SB-11's App tokens, scoped per call.
 5. **Control channel.** The runner asks the sandbox to spawn, kill and tail processes over a small authenticated HTTP API on a private compose network. The runner never gets the Docker socket, because that is root on the laptop.
-6. **Hardening.** The sandbox process starts as root only to drop into the agent's uid for each spawn (`setpriv --reuid --regid --clear-groups --no-new-privs`). The container runs with `cap_drop: ALL` plus `SETUID`, `SETGID`, `CHOWN` and `KILL`, `no-new-privileges`, and pids and memory limits. Each spawn gets its own process group, which SB-04 needs anyway.
+6. **Hardening.** The container runs as a non-root user with `cap_drop: ALL`, `no-new-privileges`, and pids and memory limits. Each spawn gets its own process group, which SB-04 needs anyway.
 7. **Network out** stays open for git, npm and GitHub. Narrowing it is a follow-up.
-8. **Accepted limits.** Agents share the kernel of the laptop's Docker VM, so this is not a VM boundary. Agents can see each other's process list until `/proc` is mounted with `hidepid` (follow-up). One agent can still use up shared CPU within the limits.
+8. **Accepted limits.** Agents can read and write each other's folders and worktrees through a shell; SB-09's path rules and SB-06's cards still cover the runner's own routes. If a second person or an untrusted agent ever joins, add one Linux user per agent (follow-up). Agents share the kernel of the laptop's Docker VM, so this is not a VM boundary. Agents can see each other's process list until `/proc` is mounted with `hidepid` (follow-up). One agent can still use up shared CPU within the limits.
 9. **Gate.** SB-10 may ship its read-only tools before SB-29. Any tool that runs a shell, writes files or runs git, SB-04's `job_start`, and the engine's own shell tool in runner mode do not merge until SB-29 has merged. SB-06's policy checks stay on top: isolation limits what a command can reach, the policy decides whether it runs at all.
 
 ## Records (SB-02)
