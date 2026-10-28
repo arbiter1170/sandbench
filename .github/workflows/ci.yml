@@ -46,12 +46,17 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:web
       - run: npm ci --prefix runner --no-audit --no-fund
+      - name: Chromium for the screenshot tests (SB-13)
+        working-directory: runner
+        run: npx playwright install --with-deps chromium
       - run: npm run test:node
       - name: The datastore tests ran (not skipped)
         run: |
           set -o pipefail
           node --test runner/test/data.test.mjs 2>&1 | tee /tmp/data.log
           grep -q "^# skipped 0" /tmp/data.log
+          node --test runner/test/memory.test.mjs 2>&1 | tee /tmp/memory.log
+          grep -q "^# skipped 0" /tmp/memory.log
       - run: npm run build
       - name: No API keys in the page bundle
         run: |
@@ -111,7 +116,10 @@ jobs:
             echo "::error::deploy/compose.yml must not publish ports; the tunnel is the only way in."
             exit 1
           fi
-      - run: docker build -f runner/Dockerfile -t sandbench-runner:ci .
+      - run: |
+          docker build -f runner/Dockerfile -t sandbench-runner:ci .
+          docker image ls sandbench-runner:ci
+          docker run --rm --entrypoint node sandbench-runner:ci -v
       - name: Image starts, serves the UI, and /api needs a token
         run: |
           docker run -d --name runner -p 127.0.0.1:8080:8080 \

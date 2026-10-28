@@ -33,7 +33,7 @@ before(async () => {
   const { createRunner } = await import("../api/server.mjs");
   sql = postgres(URL_, { max: 5, onnotice: () => {} });
   await sql.unsafe("drop schema public cascade; create schema public;");
-  assert.deepEqual(await migrate(sql), ["001_init.sql"]);
+  assert.deepEqual(await migrate(sql), ["001_init.sql", "002_memory.sql"]);
   store = createStore(sql);
   tmp = mkdtempSync(path.join(os.tmpdir(), "sb-data-"));
   server = createRunner({

@@ -99,7 +99,7 @@ using an API key, spending money). Real-key and real-GitHub behaviour is "pendin
 
 ## T01 · SB-09 per-agent workspaces and git worktrees
 
-- [ ] **Merged** · Size **M** · Depends: none · Independent: yes · Branch `sb-09-workspaces`
+- [x] **Merged** · Size **M** · Depends: none · Independent: yes · Branch `sb-09-workspaces`
 - PR title: `SB-09: per-agent workspace paths and git worktrees`
 
 **Touch (create):** `runner/workspace/paths.mjs`, `runner/workspace/worktrees.mjs`, `runner/workspace/index.mjs`,
