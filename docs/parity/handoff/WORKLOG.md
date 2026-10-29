@@ -26,6 +26,33 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 5 · 2026-10-28 · SB-29 simplified for a single user (PR #16) · done
+- **Branch / PR / head sha:** `sb-isolation-decision` · https://github.com/arbiter1170/sandbench/pull/16 · on top of the Session 4 merge commit
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** Vincent is the only user, and chose to drop the per-agent Linux users from SB-29. The sandbox container stays: no keys, no secrets file, no route to Postgres, model calls through `/api/model`. Updated `docs/runner.md` (points 2, 6, 8 and the diagram), the SB-29 item in `PLAN.md` (title, change, size 3 d to 2 d, acceptance, live check, log line), the brief (question 8, the SB-04 line, SB-29 size) and `STATUS.md`.
+- **Tests run (real results):** none needed (docs only).
+- **Not run / could not run:** none.
+- **Decisions made and why:** per-agent users dropped. The risk with one human user is a tricked agent reaching keys, the DB or other services, which the container already blocks. Agents reading each other's folders is accepted, with per-agent users as a follow-up if a second person joins.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** Vincent merges #16.
+
+### Session 4 · 2026-10-28 · isolation decision (docs only, PR #16) · done (merged deploy/vercel to clear conflicts; renumbered from Session 2)
+- **Branch / PR / head sha:** `sb-isolation-decision` · https://github.com/arbiter1170/sandbench/pull/16 · docs-only commit on top of `d6b4b27`
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - Recorded the agent-isolation decision Vincent picked: a `sandbox` compose service with one Linux user per agent, no keys, no secrets file, no route to Postgres; model calls through `/api/model`. It replaces SB-04's planned `jobs` service.
+  - `docs/runner.md`: new section "Agent isolation (decided, SB-29)"; the "not a sandbox" bullet points to it.
+  - `docs/parity/PLAN.md`: new item SB-29 (unticked) with acceptance; SB-04 depends on it; SB-10's acting tools wait for it; one Progress log line.
+  - `docs/parity/NEXT_PHASE_BRIEF.md`: open question 4 answered, new open question 8 (answered), SB-29 in the scope, dependency and track tables (Track 3), gate lines in SB-04 and SB-10. The brief's Rules section is untouched.
+  - This entry and `STATUS.md`.
+- **Tests run (real results):** none needed (docs only). Secret scan runs in CI.
+- **Not run / could not run:** gitleaks locally (not installed here).
+- **Decisions made and why:** a shared sandbox service with a uid per agent over a container per agent (lighter on the laptop, no Docker socket for the runner) and over uids inside the runner container (that would leave agents on the Postgres network and next to the secrets volume).
+- **Deviations from the plan:** none; docs only.
+- **Open questions for Vincent or the Supervisor:** none new. Docker Desktop on Windows still needs a WSL distribution (`wsl --install -d Ubuntu`, then restart Docker Desktop).
+- **Next step:** Vincent reviews and merges this docs PR; SB-29 is built in Track 3 alongside SB-06 core.
+
 ### Session 3 · 2026-10-26 22:55 ET · T03 SB-13 · done
 - **Branch / PR / head sha:** `sb-13-browser-emulator` · https://github.com/arbiter1170/sandbench/pull/17 · code head `060b5d0` (final head after the log commit is in the session summary)
 - **Checks on the head:** on `060b5d0`, all 4 required checks pass: Typecheck, test, build (1m38s); Secret scan; Runner sign-in checks (Auth emulator); Runner image and compose file (1m36s).
