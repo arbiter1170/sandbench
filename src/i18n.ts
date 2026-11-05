@@ -84,7 +84,7 @@ const en = {
   lockedLead: "This browser is locked.",
   aboutBody:
     "Sandbench is an unofficial clean-room demo of capabilities observed in the iOS app. It does not contain that app’s code, artwork, or accounts. Widgets, HomeKit, Live Activities, and background calls still need a native iOS build on a Mac.",
-  mapNote: "The comparison below is in English so the capability names stay exact. It is a fixed table written by hand: it does not check what is installed or running on this computer. \"Needs\" says what must be running for a row to work: this page alone, the local harness, or the harness or the Docker runner.",
+  mapNote: "The comparison below is in English so the capability names stay exact. It is a fixed table written by hand: it does not check what is installed or running on this computer. \"Needs\" says what must be running for everything in a row to work; the row's text says what works with less. The local harness is reached through the local dev page (npm run dev), not the hosted site. \"Native app\" has no web version, and \"—\" means there is nothing to run.",
   needs: "Needs",
   observed: "Observed on iOS",
   webHere: "In this demo",

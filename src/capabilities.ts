@@ -1,10 +1,11 @@
 export type CapabilityState = "working" | "partial" | "preview" | "nativeOnly" | "omitted";
 
 /**
- * Where a row works, written by hand like the rest of this table (nothing here is detected at
- * runtime). `browser`: the signed-in page alone. `harness`: also needs the local harness on this
- * computer (`npm run harness`). `harnessOrRunner`: the local harness or the Docker runner.
- * `native`: the iOS app only. `none`: not built.
+ * What must be running for everything in a row to work, written by hand like the rest of this
+ * table (nothing here is detected at runtime). The row's text says what works with less.
+ * `browser`: the signed-in page alone. `harness`: also needs the local harness on this computer
+ * (`npm run harness`). `harnessOrRunner`: the local harness or the Docker runner. `native`: a
+ * native app only. `none`: nothing to run here.
  */
 export type CapabilityNeeds = "browser" | "harness" | "harnessOrRunner" | "native" | "none";
 
@@ -13,8 +14,8 @@ export type Capability = {
   web: string;
   state: CapabilityState;
   needs: CapabilityNeeds;
-  /** Needs a model API key, or a signed-in local CLI for the CLI drivers. */
-  key?: true;
+  /** `true`: needs a model API key. `"orCli"`: a model API key or a signed-in local CLI. */
+  key?: true | "orCli";
 };
 
 const NEEDS_LABEL: Record<CapabilityNeeds, string> = {
@@ -26,15 +27,16 @@ const NEEDS_LABEL: Record<CapabilityNeeds, string> = {
 };
 
 export function needsLabel(item: Capability): string {
+  if (item.key === "orCli") return `${NEEDS_LABEL[item.needs]} + model key or signed-in CLI`;
   return item.key ? `${NEEDS_LABEL[item.needs]} + model key` : NEEDS_LABEL[item.needs];
 }
 
 export const CAPABILITIES: Capability[] = [
   {
     observed: "Bot teammates",
-    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. Bots read the memories you write (and, with the local harness, the MEMORY.md you edit on the Customize tab) on every turn; they do not save new memories themselves yet",
+    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key, replies are local stand-ins. Bots do not save new memories themselves yet",
     state: "working",
-    needs: "browser",
+    needs: "harness",
   },
   {
     observed: "Appearance and voice",
@@ -50,7 +52,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Computer use (local exec daemon, window capture)",
-    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply",
+    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply. On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness",
     state: "partial",
     needs: "harness",
   },
@@ -59,7 +61,7 @@ export const CAPABILITIES: Capability[] = [
     web: "Five drivers: Anthropic (API), OpenAI-compatible tools, Claude Code (local CLI), Codex (local CLI), and Grok (local CLI). A CLI driver needs that CLI installed and signed in on the harness computer; the runner image ships none, so only the two API drivers can work there. The API drivers are listed as available before a key is stored and fail on the first turn without one. Commands use the same approval cards and auto-review rules as other turns. Driver turns do not get the bot's connectors yet, and a turn cut off by a harness restart is not resumed",
     state: "partial",
     needs: "harnessOrRunner",
-    key: true,
+    key: "orCli",
   },
   {
     observed: "Auto-review rules and approvals",
@@ -94,13 +96,13 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Test stack profiles",
-    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher",
+    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher. Choosing a profile works in the page; its key and driver hints come from the local harness or the runner, and without one a profile can show as ready when it is not",
     state: "working",
-    needs: "browser",
+    needs: "harnessOrRunner",
   },
   {
     observed: "Grok Bot migration",
-    web: "Import sandbench-migration.json (from Team → Import migration pack, or node scripts/import-grok-desktop.mjs on Windows) to bring bots, memories, chats, paused routines and webhooks, and connector slots without xAI. The Windows script is lossy: each bot's description becomes its only memory, chats are dealt out to bots in turn rather than matched to their bot, every routine gets a placeholder schedule (weekdays at 9:00), and it keeps at most 40 chats and 40 routines",
+    web: "Import sandbench-migration.json (from Team → Import migration pack, or node scripts/import-grok-desktop.mjs on Windows) to bring bots, memories, chats, paused routines and webhooks, and connector slots without xAI. The Windows script is lossy: each bot's description becomes its only memory, chats are dealt out to bots in turn rather than matched to their bot, every routine gets a placeholder schedule (weekdays at 9:00), it keeps at most 40 chats and 40 routines, and it writes no connectors or webhooks",
     state: "partial",
     needs: "browser",
   },
@@ -118,9 +120,9 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Tasks, routines, and reminders",
-    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. The runner does not run routines. Bots set reminders from chat. Each bot keeps a task list",
+    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Webhooks and recent runs need the local harness. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. A runner build does not run routines, even with a tab open. Bots set reminders from chat. Each bot keeps a task list",
     state: "partial",
-    needs: "browser",
+    needs: "harness",
   },
   {
     observed: "Billing and top-up",
@@ -136,9 +138,10 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Chat with markdown and code",
-    web: "Local threads, streaming replies, fenced code, and an optional API key you supply",
+    web: "Local threads, fenced code, and stand-in replies work in the page alone. Real streaming replies need a model key held by the local harness or the runner",
     state: "working",
-    needs: "browser",
+    needs: "harnessOrRunner",
+    key: true,
   },
   {
     observed: "Camera and photo library",

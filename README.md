@@ -78,7 +78,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A dark three-column workspace: bots on the left, the conversation in the middle, and computer usage, skills, and routines on the right
 - A model picker in the top right
 - First-run onboarding that builds a team from templates
-- Teammates you create, with instructions, persona, skills, plugins, connectors, memories, and a file library. Bots read their memories (and `MEMORY.md` through the harness) on every turn; they do not save new memories themselves yet
+- Teammates you create, with instructions, persona, skills, plugins, connectors, memories, and a file library. With a model key, bots read the memories you write. `MEMORY.md` (through the harness) reaches agent-driver turns, and planner replies only when the decision step fails. Bots do not save new memories themselves yet
 - Appearance (color, shape, or an uploaded photo) and a browser voice preview
 - A thinking trace per turn, and with the harness running: live CPU, memory, busiest processes, and a live view of the screen. "Share a window" uses the browser's screen picker instead
 - Approval cards: a bot proposes a command, a click or keystroke, a workspace file write or delete (with the new text or a diff), or an MCP tool call. You approve or deny, the result comes back, and the bot either answers or asks for the next step. With an API key, the model chooses that action. Without one, a local match does, including a chain written with "and then"
@@ -94,7 +94,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A saved draft for each bot and group chat
 - Mermaid diagrams in replies
 - Call mode: speak, the bot answers in its own voice, and it listens again. Use Chrome or Edge on `http://127.0.0.1:5173` or `http://localhost:5173`; the first Call may prompt for the microphone—allow it for that origin. Agent drivers and test-stack profiles stay in the same loop. Read replies aloud and mute are set for each bot
-- Triggers: schedules and webhooks per bot, created in the side panel or from chat ("every weekday at 9:00, check the build"). A card in chat lets you edit, pause, or undo it, and Recent runs lists what ran or was skipped. While the local harness is running, schedules and webhook deliveries queue with the browser closed; open the page again and the bot runs the turns it missed. A Windows balloon says a routine is waiting. Nothing runs until a Sandbench tab is open; without the harness, schedules are only checked while the tab is open, and the runner does not run routines.
+- Triggers: schedules and webhooks per bot, created in the side panel or from chat ("every weekday at 9:00, check the build"). A card in chat lets you edit, pause, or undo it, and Recent runs lists what ran or was skipped. While the local harness is running, schedules and webhook deliveries queue with the browser closed; open the page again and the bot runs the turns it missed. A Windows balloon says a routine is waiting. Nothing runs until a Sandbench tab is open; without the harness, schedules are only checked while the tab is open. A runner build does not run routines, even with a tab open. Webhooks and Recent runs need the local harness.
 - A handoff that sends a note from one teammate to another
 - Conversations stored in IndexedDB, with streaming replies
 - Markdown, fenced code, and keyword coloring
@@ -110,7 +110,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A widget-shaped preview of the latest text
 - Optional model calls: put your own API key in Settings
 
-With no key, replies are a local stand-in and stay on this machine. With a key, leave the base URL empty and keep “Use the dev proxy for api.x.ai” on. The dev server forwards `/api-proxy` to `https://api.x.ai` so the browser is not blocked by CORS. Keys are kept by the local harness or the runner (see above), never in the page.
+With no key, replies are a local stand-in and stay on this machine. With a key, model calls go through the local harness or the runner (see above), which hold the key. It never reaches the page.
 
 ## Still native-only or not built
 

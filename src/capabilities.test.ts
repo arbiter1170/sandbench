@@ -51,6 +51,8 @@ describe("capability map", () => {
     }
     expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Model per bot")!)).toBe("Local harness or runner + model key");
     expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Connectors and custom MCP")!)).toBe("Local harness");
+    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Agent drivers")!)).toBe("Local harness or runner + model key or signed-in CLI");
+    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Chat with markdown and code")!)).toBe("Local harness or runner + model key");
   });
 
   it("does not call sign-in omitted", () => {
