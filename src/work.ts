@@ -774,7 +774,7 @@ export function decisionPrompt(input: {
     input.bot.memories.length ? `Memories:\n${input.bot.memories.map((item) => `- ${item}`).join("\n")}` : "",
     input.library.length ? `Files:\n${input.library.map((file) => `## ${file.name}\n${file.text.slice(0, 2000)}`).join("\n\n")}` : "",
     tools.length ? `Connector tools:\n${tools.join("\n")}` : "No connector tools are available.",
-    `PowerShell may run in the workspace after the user approves. These first words can run without a prompt when the command has no pipes or redirects: ${input.allow.join(", ") || "(none)"}.`,
+    `PowerShell may run in the workspace after the user approves. These auto-review rules let a command run without a prompt only when it matches a rule exactly, or a rule covers its start and the whole command is known to be read-only: ${input.allow.join(", ") || "(none)"}.`,
     "Pointer actions (click, type, key) always wait for approval. Propose a click only when the user gave pixel coordinates. Do not invent a point.",
     "File changes stay inside the workspace folder, use a relative path, and wait for approval. Ask the person a question when the request leaves a real choice open.",
     done ? `Already finished this turn:\n${done}` : "Nothing has run yet for this request.",

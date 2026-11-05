@@ -34,7 +34,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Auto-review rules and approvals",
-    web: "Rules are exact commands, or a command name that then covers only built-in read-only uses (git status, not git push). Chained, piped, redirected, quoted or expanded commands always ask. The same check gates planner and agent-driver turns. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
+    web: "Rules are exact commands, or a command name that then covers only built-in read-only uses (git status, not git push). Chained, piped, redirected, quoted or expanded commands always ask. The same check gates planner turns, Claude Code's shell commands and the API drivers' commands; Codex and Grok requests always ask. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
     state: "working",
   },
   {

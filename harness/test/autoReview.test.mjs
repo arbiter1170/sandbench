@@ -23,7 +23,7 @@ test("the default rules still cover the harmless commands they were meant for", 
 
 test("a command-name rule does not cover subcommands that change things", () => {
   const rules = ["git", "npm", "Remove-Item", "node", "docker"];
-  for (const command of ["git status", "git status --porcelain", "git log -n 5 --oneline", "git diff HEAD", "git branch", "git branch -a", "git tag -l", "git remote -v"]) {
+  for (const command of ["git status", "git status --porcelain", "git log -n 5 --oneline", "git diff HEAD", "git branch", "git branch -a", "git tag -l", "git remote"]) {
     assert.equal(auto(command, rules), true, command);
   }
   for (const command of [
@@ -70,7 +70,8 @@ test("git options that run programs, write files or switch repositories always a
 });
 
 test("git expands abbreviated options and clustered flags, so those spellings of a risky option ask too", () => {
-  // Each of these ran a program or wrote a file on real git 2.52 under only a `git` rule.
+  // `--open` and `-iO` ran a program on real git 2.52 under only a `git` rule. The rest are
+  // spellings of the same risky options; `--text` is harmless but errs on the side of a card.
   for (const command of [
     "git grep --open=evil x",
     "git grep --open-files=evil x",
@@ -111,6 +112,143 @@ test("a sensitive path still asks when it is attached to a parameter name or a r
 test("the credential stores of the tools this app drives ask", () => {
   for (const command of ["cat .sandbench/config", "cat C:\\Users\\me\\.sandbench\\workspace.json", "cat .claude/.credentials.json", "cat .config/gh/hosts.yml", "cat id_rsa", "cat .ssh./id_rsa"]) {
     assert.equal(auto(command, ["cat"]), false, command);
+  }
+});
+
+test("a backslash asks outside PowerShell cmdlets, because a POSIX shell removes it after the review", () => {
+  // Each of the first eight ran a program, wrote a file or read a fake secret under bash and sh.
+  for (const command of [
+    "cat .e\\nv",
+    "cat secrets.js\\on",
+    "cat /pr\\oc/self/environ",
+    "cat .s\\sh/id_r\\sa",
+    "git grep \\-O./evil x",
+    "git grep --open\\=./evil x",
+    "git log \\--output=out",
+    "git log --outp\\ut=out",
+    "dir src\\sub",
+    "cat C:\\Users\\me\\notes.txt",
+  ]) {
+    assert.equal(auto(command, ["git", "cat", "dir"]), false, command);
+  }
+  assert.equal(auto("Get-Content C:\\Users\\me\\notes.txt", ["Get-Content"]), true);
+});
+
+test("git commands that read outside the tracked tree or print remote credentials ask", () => {
+  for (const command of [
+    "git grep --no-index -e .",
+    "git grep --no-i -e .",
+    "git grep --untracked --no-exclude-standard -e x",
+    "git grep --untracked -e x",
+    "git diff --no-index empty home",
+    "git diff a ../outside",
+    "git diff a /etc/hosts",
+    "git diff a C:/Users/me",
+    "git log -- ../outside",
+    "git grep -f /tmp/patterns x",
+    "git grep -f.env x",
+    "git grep -if.env x",
+    "git grep -f.ssh/x y",
+    "git grep -if.ssh/x y",
+    "git grep -f/tmp/patterns x",
+    "git grep -if../patterns x",
+    "git remote -v",
+    "git remote --verbose",
+    "git log --help",
+    "git log --show-signature",
+  ]) {
+    assert.equal(auto(command, ["git"]), false, command);
+  }
+  for (const command of ["git remote", "git log HEAD..main", "git diff HEAD src/App.tsx", "git status", "git branch --show-current", "git rev-parse --show-toplevel"]) {
+    assert.equal(auto(command, ["git"]), true, command);
+  }
+});
+
+test("PowerShell provider paths and remote parameters ask, under the default rules too", () => {
+  const rules = [...DEFAULTS, "Get-Content", "Get-Item", "Test-Path"];
+  for (const command of [
+    "Get-ChildItem Environment::",
+    "Get-Content Environment::SB_FAKE",
+    "Get-Item Microsoft.PowerShell.Core\\Environment::SB_FAKE",
+    "Test-Path Microsoft.PowerShell.Core\\Registry::HKEY_CURRENT_USER\\Console",
+    "Test-Path Microsoft.PowerShell.Security\\Certificate::CurrentUser",
+    "Test-Path FileSystem::/\\192.0.2.1\\x",
+    "Get-ChildItem /\\192.0.2.1\\x",
+    "Get-Process -ComputerName 192.0.2.1",
+    "Get-Process -cn 192.0.2.1",
+    "Get-Process -Module",
+  ]) {
+    assert.equal(auto(command, rules), false, command);
+  }
+  for (const command of ["Get-Process", "Get-Process node", "Get-Process -Name node", "Get-Process -Id 42"]) {
+    assert.equal(auto(command, rules), true, command);
+  }
+});
+
+test("each credential location asks, including the stores of every driver", () => {
+  for (const path of [
+    ".grok/auth.json",
+    ".codex/auth.json",
+    ".claude/settings.json",
+    ".claude.json",
+    ".git/config",
+    ".gitconfig",
+    ".pgpass",
+    ".pypirc",
+    ".vault-token",
+    ".envrc",
+    "prod.env",
+    "server.pem",
+    "server.key",
+    "cert.p12",
+    ".config/git/credentials",
+    ".config/gcloud/application_default_credentials.json",
+    ".config/configstore/firebase-tools.json",
+    "/etc/shadow",
+    ".npmrc",
+    ".netrc",
+    ".gnupg/key",
+    ".docker/config.json",
+    ".kube/config",
+    ".azure/token",
+    "id_ed25519",
+  ]) {
+    assert.equal(auto(`cat ${path}`, ["cat"]), false, path);
+  }
+  for (const drive of ["function:", "alias:", "hkcu:", "HKEY_USERS:", "wsman:", "registry:"]) {
+    assert.equal(auto(`Get-ChildItem ${drive}`, ["Get-ChildItem"]), false, drive);
+  }
+  assert.equal(auto("cat docs/keys-and-tokens.md", ["cat"]), true);
+});
+
+test("a read-only program with a side effect in its arguments asks", () => {
+  assert.equal(auto("hostname", ["hostname"]), true);
+  assert.equal(auto("hostname evil", ["hostname"]), false);
+});
+
+test("arguments match case-sensitively, because -d and -D are different commands", () => {
+  assert.equal(auto("git branch -D feature", ["git branch -d feature"]), false);
+  assert.equal(auto("git branch -d feature", ["git branch -d feature"]), true);
+  assert.equal(auto("git checkout -B main", ["git checkout -b main"]), false);
+  assert.equal(auto("NPM test", ["npm test"]), true, "the program name may differ in case");
+  assert.equal(auto("git status", ["GIT"]), true);
+});
+
+test("codex and grok requests always ask, because their requests can be file changes or other tools", () => {
+  for (const [command, tool, rule] of [
+    ["edit src/a.ts", "codex", "edit src/a.ts"],
+    ["shell", "codex", "shell"],
+    ["git status", "codex", "git"],
+    ["Write notes.txt", "grok", "Write notes.txt"],
+    ["ls", "grok", "ls"],
+  ]) {
+    assert.equal(reviewPermission({ command, tool }, [rule]).auto, false, `${tool}: ${command}`);
+  }
+});
+
+test("git branch, tag and remote only auto-run when they only list", () => {
+  for (const command of ["git branch -l -D main", "git branch -a new", "git tag -n3 new", "git remote add x http:/a", "git remote show origin", "--status", "git --version"]) {
+    assert.equal(auto(command, ["git", "--status"]), false, command);
   }
 });
 
@@ -188,7 +326,7 @@ test("read-only commands that would expose secrets or other machines ask", () =>
 
 test("an exact rule allows exactly that command and nothing longer", () => {
   assert.equal(auto("npm test", ["npm test"]), true);
-  assert.equal(auto("NPM TEST", ["npm test"]), true);
+  assert.equal(auto("NPM TEST", ["npm test"]), false);
   assert.equal(auto("npm test -- --watch", ["npm test"]), false);
   assert.equal(auto("npm", ["npm"]), true);
   assert.equal(auto("npm install", ["npm"]), false);
