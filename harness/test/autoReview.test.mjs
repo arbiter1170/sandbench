@@ -13,7 +13,7 @@ test("the default rules still cover the harmless commands they were meant for", 
     "Get-ChildItem src/components",
     "Get-Process",
     "Get-Location",
-    "dir /s",
+    "dir src",
     "ls -la src",
     "pwd",
   ]) {
@@ -87,7 +87,7 @@ test("git expands abbreviated options and clustered flags, so those spellings of
     assert.equal(auto(command, ["git"]), false, command);
   }
   // Ordinary read-only options that only look close must keep working.
-  for (const command of ["git log --oneline", "git log -n 5 --stat", "git grep -l -i needle", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
+  for (const command of ["git log --oneline", "git log -n 5 --stat", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
     assert.equal(auto(command, ["git"]), true, command);
   }
 });
@@ -235,6 +235,47 @@ test("git forms that print file contents ask, because a tracked secret has no re
   }
 });
 
+test("a pattern search asks in every form, because its results reveal what a file holds", () => {
+  // Issuing only these, a review script recovered a whole tracked secret, one guess at a time.
+  for (const command of ["git grep -l FAKEabc", "git grep -l -e FAKEabc", "git grep -c -e FAKEabc 7cacd33", "git grep -c FAKE blobtag", "git grep --count x", "git grep --files-with-matches x", "git grep -l -i x src"]) {
+    assert.equal(auto(command, ["git"]), false, command);
+  }
+});
+
+test("slash forms of dir ask: no shell here is cmd.exe, so they are root-level paths", () => {
+  for (const command of ["dir /s", "dir /b", "dir /w", "dir /b src"]) assert.equal(auto(command), false, command);
+});
+
+test("a program that would read standard input with no file asks, because it stalls the turn", () => {
+  for (const command of ["cat", "cat -n", "type", "head", "head -n 1", "tail", "tail -1", "wc", "wc -l", "Select-String -Pattern x"]) {
+    assert.equal(auto(command, [command.split(" ")[0]]), false, command);
+  }
+});
+
+test("a rule for one program covers no other program", () => {
+  for (const command of ["rm x", "curl x", "cat notes.txt", "git-log x"]) assert.equal(auto(command, ["git"]), false, command);
+  assert.equal(auto("git status", [["git"]]), false, "a non-string rule");
+});
+
+test("git show takes one rev:path alone, with no flags beside it", () => {
+  for (const command of ["git show --output=out.txt HEAD:a", "git show -p HEAD:a", "git show --stat HEAD:a", "git show HEAD:a HEAD:b"]) {
+    assert.equal(auto(command, ["git"]), false, command);
+  }
+  assert.equal(auto("git show HEAD:a", ["git"]), true);
+});
+
+test("a value after a flag has the same shape limits as a positional", () => {
+  for (const command of ["Get-Content -Path D:notes.txt", "Get-Content -Path a.txt:stream", "Get-ChildItem -Path D:", "Test-Path -Path D:x", "Get-Item -Path D:x", "Resolve-Path -Path D:x", "Select-String -Pattern x -Path D:x", "Get-Process -Name -Module", "Get-Content -Path -Raw", "Get-ChildItem -Filter *", "head -n x notes.txt"]) {
+    assert.equal(auto(command, [command.split(" ")[0]]), false, command);
+  }
+});
+
+test("an exact rule still cannot name a sensitive location or leave the alphabet", () => {
+  for (const command of ["Get-Content env:SECRET", "Get-Content Environment::X", "cat /proc/self/environ", "cat /etc/shadow", "ls //192.0.2.1/share", "git-credential-store get", "src/run.sh", "cat.exe x", "Get-ChildItem a,b", "ls ~"]) {
+    assert.equal(auto(command, [command]), false, command);
+  }
+});
+
 test("programs and git subcommands outside the table ask under a rule for them", () => {
   for (const command of ["rm notes.txt", "curl example", "Invoke-WebRequest example", "wc --libxo=encoder=x notes.txt", "more notes.txt", "Set-Content notes.txt"]) {
     assert.equal(auto(command, [command.split(" ")[0]]), false, command);
@@ -266,8 +307,6 @@ test("a read-only command in the validated form auto-runs under a shorter rule",
     ["git", "git diff --cached --name-only"],
     ["git", "git diff --stat HEAD"],
     ["git", "git show HEAD --stat"],
-    ["git", "git grep -l needle src"],
-    ["git", "git grep -c -e needle"],
     ["git", "git ls-files src"],
     ["git", "git describe --tags"],
     ["git", "git rev-parse --abbrev-ref HEAD"],
@@ -280,7 +319,7 @@ test("a read-only command in the validated form auto-runs under a shorter rule",
     ["git", "git tag --list"],
     ["cat", "cat -n notes.txt"],
     ["ls", "ls -lah src"],
-    ["dir", "dir /b src"],
+    ["dir", "dir src"],
     ["head", "head -n 5 notes.txt"],
     ["tail", "tail -20 notes.txt"],
     ["wc", "wc -l notes.txt"],

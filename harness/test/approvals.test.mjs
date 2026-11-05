@@ -2,10 +2,11 @@
 // turn. The fake commands are recorded, never executed.
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, mock, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { DRIVERS } from "../drivers/index.mjs";
 import { createSecretStore } from "../secrets.mjs";
 import { createTurns } from "../turns.mjs";
@@ -112,6 +113,20 @@ test("non-shell tool requests (file writes, web fetches) always wait even when t
   );
   assert.deepEqual(ran, []);
   assert.deepEqual(requests.map((event) => event.auto), [false, false]);
+});
+
+test("the real drivers label their requests, so the gate can tell a shell command from another tool", () => {
+  const driver = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../drivers", `${name}.mjs`), "utf8");
+  assert.ok(driver("claude").includes("tool: denial.tool_name"));
+  assert.equal(driver("codex").match(/tool: "codex"/g)?.length, 2);
+  assert.ok(driver("grok").includes('tool: "grok"'));
+});
+
+test("the gate uses the rules in the request, not built-in ones", async () => {
+  const covered = await scriptedTurn([{ command: "pwd" }], ["pwd"], () => false);
+  assert.deepEqual(covered.ran, ["pwd"]);
+  const uncovered = await scriptedTurn([{ command: "pwd" }], ["git"], () => false);
+  assert.deepEqual(uncovered.ran, [], "this request's rules do not cover it");
 });
 
 test("an explicit approval runs that one request only; the same command asks again next time", async () => {

@@ -19,12 +19,16 @@
 //
 // What this does not establish, so this is a narrowing gate and not a sandbox:
 //   - A read-only git command still runs whatever the repository's own config or attributes
-//     tell it to (core.fsmonitor, diff.external, a textconv driver).
+//     tell it to (core.fsmonitor, diff.external, a textconv driver), and no word in the command
+//     shows this: a folder with plain `HEAD`, `config`, `objects/` and `refs/` is a repository
+//     with no `.git` in sight. `git status` and `git diff --stat` can also rewrite the index.
 //   - The program name is resolved by the shell: an entry earlier on PATH, or a PowerShell
 //     profile, alias or function, runs instead.
 //   - The sensitive list is best-effort. Under a `cat` rule, a secret in a file it does not
 //     name is read, and a symlink inside the folder can lead outside it.
 //   - git commit messages and file names are still printed.
+//   - An exact rule is taken literally apart from checks 1 to 3: it can use absolute paths, or
+//     run project code (`npm test` runs what `package.json` says at that moment).
 //   - It sees only what reaches it: a driver CLI's own read tools produce no request.
 
 const SAFE = /^[A-Za-z0-9 _\-./:=+]+$/;
@@ -80,7 +84,7 @@ const isRevAndPath = (arg) => {
  *   counts: allows `-5`. positional: the shape of other words. max: how many of them.
  *   anyCase: PowerShell parameters ignore case; other programs' flags do not.
  */
-function form({ flags = [], values = {}, inline = {}, counts = false, positional = null, max = Infinity, anyCase = false }) {
+function form({ flags = [], values = {}, inline = {}, counts = false, positional = null, min = 0, max = Infinity, anyCase = false }) {
   const key = (name) => (anyCase ? name.toLowerCase() : name);
   const flagSet = new Set(flags.map(key));
   const valueMap = new Map(Object.entries(values).map(([name, check]) => [key(name), check]));
@@ -106,11 +110,13 @@ function form({ flags = [], values = {}, inline = {}, counts = false, positional
       used += 1;
       if (used > max) return false;
     }
-    return true;
+    return used >= min;
   };
 }
 
 const paths = { positional: isRelative };
+// With no file these read standard input, which nothing closes, so the turn would stall.
+const files = { positional: isRelative, min: 1 };
 
 const PROGRAMS = new Map(
   Object.entries({
@@ -123,17 +129,17 @@ const PROGRAMS = new Map(
     "get-psdrive": form({}),
     "test-path": form({ values: { "-Path": isRelative }, ...paths, anyCase: true }),
     "resolve-path": form({ values: { "-Path": isRelative }, ...paths, anyCase: true }),
-    "select-string": form({ values: { "-Pattern": isPlain, "-Path": isRelative }, anyCase: true }),
-    dir: form({ flags: ["/s", "/b", "/w"], ...paths }),
+    "select-string": (args) => args.some((arg) => arg.toLowerCase() === "-path") && form({ values: { "-Pattern": isPlain, "-Path": isRelative }, anyCase: true })(args),
+    dir: form(paths),
     ls: form({ flags: ["-l", "-a", "-A", "-h", "-R", "-1", "-la", "-al", "-lh", "-lah", "-alh"], ...paths }),
     pwd: form({}),
     whoami: form({}),
     hostname: form({}),
-    cat: form({ flags: ["-n"], ...paths }),
-    type: form(paths),
-    head: form({ values: { "-n": isNumber }, counts: true, ...paths }),
-    tail: form({ values: { "-n": isNumber }, counts: true, ...paths }),
-    wc: form({ flags: ["-l", "-w", "-c"], ...paths }),
+    cat: form({ flags: ["-n"], ...files }),
+    type: form(files),
+    head: form({ values: { "-n": isNumber }, counts: true, ...files }),
+    tail: form({ values: { "-n": isNumber }, counts: true, ...files }),
+    wc: form({ flags: ["-l", "-w", "-c"], ...files }),
     echo: form({ positional: isPlain }),
   }),
 );
@@ -144,9 +150,10 @@ function needing(required, check) {
 }
 
 // A secret committed under an ordinary name has nothing the sensitive list can recognize, so a
-// form that prints file contents without naming the file is not validated: `git grep` needs a
-// names-or-counts flag, `git diff` a stat or names flag, and `git log -p` and `git blame` are
-// not listed. `git show` prints the commit's diff, or a blob whatever flags it has, so it takes
+// form that reveals file contents without naming the file is not validated: `git diff` needs a
+// stat or names flag, and `git log -p` and `git blame` are not listed. Nor is `git grep`, in
+// any form: even `-l` and `-c` answer guesses about a file's contents, one at a time, including
+// in old commits. `git show` prints the commit's diff, or a blob whatever flags it has, so it takes
 // only `HEAD` with a stat or names flag, or a `rev:path` whose path the sensitive list checks.
 // `git diff` compares files directly when there is no repository and it has two paths, so it
 // takes one positional at most. `git remote -v` can print a token stored in a remote's URL.
@@ -170,7 +177,6 @@ const GIT = new Map(
     "rev-parse": form({ flags: ["--show-toplevel", "--abbrev-ref", "--short", "--verify", "--is-inside-work-tree", "--git-dir"], positional: isRelative, max: 1 }),
     "ls-files": form({ flags: ["--cached", "-c", "--modified", "-m"], ...paths }),
     describe: form({ flags: ["--tags", "--always", "--dirty"] }),
-    grep: needing(["-l", "-c", "--files-with-matches", "--count"], form({ flags: ["-i", "-l", "-c", "-w", "--ignore-case", "--files-with-matches", "--count"], values: { "-e": isPlain }, ...paths })),
     branch: form({ flags: ["-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current", "--no-color"] }),
     tag: form({ flags: ["-l", "--list"] }),
     remote: form({}),
@@ -213,7 +219,10 @@ export function reviewCommand(command, rules) {
     if (!ruleWords.length || ruleWords.length > parts.length) continue;
     if (ruleWords[0].toLowerCase() !== program) continue;
     if (!ruleWords.every((part, index) => index === 0 || part === parts[index])) continue;
-    if (ruleWords.length === parts.length) return { auto: true, why: "matches a rule exactly", rule };
+    // The bare name of a listed program is a shorter rule's job: bare `cat` would stall reading
+    // standard input, so a `cat` rule does not make it exact.
+    const bareListed = parts.length === 1 && PROGRAMS.has(program);
+    if (ruleWords.length === parts.length && !bareListed) return { auto: true, why: "matches a rule exactly", rule };
     prefix = true;
   }
   if (!prefix) return { auto: false, why: "no rule matches" };
