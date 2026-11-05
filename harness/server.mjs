@@ -13,6 +13,7 @@ import { listVoices as ttsListVoices, providerMeta, speak as ttsSpeak } from "./
 import { proxyModel } from "./modelProxy.mjs";
 import { createSecretStore } from "./secrets.mjs";
 import { createTurns } from "./turns.mjs";
+import { parseSkill } from "./skillLibrary.mjs";
 
 const PORT = Number(process.env.SANDBENCH_HARNESS_PORT || 8799);
 const HOOK_PORT = Number(process.env.SANDBENCH_WEBHOOK_PORT || 8801);
@@ -310,12 +311,8 @@ function listSkillLibrary() {
     const skillMd = path.join(SKILLS_DIR, name, "SKILL.md");
     if (!existsSync(skillMd)) continue;
     const raw = readFileSync(skillMd, "utf8").slice(0, 32_000);
-    const title = /^#\s+(.+)$/m.exec(raw)?.[1]?.trim() || name;
-    const summary = raw
-      .split("\n")
-      .map((line) => line.trim())
-      .find((line) => line && !line.startsWith("#")) || "";
-    skills.push({ id: name, title, summary: summary.slice(0, 200), body: raw });
+    const { title, summary } = parseSkill(raw, name);
+    skills.push({ id: name, title, summary, body: raw });
   }
   return skills;
 }
