@@ -1,5 +1,6 @@
 // Agent turns: starts a driver, fans its events out to /events subscribers, and holds
 // each permission request until the page answers it.
+import { reviewPermission } from "./autoReview.mjs";
 import { randomBytes } from "node:crypto";
 import { driverById } from "./drivers/index.mjs";
 
@@ -24,13 +25,6 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       if (!sub.turn || sub.turn === turnId) sub.write(entry);
     }
     return entry;
-  }
-
-  function autoAllowed(command, rules) {
-    const trimmed = command.trim();
-    if (/[;&|>`]|\$\(/.test(trimmed)) return false;
-    const head = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
-    return rules.some((rule) => String(rule).trim().toLowerCase() === head);
   }
 
   // `ctx` comes from the server (the runner's agent slug, SB-09), never from the request body.
@@ -69,7 +63,7 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       },
       requestPermission: ({ command, reason, tool }) => {
         const permissionId = randomBytes(8).toString("hex");
-        if (autoAllowed(command, rules)) {
+        if (reviewPermission({ command, tool }, rules).auto) {
           publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: true });
           granted.add(permissionId);
           io.current = permissionId;
