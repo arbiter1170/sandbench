@@ -26,6 +26,19 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · approval-rule safety, clean carry-over of #23 (audit batch 1, part 1) · partial
+- **Branch / PR / head sha:** `claude/approval-rule-safety` · PR link in the session summary · code head `a796b6b` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - Carried over the intended changes of #23 (head `d890511`) onto `1b247e7` as a new branch. Checked: the tree equals a merge of #23 with `deploy/vercel`, apart from this file. The original branch and PR are untouched.
+  - New in this PR, from reviewing #23: `harness/autoReview.mjs` now treats abbreviated long git options and clustered short flags as the risky option they expand to, checks a sensitive path attached with `:` or `=`, and lists `.sandbench`, `.claude/.credentials.json`, `.config/gh` and common private key names.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 45 passed. `npm run test:node` → 171 tests, 137 pass, 2 fail, 32 skipped. The 2 failures (`secrets.test.mjs` file mode, `server.test.mjs` bash spawn) also fail on untouched `deploy/vercel` on Windows; CI there is green. The 32 skips include the DB tests, which did not run. `npm run build` + bundle key grep → ok, none. Probe on real git 2.52: `git grep --open=<prog> x` and `git grep -iO<prog> x` ran the program and were auto-approved before; they ask now. Mutation check: each of 4 new rules off → 1 test fails.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (Docker daemon not running here; left to CI). No live Windows, PowerShell or Claude CLI turn.
+- **Decisions made and why:** Vincent: `full` keeps asking for commands no rule covers, with no auto-run expansion. New PRs instead of editing #23–#28, so the originals stay as they are and their commit messages do not reach this branch. An option that is a prefix of a risky one (`--text`) asks too: an extra card costs less than a miss.
+- **Deviations from the plan:** not a WORKPLAN task (Vincent approved the audit batches). `runner/Dockerfile` gets one COPY line. STATUS.md not rewritten here; it waits for the end of the session to avoid conflicts between the parallel batch PRs.
+- **Open questions for Vincent or the Supervisor:** 1. Merge method: settle the GitHub author field on merges before the first merge.
+- **Next step:** Independent review of this head, then the #24 carry-over. Vincent merges when ready.
+
 ### Session 7 · 2026-11-05 13:55 ET · local usability: working-directory context + chat overflow (PR #21, Cursor cloud run) · done
 - **Branch / PR / head sha:** `cursor/local-cwd-context-chat-overflow-fba9` · https://github.com/arbiter1170/sandbench/pull/21 · code head `f7b924e` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
