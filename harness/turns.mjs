@@ -2,6 +2,7 @@
 // each permission request until the page answers it.
 import { randomBytes } from "node:crypto";
 import { driverById } from "./drivers/index.mjs";
+import { describeWorkingDirectory } from "./workingDirectory.mjs";
 
 const BUFFER = 500;
 const PERMISSION_TIMEOUT_MS = 30 * 60_000;
@@ -9,7 +10,10 @@ const PERMISSION_TIMEOUT_MS = 30 * 60_000;
 // The page names which stored key a turn should use; the value is looked up here (SB-05).
 const TURN_SECRETS = new Set(["XAI_API_KEY", "ANTHROPIC_API_KEY", "COMPAT_API_KEY"]);
 
-export function createTurns({ runShell, resolveFolder, captureScreen, secrets }) {
+// `workspaceRoot` (the local harness passes it) turns on the working-directory block at the end
+// of every turn's system text and the `cwd` field on `turn_start`. Without it (the runner) the
+// prompt and the events are exactly what they were.
+export function createTurns({ runShell, resolveFolder, captureScreen, secrets, workspaceRoot }) {
   const events = [];
   const subscribers = new Set();
   const turns = new Map();
@@ -46,10 +50,13 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     const rules = Array.isArray(body.allow) ? body.allow.filter((item) => typeof item === "string") : [];
     const ran = new Set();
     const granted = new Set();
+    // The block goes after the page's text is cut to size, so a long system prompt can't trim it.
+    const where = workspaceRoot ? describeWorkingDirectory({ cwd, root: workspaceRoot }) : "";
+    const pageSystem = typeof body.system === "string" ? body.system.slice(0, 40_000) : "";
     const turn = {
       id,
       prompt: body.prompt.slice(0, 20_000),
-      system: typeof body.system === "string" ? body.system.slice(0, 40_000) : "",
+      system: where ? [pageSystem, where].filter(Boolean).join("\n\n") : pageSystem,
       history: (Array.isArray(body.history) ? body.history : [])
         .filter((item) => (item?.role === "user" || item?.role === "assistant") && typeof item.content === "string")
         .slice(-20)
@@ -125,7 +132,7 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       },
       current: "",
     };
-    publish(id, { type: "turn_start", driver: driver.id });
+    publish(id, { type: "turn_start", driver: driver.id, ...(where ? { cwd } : {}) });
     const handle = driver.startTurn(turn, io);
     turns.set(id, { controller, handle });
     handle.done

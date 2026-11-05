@@ -26,6 +26,19 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 7 · 2026-11-05 13:55 ET · local usability: working-directory context + chat overflow (PR #21, Cursor cloud run) · done
+- **Branch / PR / head sha:** `cursor/local-cwd-context-chat-overflow-fba9` · https://github.com/arbiter1170/sandbench/pull/21 · code head `f7b924e` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing (pushed with this entry).
+- **What was done:**
+  - A live Claude Code turn (North, Windows harness) tried `Glob` under `…\.sandbox\workspace` and was told the real cwd is `…\.sandbench\workspace`. The harness resolves and starts the driver in the right folder; nothing in Sandbench produces `.sandbox`; the page's system text only said "inside their Sandbench workspace folder", so the model guessed. New `harness/workingDirectory.mjs`: an authoritative block (path, workspace root, configured folder) appended by `turns.mjs` after the 40,000-char cut; `turn_start` carries `cwd`; the page shows `Working folder: …` in the trace. Opt-in by `workspaceRoot` (harness only; runner unchanged). `claude.mjs` untouched.
+  - Chat overflow (screenshots from the laptop): `.msg { overflow-wrap: anywhere }`, `.approval` and `.composer` get a `minmax(0, 1fr)` track. Preformatted tool output still scrolls, inside its own panel. New `src/layout-fixture/` (real Workspace shell, fixed messages, not in the bundle) and `runner/test/ui-layout.test.mjs` (Vite build + headless Chromium at 360/390/460/1280 px, containment assertions).
+- **Tests run (real results):** `npm run typecheck` → clean. `npm run test:web` → 39 passed. `npm run test:node` → 150 tests, 118 pass, 0 fail, 32 skipped (same 32 as `deploy/vercel`: DB without `TEST_DATABASE_URL`, optional skills pack, Auth emulator). `npm run build` + bundle key grep → clean. Mutation checks: block off → 2 turns tests fail; CSS stashed → 4 layout tests fail (`page scrollWidth 392 > 360`, `message list scrolls sideways: 2272 > 630`).
+- **Not run / could not run:** Docker image/compose, gitleaks, Postgres DB tests (no Docker here; no runner data path touched). Live Windows check not done cloud-side.
+- **Decisions made and why:** the block lives in `turns.mjs`, not `claude.mjs` (SB-03 reserved that file; every driver gets the same context). Opt-in so the runner's prompt stays byte-identical. The wrong path is treated as a model invention; the fix removes the guesswork and shows the truth, it does not rewrite model text or add a `.sandbox` alias. The UI test sits under `runner/test/` because Playwright and Chromium are the runner's.
+- **Deviations from the plan:** not an SB item (local usability, like #15). STATUS.md and PLAN.md not touched, to stay clear of the parallel docs refresh (bc-bb89b19b).
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** Vincent runs the live check in the PR body and merges #21.
+
 ### Session 7 · 2026-11-05 · T05 PLAN.md host text + STATUS/WORKPLAN refresh (docs only) · done
 - **Branch / PR / head sha:** `cursor/docs-plan-laptop-text-93f7` · https://github.com/arbiter1170/sandbench/pull/20 · cut from `7068fc3` (deploy/vercel after #18)
 - **Checks on the head:** pending at the time of writing (the four required checks run on every PR).
