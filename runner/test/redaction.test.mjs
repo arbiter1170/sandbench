@@ -87,4 +87,10 @@ test("a driver that echoes its key leaves no trace in job_events, the jobs row o
   assert.equal(second.has, false, "an error message is scrubbed too");
   assert.equal(job.error, `boom with ${REDACTED} and ${REDACTED}`);
   assert.equal((await db.store.get(OWNER, "messages", `${failing.jobId}-reply`)).data.text, `boom with ${REDACTED} and ${REDACTED}`);
+
+  // The insert itself scrubs too (a later tool or SB-04 job writing an event directly can't leak).
+  const direct = await made.engine.events.append(ok.jobId, "note", { text: `direct ${key}`, nested: { deep: plain } });
+  assert.deepEqual(direct.data, { text: `direct ${REDACTED}`, nested: { deep: REDACTED } });
+  const [stored] = await db.sql`select data from job_events where job_id = ${ok.jobId} and seq = ${direct.seq}`;
+  assert.deepEqual(stored.data, { text: `direct ${REDACTED}`, nested: { deep: REDACTED } });
 });
