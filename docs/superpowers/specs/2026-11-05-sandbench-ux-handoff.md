@@ -145,13 +145,13 @@ Run P1 → P5 → P2 → P3 → P4, one packet at a time. This is design sequenc
 ## Awaiting owner review
 
 - **Vincent (blocking):** accept or edit the spec in writing, naming which packets are released. That single acceptance is the gate; after it, each packet PR gets normal PR review and no extra pre-work approval unless Vincent asks for one.
-- **Vincent (minor, not blocking):** the primary-button fill token (§11). The recommendation is `--accent-fill #c83a3a` with hover `#b83232`; dark ink on the current red also meets P4-AC5. If no choice is made, P4 implements the recommendation and says so in its PR.
+- **Not an owner decision:** the primary-button fill token (§11) is a proposed implementation token, labelled as such. P4 implements `--accent-fill #c83a3a`, hover `#b83232`, border kept at `--accent`, and states the measured ratios in its PR. Vincent may override the hex at PR review; the gate is P4-AC5, not the hex.
 - **Approval-safety / recovery owner:** D-5 to D-8, U-3, and the U-7 contract point about Stop labels in #25 (none started by this design).
 - **Runner owner:** U-6 (`extras.resume` vs I-5 before SB-29 enables tools).
 
 ## Fable 5.1 review (2026-11-05)
 
-Bounded review of the spec, this brief and all six boards, done against head `39fcf52b162a39528258c29df53892b2455f1d34` of PR #26 and the code at `7068fc3`. Evidence was read from the code, not from the spec's own claims.
+Bounded review of the spec, this brief and all six boards, done against head `39fcf52b162a39528258c29df53892b2455f1d34` of PR #26 and the code at `7068fc3`, with a verification pass on `f18739d`. Evidence was read from the code, not from the spec's own claims.
 
 **Addressed in PR #26 (docs and boards only):**
 1. Stop was treated as confirmed. The interrupt POST's failure is swallowed (`App.tsx` ~1659). Spec now has S5a (confirmed by `done{stopped:true}`) and S5b (requested, unconfirmed), plus matching card states and tests.
@@ -167,6 +167,12 @@ Bounded review of the spec, this brief and all six boards, done against head `39
 11. Added: no-focus-theft rule, 200%/320 px reflow (P4-AC6), Check-connection announcement, "dimmed states carry no information".
 12. Brief: "approve each packet" replaced by a single written acceptance that names released packets; §7 order marked as sequencing, not authorization; Fable slices are assigned by Vincent; snapshot re-verified with a timestamp; Node version qualified.
 13. #25's Stop-as-denied labelling conflicts with the spec; recorded as U-7 for the owner, not changed here.
+
+Verification pass (same review, after the above landed as `ce01cee`/`f18739d`):
+14. Independent re-measurement of the proposed token on the real surfaces (`.approval` card `#1b1b1b`, bubble, panel, ground). Hover `#b83232` falls under 3:1 as a fill boundary on the card (2.90) and bubble (2.62); today's hover already does on the bubble (2.93). Fix recorded in §11: the hover keeps the 1 px `--accent` border (4.38 / 3.95), text stays 5.66.
+15. I-3 lacked the claim ordering for a double-tap or queued-event race, and said nothing about a planner turn that itself fails to start. Both added: claim before request, no release, no retry.
+16. P1 did not say how the sheet separates the configured folder (always known) from a turn's resolved path (known only after #21's `cwd`). Added "Configured vs resolved folder".
+17. The token was listed as an owner choice. Re-labelled as a proposed implementation token that P4 implements and Vincent may override at PR review.
 
 **Remaining, not fixable in docs:**
 - D-5 to D-8 (new harness signals), U-7 (#25 contract), U-2 (no `MAX_ROUNDS` signal), U-4 (cross-tab claim), U-6 (runner retry vs I-5).

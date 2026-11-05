@@ -77,7 +77,7 @@ Every packet must keep these. Each one has a test in §10.
 
 - **I-1. One turn in flight per chat.** A chat never has two running turns, whether agent or planner. Today the page enforces this per tab with `sendingRef` (`App.tsx` ~1958, ~1968); a send during a turn returns early and keeps the draft. P2 adds visible feedback for that early return, but doesn't change the guard.
 - **I-2. No silent substitution.** If the chosen agent can't start, the page never answers with another agent, the planner, a different model or a different service unless the user taps the one-time planner choice. This replaces today's behaviour at `App.tsx` ~2076–2078, where the planner answers with only a trace line.
-- **I-3. Planner choice is single-use and idempotent.** It is keyed to the "Couldn't start" message id. Once used, the message stores the id of the planner reply and the button is replaced by "Planner answer chosen at <time> ↓". A second tap, a reload, or a stale render can't start another turn for the same message. Across two tabs on the same workspace, storage is last-writer-wins (noted in #25), so cross-tab uniqueness is **not guaranteed** today; see U-4.
+- **I-3. Planner choice is single-use and idempotent.** It is keyed to the "Couldn't start" message id. The claim (the planner reply's message id and time) is written to the S9 message **before** the planner turn is requested, in the same synchronous step that disables the control; a second tap in the same tick, a double-click, a queued event or a stale render then finds the claim and does nothing. If the planner turn itself fails to start, the claim stays, the S9 message shows "Planner answer couldn't start: <reason>", and nothing is retried; the user can send a new message as usual. Once the planner reply exists, the button is replaced by "Planner answer chosen at <time> ↓". A second tap, a reload, or a stale render can't start another turn for the same message. Across two tabs on the same workspace, storage is last-writer-wins (noted in #25), so cross-tab uniqueness is **not guaranteed** today; see U-4.
 - **I-4. Couldn't start means no turn was created.** The state is shown only when the page can prove no turn exists:
   - (a) it didn't call `POST /turns` because the harness is unreachable or the chosen driver is listed `ok:false`/missing; or
   - (b) `POST /turns` returned an error response whose message is one of the harness's pre-start validation errors: "Unknown driver.", "No prompt.", or "The working folder must stay inside the workspace folder." (`harness/turns.mjs` `start`, thrown before a turn id exists).
@@ -155,6 +155,8 @@ The planner also needs the harness for commands and screen actions, so its line 
 - When this page is closed: "Replies and routines only run while this page is open" (mode L/B; matches #24's wording).
 
 **Data:** health and drivers polling (exists), `resolveAgentDriver` (exists), `roomFolder` (exists), and the cwd from `turn_start` (#21) for the "folder of the last turn".
+
+**Configured vs resolved folder.** The sheet shows two different facts and labels them: the *configured* folder (the workspace root from `/health.workspace` for a bot chat, or the channel's `workingFolder` name for a group chat) is always available and is labelled "configured"; the *resolved* path a turn actually ran in is known only from a `turn_start` that carries `cwd` (#21, open) and is labelled "last turn". The sheet never presents the configured value as the path of a turn that has not reported one.
 
 **Fixtures:**
 - **F-P1-a:** Mode L. North, a bot chat, has no `driver`; `settings.defaultAgentDriver = "claude"`; `/drivers` has claude `ok:true`; workspace `C:\Users\<you>\.sandbench\workspace` (synthetic).
@@ -544,9 +546,18 @@ Nothing in this spec or the boards counts as having passed these. The boards are
 | Secondary buttons | `#f4f4f4` on `#1b1b1b`, hover `#2a2a2a` | 15.66 / 13.05 | Pass |
 | Live `#4ea1ff` on bubble | | 5.81:1 | Pass |
 
-Proposed-token checks: `#fff8f8` on `#c83a3a` 4.86:1 (rest); a hover for it must be darker still, e.g. `#b83232` 5.66:1, since today's hover `#c43838` would be lighter-looking than the new rest fill by only 0.2. Disabled at 0.45 opacity stays ≈2.68:1 (exempt).
+Proposed-token checks, measured against the surfaces the button actually sits on (`.approval` card `#1b1b1b`, panel `#171717`, bubble `#242424`, ground `#101010`):
 
-**Recommendation (pending owner approval; not a decision):** add `--accent-fill: #c83a3a` for filled primary buttons with hover `#b83232`, and keep `--accent #e24b4b` for outlines, links and the focus ring. Vincent approved keeping the style and the accessibility direction, not this hex. The boards render today's `#e24b4b` fill and each carries a footer saying so. If Vincent prefers dark ink on the current red (`#101010` on `#e24b4b`, 4.84:1), P4-AC5 is met either way; the gate is P4-AC5, not the hex.
+| Fill | Text `#fff8f8` | Fill vs card | vs panel | vs bubble | vs ground |
+| --- | --- | --- | --- | --- | --- |
+| Today rest `#e24b4b` | 3.75 (fail) | 4.38 | 4.56 | 3.95 | 4.84 |
+| Today hover `#c43838` | 5.05 | 3.26 | 3.39 | **2.93** | 3.60 |
+| Proposed rest `#c83a3a` | 4.86 | 3.38 | 3.52 | 3.05 | 3.74 |
+| Proposed hover `#b83232` | 5.66 | **2.90** | 3.02 | **2.62** | 3.21 |
+
+Reading: text passes at rest and hover for the proposed pair. The hover fill alone drops under 3:1 as a component boundary on the card and bubble surfaces (today's hover already does on the bubble). So the hover state must keep the existing 1 px border at `--accent #e24b4b`, which is 4.38:1 on the card and 3.95:1 on the bubble; the border, not the fill, is the edge WCAG 1.4.11 needs. The focus ring (`#e24b4b`, offset 3 px) is 4.38:1 on the card. Disabled at 0.45 opacity stays ≈2.7:1 (exempt).
+
+**Recommendation (a proposed implementation token, labelled as such; not a new product decision):** add `--accent-fill: #c83a3a` for filled primary buttons with hover `#b83232` and the border kept at `--accent`, and keep `--accent #e24b4b` for outlines, links and the focus ring. Vincent approved keeping the style and the accessibility direction, not this hex. The boards render today's `#e24b4b` fill and each carries a footer saying so. If Vincent prefers dark ink on the current red (`#101010` on `#e24b4b`, 4.84:1), P4-AC5 is met either way; the gate is P4-AC5, not the hex.
 
 **Other rules:**
 - **Targets:** ≥44×44 px on coarse pointers (P4-AC2).
