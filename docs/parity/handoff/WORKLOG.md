@@ -26,6 +26,19 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · capability map labels, clean carry-over of #24 (audit batch 1, part 2) · partial
+- **Branch / PR / head sha:** `claude/capability-map-labels` · PR link in the session summary · code head `8de4cc9` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - Carried over the intended changes of #24 (head `609f71c`) onto `1b247e7` as a new branch. Checked: the tree equals a merge of #24 with `deploy/vercel`, apart from this file. The original branch and PR are untouched.
+  - New in this PR, from reviewing #24: "Model per bot" now says it needs the local harness or the runner, because every page model call goes to `/model` there. The test that pinned the old label changes with it.
+- **Tests run (real results):** see the PR body for the output. Same two Windows-only node failures as untouched `deploy/vercel`; CI there is green.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (Docker daemon not running here; left to CI). The page was not opened in a browser.
+- **Decisions made and why:** new PR instead of editing #24, so the original stays as it is and its commit messages do not reach this branch. README's dev-proxy sentence is left alone: dated, not clearly false, and outside this task.
+- **Deviations from the plan:** not a WORKPLAN task (Vincent approved the audit batches). STATUS.md not rewritten here; it waits for the end of the session.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Independent review of this head. Vincent merges when ready.
+
 ### Session 7 · 2026-11-05 13:55 ET · local usability: working-directory context + chat overflow (PR #21, Cursor cloud run) · done
 - **Branch / PR / head sha:** `cursor/local-cwd-context-chat-overflow-fba9` · https://github.com/arbiter1170/sandbench/pull/21 · code head `f7b924e` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
