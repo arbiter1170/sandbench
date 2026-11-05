@@ -18,6 +18,7 @@ import { resolveWorkspacePath, workspaceRoots } from "../workspace/index.mjs";
 import { createAuth } from "./auth.mjs";
 import { createDataRoutes } from "./data.mjs";
 import { createMemoryRoutes } from "./memory.mjs";
+import { prefixMatches } from "./routes/index.mjs";
 import { buildSystemPrompt } from "../agent/prompt.mjs";
 import { createSkills } from "../agent/skills.mjs";
 import { readJson, send } from "./http.mjs";
@@ -27,7 +28,7 @@ import { createStatic } from "./static.mjs";
 const CORS_HEADERS = "authorization, content-type, x-sandbench-client";
 const CORS_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 
-export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, memory = null, teamDir = "", secretsFile, env = process.env }) {
+export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, memory = null, teamDir = "", secretsFile, env = process.env, routes = [] }) {
   // The runner's own address plus any page hosted elsewhere (e.g. the Vercel site).
   // Exact matches only: no wildcards, no credentials or cookies (the ID token is a header).
   const origins = new Set([publicOrigin, ...allowedOrigins].map((item) => String(item || "").trim().replace(/\/$/, "")).filter(Boolean));
@@ -71,8 +72,16 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
     buildPrompt: async (owner, agentId) => buildSystemPrompt({ owner, agent: await store.get(owner, "agents", agentId), memory, skills, teamDir }),
   });
 
+  // SB-03 route registry: modules from runner/api/routes/ (loaded by main.mjs with
+  // loadRouteFactories), built here with the runner's own deps. New routes are new files there;
+  // this file doesn't change again.
+  const registry = routes.map((factory) => ({ name: factory.name, prefix: factory.prefix, handle: factory.create({ store, memory, skills, secrets, env, home }) }));
+
   async function api(req, res, url, user) {
     const route = url.pathname.slice("/api".length) || "/";
+    for (const entry of registry) {
+      if (prefixMatches(entry.prefix, route) && (await entry.handle(req, res, route, url, user))) return;
+    }
     if (/^\/(data|changes|stream)(\/|$)/.test(route)) {
       if (!dataRoute) return send(res, 503, { error: "This runner has no database (set DATABASE_URL)." });
       if (await dataRoute(req, res, route, url, user)) return;

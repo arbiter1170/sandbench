@@ -117,6 +117,20 @@ phone ──> runner:8080 ── control API ──> sandbox
 8. **Accepted limits.** Agents can read and write each other's folders and worktrees through a shell; SB-09's path rules and SB-06's cards still cover the runner's own routes. If a second person or an untrusted agent ever joins, add one Linux user per agent (follow-up). Agents share the kernel of the laptop's Docker VM, so this is not a VM boundary. Agents can see each other's process list until `/proc` is mounted with `hidepid` (follow-up). One agent can still use up shared CPU within the limits.
 9. **Gate.** SB-10 may ship its read-only tools before SB-29. Any tool that runs a shell, writes files or runs git, SB-04's `job_start`, and the engine's own shell tool in runner mode do not merge until SB-29 has merged. SB-06's policy checks stay on top: isolation limits what a command can reach, the policy decides whether it runs at all.
 
+## Extending the runner (SB-03 PR 1)
+
+- **Add a route:** add a file to `runner/api/routes/` that default-exports `{ name, prefix, create(deps) }`. `prefix` is a path such as `"/jobs"` or an anchored RegExp. `create` gets `{ store, memory, skills, secrets, env, home }` and returns `async (req, res, route, url, user) => boolean`. Return `false` to fall through.
+  - Routes sit behind the sign-in check, and `user.uid` is the owner.
+  - Files load in name order. A duplicate name, an overlapping prefix, or a prefix that touches a built-in path (`/health`, `/data`, `/memory` and the rest) stops the runner at start-up.
+  - Don't edit `runner/api/server.mjs` for new routes.
+- **Add tools:** put them next to their code in `runner/<area>/tools.mjs`, as `export const tools = [descriptor, ...]`. `discoverTools()` in `runner/tools/discover.mjs` finds them; there is no central list. Descriptors follow `runner/contracts/tool.mjs`. The agent id and owner reach a handler through `ctx` from the turn's token, never through arguments, so an `inputSchema` that declares `agentId` or `owner` is refused.
+- **Contracts:** `runner/contracts/` holds the job record and event, the turn request, the approval record, the tool descriptor and the policy result. Each has a `validateX()` and a valid example in `runner/contracts/fixtures/`. Until SB-06 lands, `runner/policy/default.mjs` asks for a card for every action and never allows one on its own.
+- **Migrations:** `001_init`, `002_memory` and `003_jobs` are taken, and `004` is reserved for SB-06's `004_audit.sql`. A migration is never edited after it merges, and `runner/test/data.test.mjs` pins the full list.
+- **Driver extras:** `harness/drivers/claude.mjs` takes `turn.extras = { settings, mcpConfig, maxTurns, resume }` (see `buildClaudeArgs` and `buildClaudeSettings`).
+  - SB-06 fills `settings`, SB-10 fills `mcpConfig` and SB-04 fills `maxTurns`; nothing sets them yet.
+  - `extras.settings.permissions` is ignored, so extras can never widen what Claude Code may run.
+  - The engine sets extras, never the request.
+
 ## Records (SB-02)
 
 With `DATABASE_URL` set (compose sets it), the runner keeps the workspace in Postgres as **one row per entity** instead of one snapshot where the newest write wins. Migrations in `runner/db/migrations/` are applied when the runner starts. Without `DATABASE_URL`, these routes return 503 and everything else still works.

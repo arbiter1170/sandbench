@@ -181,7 +181,7 @@ the PR says what is still to prove live: PixelPets and a review agent in real wo
 
 ## T02 · SB-08 agent profile, skills and memory
 
-- [ ] **Merged** · Size **L** · Depends: T01 merged (both edit `server.mjs`) · Independent: no · Branch `sb-08-profile-memory`
+- [x] **Merged** · Size **L** · Depends: T01 merged (both edit `server.mjs`) · Independent: no · Branch `sb-08-profile-memory`
 - PR title: `SB-08: agent profile fields, Postgres memory, skills reader, prompt builder`
 
 **Touch (create):** `runner/db/migrations/002_memory.sql`, `runner/agent/memory.mjs`, `runner/agent/skills.mjs`, `runner/agent/prompt.mjs`,
@@ -258,7 +258,7 @@ off-limits?" from memory (needs the turn engine, T10 and later). **Do not tick t
 
 ## T03 · SB-13 headless browser and emulator tools
 
-- [ ] **Merged** · Size **M** · Depends: none (needs T01's resolver only for the live wiring; the library takes an output directory argument) · Independent: yes · Branch `sb-13-browser-emulator`
+- [x] **Merged** · Size **M** · Depends: none (needs T01's resolver only for the live wiring; the library takes an output directory argument) · Independent: yes · Branch `sb-13-browser-emulator`
 - PR title: `SB-13: Playwright image, SSRF-safe screenshots, demo-only emulator wrapper`
 
 **Touch (create):** `runner/browser/screenshot.mjs`, `runner/browser/ssrf.mjs`, `runner/browser/emulator.mjs`, `runner/browser/images.mjs` (the `saveImage` interface + a file implementation),
