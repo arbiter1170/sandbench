@@ -253,6 +253,10 @@ p { margin: 0.4rem 0 0.8rem; }
   background: var(--bubble);
   max-width: min(62ch, 92%);
   min-width: 0;
+  /* Long unbroken runs (Windows paths in inline code, bare links, ─── separators) wrap inside the
+     bubble instead of widening the message list. Inherited by everything in the bubble; `pre`
+     panels with `white-space: pre` are unaffected and keep scrolling inside their own box. */
+  overflow-wrap: anywhere;
 }
 .msg.user { margin-left: auto; background: #2e2424; }
 
@@ -329,6 +333,9 @@ blockquote {
   border-top: 1px solid var(--line);
   padding: 0.75rem 1rem calc(0.75rem + env(safe-area-inset-bottom));
   display: grid;
+  /* A single bounded track: the bar's textarea has an intrinsic width (cols) that would otherwise
+     set the grid item's auto minimum and push the send button past a 360-390 px screen. */
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.55rem;
   background: var(--panel);
 }
@@ -636,7 +643,8 @@ legend { padding-inline: 0.3rem; font-weight: 600; }
 .call-btn.on { background: #3dba7a; border-color: #3dba7a; color: #04150c; }
 .mark-photo { object-fit: cover; display: inline-block; flex: none; }
 
-.approval { margin-top: 0.6rem; border: 1px solid var(--line-strong); border-radius: 0.8rem; padding: 0.7rem 0.8rem; background: #1b1b1b; display: grid; gap: 0.45rem; max-width: 36rem; }
+/* One bounded track, so wide preformatted output scrolls inside its own `pre` and never stretches the card. */
+.approval { margin-top: 0.6rem; border: 1px solid var(--line-strong); border-radius: 0.8rem; padding: 0.7rem 0.8rem; background: #1b1b1b; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.45rem; max-width: 36rem; }
 .approval header { display: flex; justify-content: space-between; gap: 0.5rem; font-size: 0.85rem; }
 .approval header span { color: var(--muted); }
 .approval > code { display: block; padding: 0.45rem 0.55rem; background: var(--code); border-radius: 0.45rem; white-space: pre-wrap; word-break: break-word; }
