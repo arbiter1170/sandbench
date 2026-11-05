@@ -85,7 +85,7 @@ using an API key, spending money). Real-key and real-GitHub behaviour is "pendin
 | T01 | SB-09 workspaces and worktrees | none | `sb-09-workspaces` | M | yes |
 | T02 | SB-08 profile memory and skills | T01 (shared `server.mjs`) | `sb-08-profile-memory` | L | no |
 | T03 | SB-13 browser emulator | none | `sb-13-browser-emulator` | M | yes |
-| T04 | SB-03 PR 1 contracts, `003_jobs.sql`, route registry | T02 (migration number, `server.mjs`) | `sb-03a-contracts` | M | no |
+| T04 | SB-03 PR 1 contracts, `003_jobs.sql`, route registry | T02 (migration number, `server.mjs`) | `sb-03a-contracts` (merged #18) | M | no |
 | T05 | `PLAN.md` stale host text, docs only | none | `docs-plan-laptop-text` | S | yes |
 | T06 | SB-15a team pack importer | T02 | `sb-15a-team-pack-import` | M | no |
 | T07 | Retry the runner-side bot-event delete | none | `sb-fu-bot-event-delete` | S | yes |
@@ -310,7 +310,7 @@ posting it needs SB-03, SB-06, SB-10 (and SB-18 for attachments).
 
 ## T04 · SB-03 PR 1: contracts and plumbing (no behaviour change)
 
-- [ ] **Merged** · Size **M** · Depends: T02 merged (migration order `002` then `003`; `server.mjs`, `main.mjs`) · Independent: no · Branch `sb-03a-contracts`
+- [x] **Merged** (PR #18, `7068fc3`) · Size **M** · Depends: T02 merged (migration order `002` then `003`; `server.mjs`, `main.mjs`) · Independent: no · Branch `sb-03a-contracts`
 - PR title: `SB-03 PR 1: contracts, 003_jobs.sql, route registry, driver extras hook, tools discovery`
 
 **Touch (create):** `runner/contracts/{index,job,turn,approval,tool,policy}.mjs`, `runner/contracts/schemas/*.json` (optional JSON schemas, one per contract),
