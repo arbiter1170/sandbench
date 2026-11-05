@@ -349,14 +349,40 @@ test("restart: a turn the engine died on is retried exactly once (resuming its s
   assert.equal(last.type, "error");
   assert.equal(last.data.message, FAILED_TWICE_MESSAGE);
   assert.equal((await db.store.get(OWNER, "messages", `${twice.jobId}-reply`)).data.status, "error");
-  // A clean stop of a running engine also leaves the row for the next start to retry.
-  const f = makeEngine(db, { scripts: SCRIPTS, boss: "restart" });
-  open.push(f.engine);
-  await f.engine.start({ pollingIntervalSeconds: 0.5 });
-  const slow = await f.engine.startTurn({ owner: OWNER, request: request("qa", "#hang stop test") });
-  await f.fake.held(slow.jobId);
-  await f.engine.stop();
-  assert.equal((await f.engine.getJob(OWNER, slow.jobId)).status, "cancelled", "a clean stop cancels its own running turns");
+  // stop() (what SIGTERM runs, e.g. `docker compose restart`) leaves the row for the next start to
+  // retry once, the same as a crash; pg-boss's own job is settled by the next engine.
+  const slow = await e.engine.startTurn({ owner: OWNER, request: request("qa", "#hang stop test") });
+  await e.fake.held(slow.jobId);
+  await e.engine.stop();
+  assert.equal((await e.engine.getJob(OWNER, slow.jobId)).status, "running", "stop() settles nothing");
+  const g = makeEngine(db, { scripts: { ...SCRIPTS, hang: SCRIPTS.reply }, boss: "restart" });
+  open.push(g.engine);
+  await g.engine.start({ pollingIntervalSeconds: 0.5 });
+  const retried = await finished(g.engine, slow.jobId);
+  assert.equal(retried.status, "done");
+  assert.equal(retried.attempt, 1);
+});
+
+test("restart: a queued row whose pg-boss job was taken by a dead process, or lost, is queued again without counting an attempt", { skip }, async () => {
+  const a = await started("requeue");
+  // The crash hits between pg-boss handing the job out and the row turning `running`.
+  const taken = await a.engine.startTurn({ owner: OWNER, request: request("sprites", "#hang taken") });
+  await a.fake.held(taken.jobId);
+  await db.sql`update jobs set status = 'queued', started_at = null, heartbeat_at = null where id = ${taken.jobId}`;
+  // A row whose pg-boss job vanished (expired and deleted by pg-boss, say).
+  const lost = await a.engine.startTurn({ owner: OWNER, request: request("pixelpets", "#slow lost") });
+  await a.engine.abandon();
+  await db.sql`update jobs set queue_job_id = null where id = ${lost.jobId}`;
+  assert.equal(await a.engine.queue.state((await a.engine.getJob(OWNER, taken.jobId)).queue_job_id), "active");
+
+  const b = makeEngine(db, { scripts: { ...SCRIPTS, hang: SCRIPTS.reply }, boss: "requeue" });
+  open.push(b.engine);
+  await b.engine.start({ pollingIntervalSeconds: 0.5 });
+  const first = await finished(b.engine, taken.jobId);
+  const second = await finished(b.engine, lost.jobId);
+  assert.deepEqual([first.status, first.attempt], ["done", 0]);
+  assert.deepEqual([second.status, second.attempt], ["done", 0]);
+  assert.equal(types(await b.engine.events.list(taken.jobId, 0)).includes("interrupted"), false, "no retry was counted");
 });
 
 test("pending approvals survive a restart and expire by time, not by the restart", { skip }, async () => {

@@ -19,7 +19,10 @@ export async function setupDb(schema) {
   const { default: postgres } = await import("postgres");
   const admin = postgres(URL_, { max: 1, onnotice: () => {} });
   await admin.unsafe(`drop schema if exists ${schema} cascade; create schema ${schema};`);
-  await admin.unsafe(`drop schema if exists ${schema}_boss cascade;`);
+  // Also every pg-boss schema a killed earlier run may have left (an orphaned active job there
+  // would block its agent's singleton key).
+  const stale = await admin`select nspname from pg_namespace where nspname like ${`${schema}_boss%`}`;
+  for (const row of stale) await admin.unsafe(`drop schema if exists ${row.nspname} cascade`);
   await admin.end({ timeout: 1 });
   // Every connection of this pool works in the test schema.
   const sql = postgres(URL_, { max: 6, onnotice: () => {}, connection: { search_path: schema } });

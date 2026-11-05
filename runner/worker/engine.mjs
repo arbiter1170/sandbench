@@ -264,7 +264,7 @@ export function createEngine(deps) {
   async function reconcile({ staleMs = 0 } = {}) {
     const cutoff = new Date(Date.now() - staleMs);
     const rows = await sql`select * from jobs where kind = 'turn' and status = 'running' and (heartbeat_at is null or heartbeat_at <= ${cutoff}) order by created_at`;
-    const report = { retried: [], failed: [] };
+    const report = { retried: [], failed: [], requeued: [] };
     for (const row of rows) {
       const job = toJob(row);
       if (running.has(job.id)) continue;
@@ -282,6 +282,20 @@ export function createEngine(deps) {
         report.failed.push(job.id);
       }
     }
+    // A `queued` row whose pg-boss job is no longer waiting (taken by a process that died before
+    // it marked the row running, or expired) would never run and, if still `active`, would block
+    // its agent's key. Settle the stale pg-boss job and send the turn again; it never ran, so the
+    // attempt count stays.
+    const queued = await sql`select * from jobs where kind = 'turn' and status = 'queued' order by created_at`;
+    for (const row of queued) {
+      const job = toJob(row);
+      const state = job.queue_job_id ? await queue.state(job.queue_job_id).catch(() => null) : null;
+      if (state === "created" || state === "retry") continue;
+      if (state === "active") await queue.fail(job.queue_job_id, INTERRUPTED_MESSAGE).catch(() => false);
+      const queueJobId = await queue.enqueueTurn({ jobId: job.id, agentId: job.agent_id, timeoutS: job.timeout_s });
+      await sql`update jobs set queue_job_id = ${queueJobId}, updated_at = now() where id = ${job.id} and status = 'queued'`;
+      report.requeued.push(job.id);
+    }
     return report;
   }
 
@@ -293,37 +307,35 @@ export function createEngine(deps) {
     started = true;
     const expired = await approvals.expireStale();
     const recovered = await reconcile();
-    if (expired || recovered.retried.length || recovered.failed.length) log(`start: ${expired} approvals expired, ${recovered.retried.length} turns retried, ${recovered.failed.length} failed`);
+    if (expired || recovered.retried.length || recovered.failed.length || recovered.requeued.length) log(`start: ${expired} approvals expired, ${recovered.retried.length} turns retried, ${recovered.failed.length} failed, ${recovered.requeued.length} queued again`);
     await queue.work(handle, pollingIntervalSeconds ? { pollingIntervalSeconds } : {});
   }
 
-  /** Stops cleanly: running turns are aborted (they finish as cancelled) and pg-boss closes. */
-  async function stop() {
-    if (!started) return;
-    for (const { controller } of running.values()) controller.abort();
-    const deadline = Date.now() + 5000;
-    while (running.size && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
-    started = false;
-    await queue.stop({ graceful: false });
-  }
-
   /**
-   * What a crash looks like: heartbeats stop, polling stops, nothing is settled. Running turns
-   * stay `running` in `jobs` and `active` in pg-boss, for the next engine's reconcile().
+   * What the database sees when this process goes away, crash or `docker compose restart`:
+   * heartbeats stop, polling stops, no row is settled. Running turns stay `running` in `jobs` (and
+   * `active` in pg-boss) for the next engine's reconcile(), which retries each one once. The
+   * in-process waiters (a driver, an approval wait) are released, and handle() writes nothing
+   * because `started` is already false.
    */
   async function abandon() {
+    if (!started) return;
     started = false;
     for (const [id, live] of running) {
       clearInterval(live.heartbeat);
       running.delete(id);
-      // Frees this process's waiters (a driver, an approval wait) without touching any row:
-      // handle() sees `started` is false and writes nothing.
       live.controller.abort();
     }
     await queue.abandon();
   }
 
-  /** Closes pg-boss after abandon() (tests). */
+  /** abandon(), then close pg-boss: the runner's shutdown path (SIGTERM). */
+  async function stop() {
+    await abandon();
+    await dispose();
+  }
+
+  /** Closes pg-boss (after abandon(), or for an engine that never started). */
   async function dispose() {
     await queue.stop({ graceful: false }).catch(() => undefined);
   }

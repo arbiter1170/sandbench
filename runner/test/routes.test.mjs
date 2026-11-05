@@ -37,8 +37,8 @@ const get = (route, token = "good") => fetch(`${base}${route}`, token ? { header
 
 test("the loader sorts by file name and skips index.mjs", async () => {
   assert.deepEqual((await loadRouteFactories(new URL("good/", fixtures))).map((route) => route.file), ["05-echo.mjs", "10-ping.mjs"]);
-  // The real routes folder ships empty.
-  assert.deepEqual(await loadRouteFactories(), []);
+  // The real routes folder: SB-03 PR 2's two modules, in file order.
+  assert.deepEqual((await loadRouteFactories()).map((route) => route.name), ["approvals", "jobs"]);
 });
 
 test("duplicate names, overlapping prefixes and built-in paths are refused at load", async () => {
