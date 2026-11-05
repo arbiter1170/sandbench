@@ -51,7 +51,7 @@ Vite inlines these at **build** time. Changing the allowlist or the runner URL r
 
 ## 5. iOS Safari QA
 
-- [ ] Allowlisted Google account signs in via redirect and reaches the app.
+- [ ] Allowlisted Google account signs in (a popup; a redirect only if the popup is blocked) and reaches the app, on iPhone Safari too.
 - [ ] Non-allowlisted Google account sees the private-demo message.
 - [ ] Create a bot, send a message with your own model API key.
 - [ ] Reload / another Safari tab: workspace still present (cloud or local).
