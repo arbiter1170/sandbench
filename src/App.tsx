@@ -31,7 +31,6 @@ import {
   harnessInput,
   harnessInterrupt,
   harnessPermit,
-  TurnLostError,
   harnessReadFile,
   harnessRecordRun,
   harnessScreen,
@@ -48,6 +47,7 @@ import {
   type HarnessHealth,
   runnerFetch,
   runnerMode,
+  TurnLostError,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
 import { settleLoadedThreads, settleMessage } from "./turnRecovery";
