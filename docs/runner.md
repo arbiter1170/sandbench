@@ -47,7 +47,7 @@ Screen capture, input, the process list and text-to-speech stay in the local har
 - For an agent, a path starting `shared/` or `wt/<slug>/` names that root; anything else is inside its own folder, so another agent's folder can't even be named. Another agent's worktree is neither readable nor writable.
 - Links are followed: a path that leads out of its root through a symlink is refused, and so is a link that points at nothing yet (writing through it would create its target).
 - The slug comes from the server, never from a request. Until SB-03 passes it from the job, every page call (`/api/workspace/*`, `/api/exec`, `/api/turns`) is the owner context and works exactly as before in `workspace/`.
-- This is not a sandbox: a shell command can still open any path the runner's user can. Isolating agents from each other needs a separate OS user or container per agent.
+- This is not a sandbox: a shell command can still open any path the runner's user can. The fix is decided and comes with SB-29; see [Agent isolation](#agent-isolation-decided-sb-29).
 
 **Worktrees** (`runner/workspace/worktrees.mjs`). Repos come from an allowlist in `SANDBENCH_REPOS`, `name=/absolute/path[#base]` separated by commas, with the base defaulting to `origin/main`, for example `SANDBENCH_REPOS=game=/srv/sandbench/shared/game#origin/main,team=/srv/sandbench/shared/team`. Nothing reads it yet: the `worktree_create` and `worktree_remove` tools that use it come with SB-10.
 - `create({ agentSlug, repo, branch })` checks everything before any `git` call (branch names: letters, digits, `._/-`, up to 100 characters, no leading `-`, no `..`, `//`, trailing `/` or `.lock`), fetches, and runs `git worktree add --no-track -b <branch> wt/<slug>/<repo>/<branch> <base>`.
@@ -75,6 +75,47 @@ Screen capture, input, the process list and text-to-speech stay in the local har
   ```
   The agent must already exist as a record on the runner. Add `--owner <uid>` if more than one account has it.
 - **Backup:** `docker compose -f deploy/compose.yml exec runner node runner/agent/memory-backup.mjs --out /srv/sandbench/backup` writes `<agent>/profile.md` and `<agent>/journal.md`; copy them into the team repo. The nightly run is SB-14.
+
+## Browser and emulator (SB-13)
+
+The runner image is built on `mcr.microsoft.com/playwright:v1.64.1-noble`, which has headless Chromium and Node 22. `playwright` in `runner/package.json` is pinned to the same version. It adds Java 21 (for the Firebase emulators), `gh`, Python 3 and `firebase-tools` 14. None of this is reachable by agents yet: the `screenshot` and `emulator_*` tools come with SB-10, behind the policy layer (SB-06).
+
+- **Screenshots** (`runner/browser/screenshot.mjs`): `screenshot({ url, outDir, widths = [320, 375, 390], fullPage, waitFor })` saves one PNG per width (`<host>-<width>.png`, at scale 1) and returns `[{ width, path, bytes }]`.
+  - `outDir` will be the agent's own folder (SB-09 rules).
+  - Saving goes through a `saveImage({ outDir, name, buffer })` → `{ path, bytes }` interface (`runner/browser/images.mjs`), so attachments (SB-18) can plug in later.
+- **SSRF rules** (`runner/browser/ssrf.mjs`):
+  - Only `http` and `https`, with no user name or password in the URL.
+  - Every address the host resolves to must be public. Loopback, private, link-local (including the `169.254.169.254` metadata address), carrier-grade NAT, multicast and reserved ranges are refused, as are IPv4-mapped IPv6, odd numeric IPv4 spellings, `localhost` and `metadata.google.internal`.
+  - Chromium's only way out is a local checking proxy, loopback included. So every request, subresource and redirect hop is checked. The proxy connects to the exact address it checked, so a DNS answer that changes in between can't redirect it.
+  - `allowHosts` (for example the live game host) and `allowLoopbackFor` (tests) are explicit exceptions.
+- **Emulators** (`runner/browser/emulator.mjs`): `emulatorStart({ project })` runs `firebase emulators:start --only auth,firestore,database --project <project>` with a temporary config file (ports 9099, 8180 and 9000 by default, as in the game repo's `firebase.json`), and `emulatorStop` stops it and deletes the file. Only `demo-*` ids are accepted, never one blocked by `runner/guard.mjs` or `SANDBENCH_BLOCKED_PROJECTS`, and `--project` is always passed.
+- **Local tests:** `npx playwright install chromium` once in `runner/`. CI installs it before `npm run test:node`.
+
+## Agent isolation (decided, SB-29)
+
+**Why.** Today every shell (`runner/shell.mjs`) and every engine process (`harness/drivers/*.mjs`) runs as the one `node` user in the runner container and inherits its whole environment. Once agents can run commands, an agent could read another agent's folder, read the model keys from its environment or the secrets file, and use `DATABASE_URL` to read every account's rows in Postgres. The SB-09 path rules cannot stop that, because they only cover the runner's own routes.
+
+**Decision (2026-10-27, simplified 2026-10-28 for a single user).** One `sandbox` compose service, run as one non-root user. It takes the place of the `jobs` service that SB-04 planned (brief, open question 4), so the laptop runs one extra container, not one per agent.
+
+```
+            edge network                 sandbox network (no Postgres)
+phone ──> runner:8080 ── control API ──> sandbox
+            │  keys, secrets file           │  one non-root user, no keys, no DB
+            │  /api/model adds the key <────┘  engines call the model through the runner
+         internal network
+            │
+          postgres
+```
+
+1. **Where things run.** Every agent shell, detached job and engine process (Claude Code, Codex, Grok CLI) runs in `sandbox`, never in `runner`. The page's own owner-context calls stay in `runner` as today.
+2. **One user for all agents.** Everything in the sandbox runs as one non-root user. `agents/`, `wt/` and `shared/` are mounted; `workspace/` is not. Agents are not separated from each other inside it. Sandbench has one human user, so the risk is an agent tricked by something it reads (a web page, a GitHub comment) reaching the keys, the database or other services, not one person reaching another's data. Points 3 and 4 cover that.
+3. **No secrets in the sandbox.** No API keys in its environment, the secrets file and the Postgres volume are not mounted, and it is not on the `internal` network, so Postgres can't be reached. A spawned process gets an environment built from an allowlist, not a copy of the parent's.
+4. **Model calls go through the runner.** Engines point at the runner's `/api/model` (`harness/modelProxy.mjs`), for example with `ANTHROPIC_BASE_URL`, and carry the per-turn token from SB-10. The runner adds the real key. GitHub access comes with SB-11's App tokens, scoped per call.
+5. **Control channel.** The runner asks the sandbox to spawn, kill and tail processes over a small authenticated HTTP API on a private compose network. The runner never gets the Docker socket, because that is root on the laptop.
+6. **Hardening.** The container runs as a non-root user with `cap_drop: ALL`, `no-new-privileges`, and pids and memory limits. Each spawn gets its own process group, which SB-04 needs anyway.
+7. **Network out** stays open for git, npm and GitHub. Narrowing it is a follow-up.
+8. **Accepted limits.** Agents can read and write each other's folders and worktrees through a shell; SB-09's path rules and SB-06's cards still cover the runner's own routes. If a second person or an untrusted agent ever joins, add one Linux user per agent (follow-up). Agents share the kernel of the laptop's Docker VM, so this is not a VM boundary. Agents can see each other's process list until `/proc` is mounted with `hidepid` (follow-up). One agent can still use up shared CPU within the limits.
+9. **Gate.** SB-10 may ship its read-only tools before SB-29. Any tool that runs a shell, writes files or runs git, SB-04's `job_start`, and the engine's own shell tool in runner mode do not merge until SB-29 has merged. SB-06's policy checks stay on top: isolation limits what a command can reach, the policy decides whether it runs at all.
 
 ## Records (SB-02)
 
