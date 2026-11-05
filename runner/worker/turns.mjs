@@ -130,8 +130,10 @@ export async function runTurn({ job, deps }) {
         }
         return;
       }
-      if (event.type === "message_delta" && typeof event.text === "string") reply += event.text;
-      const { type, ...data } = event;
+      // Redact before anything is kept: the reply record is built from the scrubbed deltas too.
+      const { type, ...raw } = event;
+      const data = events.redact(raw);
+      if (type === "message_delta" && typeof data.text === "string") reply += data.text;
       void emit(type, data);
     },
     requestPermission: async ({ command, reason, tool }) => {
