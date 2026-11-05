@@ -10,7 +10,7 @@ test("the default rules still cover the harmless commands they were meant for", 
     "Get-Date",
     "get-date -Format yyyy-MM-dd",
     "Get-ChildItem -Recurse -Filter package.json",
-    "Get-ChildItem C:\\Users\\me\\Documents",
+    "Get-ChildItem src/components",
     "Get-Process",
     "Get-Location",
     "dir /s",
@@ -23,7 +23,7 @@ test("the default rules still cover the harmless commands they were meant for", 
 
 test("a command-name rule does not cover subcommands that change things", () => {
   const rules = ["git", "npm", "Remove-Item", "node", "docker"];
-  for (const command of ["git status", "git status --porcelain", "git log -n 5 --oneline", "git diff HEAD", "git branch", "git branch -a", "git tag -l", "git remote"]) {
+  for (const command of ["git status", "git status --porcelain", "git log -n 5 --oneline", "git diff --stat HEAD", "git branch", "git branch -a", "git tag -l", "git remote"]) {
     assert.equal(auto(command, rules), true, command);
   }
   for (const command of [
@@ -87,7 +87,7 @@ test("git expands abbreviated options and clustered flags, so those spellings of
     assert.equal(auto(command, ["git"]), false, command);
   }
   // Ordinary read-only options that only look close must keep working.
-  for (const command of ["git log --oneline", "git log -n 5 --stat", "git grep -in needle", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
+  for (const command of ["git log --oneline", "git log -n 5 --stat", "git grep -l -i needle", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
     assert.equal(auto(command, ["git"]), true, command);
   }
 });
@@ -104,8 +104,196 @@ test("a sensitive path still asks when it is attached to a parameter name or a r
   ]) {
     assert.equal(auto(command, rules), false, command);
   }
-  for (const command of ["Get-Content -Path:notes.txt", "git show HEAD:src/App.tsx", "Get-Content C:\\Users\\me\\notes.txt"]) {
+  for (const command of ["git show HEAD:src/App.tsx", "Get-Content notes.txt", "Get-Content -Path notes.txt"]) {
     assert.equal(auto(command, rules), true, command);
+  }
+});
+
+test("under a shorter rule, an argument that is not positively validated asks", () => {
+  const rules = ["git", "cat", "ls", "dir", "head", "tail", "wc", "echo", "type", "pwd", "whoami", "hostname", "Get-ChildItem", "Get-Content", "Get-Item", "Get-Date", "Get-Location", "Get-PSDrive", "Test-Path", "Resolve-Path", "Select-String"];
+  for (const command of [
+    // Absolute paths, parent directories and drive-qualified paths leave the working folder.
+    "cat /home/me/notes.txt",
+    "cat C:/Users/me/notes.txt",
+    "cat ../notes.txt",
+    "cat src/../../notes.txt",
+    "Get-ChildItem C:/Users/me/Documents",
+    "ls /",
+    // Abbreviated or attached parameters.
+    "Get-Content -Pa notes.txt",
+    "Get-Content -Path:notes.txt",
+    "Get-ChildItem -Rec",
+    "Select-String -Patt x -Path notes.txt",
+    "Get-Date -Date 2020",
+    "Get-Location -Stack",
+    "Get-PSDrive -Name x",
+    "Test-Path -PathType Leaf x",
+    // Flags no one has reviewed.
+    "cat -",
+    "ls --color=always",
+    "tail -f notes.txt",
+    "head -c 5 notes.txt",
+    "wc --files0-from=notes.txt",
+    "echo -e x",
+    "pwd -P",
+    "whoami /all",
+    "type -a ls",
+    // git options and shapes outside the list.
+    "git log --unknown-option",
+    "git log -S needle",
+    "git log --max-count=x",
+    "git status --unknown",
+    "git diff HEAD src/App.tsx",
+    "git diff a b",
+    "git diff --unknown HEAD",
+    "git grep -e .. x",
+    "git shortlog HEAD",
+    "git blame -L 1 notes.txt",
+    "git describe --match x",
+    "git ls-files --others",
+    "git rev-parse --parseopt",
+    "git show HEAD HEAD",
+    "git show ../x",
+    "git show HEAD:../x",
+    "git show HEAD:/abs",
+    "git show HEAD:a:b",
+    "git show :notes.txt",
+    // Windows device names are not files.
+    "cat CON",
+    "cat nul",
+    "Get-Content PRN.txt",
+    "type src/aux",
+    "tail COM1",
+    "wc lpt9.log",
+    "git branch --contains x",
+    "git tag --sort=x",
+  ]) {
+    assert.equal(auto(command, rules), false, command);
+  }
+  // An exact rule is the user's own word for word choice, and is still taken literally.
+  assert.equal(auto("git log --unknown-option", ["git log --unknown-option"]), true);
+  assert.equal(auto("cat /home/me/notes.txt", ["cat /home/me/notes.txt"]), true);
+  // Flags keep their case outside PowerShell, whose parameters ignore it.
+  assert.equal(auto("ls -LA", ["ls"]), false);
+  assert.equal(auto("get-childitem -RECURSE", ["Get-ChildItem"]), true);
+});
+
+test("path spellings that normalize to something else ask", () => {
+  for (const command of [
+    // Found by review: each printed a fake token or key.
+    "cat .git/./config",
+    "cat .git//config",
+    "tail .git/hooks/../config",
+    "Get-Content .git./config",
+    "cat .git/HEAD",
+    "Get-Content .env/.",
+    "Get-Content .env/x/..",
+    "Select-String -Pattern x -Path .env/.",
+    "Get-Content a.key.",
+    "cat server.pem...",
+    "Get-Content server.pem/x/..",
+    // Other non-canonical spellings of a path.
+    "cat ./notes.txt",
+    "cat src/./notes.txt",
+    "cat src//notes.txt",
+    "ls src/",
+    "cat notes.txt.",
+    "cat /dev/fd/../environ",
+    "ls /dev/fd/../../",
+  ]) {
+    assert.equal(auto(command, ["cat", "tail", "ls", "Get-Content", "Select-String"]), false, command);
+  }
+  assert.equal(auto("cat /dev/fd/../environ", ["cat /dev/fd/../environ"]), false, "not even as an exact rule");
+  assert.equal(auto("ls .", ["ls"]), true);
+  assert.equal(auto("cat .gitignore", ["cat"]), true);
+});
+
+test("git forms that print file contents ask, because a tracked secret has no recognizable name", () => {
+  for (const command of [
+    "git grep -n FAKE",
+    "git grep needle",
+    "git grep -e needle",
+    "git log -p -1",
+    "git log --patch",
+    "git show",
+    "git show HEAD",
+    "git show 336709932309ea097397544f1377e5b6164c58f7",
+    "git show --stat 336709932309ea097397544f1377e5b6164c58f7",
+    "git show --oneline HEAD",
+    "git diff",
+    "git diff HEAD",
+    "git diff --cached",
+    "git diff notes.txt",
+    "git diff notes.txt pgpass.conf",
+    "git diff --stat a b",
+    "git diff --name-only a b",
+    "git blame notes.txt",
+    "git blame --contents=notes.txt a.txt",
+    "git ls-files -s",
+  ]) {
+    assert.equal(auto(command, ["git"]), false, command);
+  }
+});
+
+test("programs and git subcommands outside the table ask under a rule for them", () => {
+  for (const command of ["rm notes.txt", "curl example", "Invoke-WebRequest example", "wc --libxo=encoder=x notes.txt", "more notes.txt", "Set-Content notes.txt"]) {
+    assert.equal(auto(command, [command.split(" ")[0]]), false, command);
+  }
+  for (const sub of ["fetch", "clone", "pull", "archive", "bundle", "difftool", "ls-remote", "submodule", "apply", "am", "shortlog", "config", "help"]) {
+    assert.equal(auto(`git ${sub} x`, ["git"]), false, sub);
+  }
+});
+
+test("every credential name asks, even as an exact rule or attached to something", () => {
+  for (const path of ["secrets.json", "aws-credentials.txt", ".aws/x", "id_dsa", "id_ecdsa", "a.pfx", "a.keystore", ".env-prod", ".env_local", "_netrc", "pgpass.conf", ".bash_history", "ConsoleHost_history.txt", "AppData/Roaming/gcloud/x"]) {
+    assert.equal(auto(`cat ${path}`, ["cat"]), false, path);
+    assert.equal(auto(`cat ${path}`, [`cat ${path}`]), false, `exact: ${path}`);
+  }
+  for (const command of ["ls *", "cat a?", "echo $HOME", "cat .e\\nv"]) {
+    assert.equal(auto(command, [command]), false, `exact, outside the alphabet: ${command}`);
+  }
+  for (const command of ["git show HEAD:.env", "git show HEAD:.ssh/x", "wc --files0-from=.env", "wc --files0-from=.ssh/x", "Get-Content -Path:.env", "Get-Content -Path:.ssh/x", "git grep -f.ssh/x y"]) {
+    assert.equal(auto(command, [command]), false, `exact: ${command}`);
+  }
+});
+
+test("a read-only command in the validated form auto-runs under a shorter rule", () => {
+  for (const [rule, command] of [
+    ["git", "git status --short"],
+    ["git", "git log --oneline --graph -n 20"],
+    ["git", "git log -5 src/App.tsx"],
+    ["git", "git log --since=2026-01-01 --author=someone"],
+    ["git", "git diff --cached --name-only"],
+    ["git", "git diff --stat HEAD"],
+    ["git", "git show HEAD --stat"],
+    ["git", "git grep -l needle src"],
+    ["git", "git grep -c -e needle"],
+    ["git", "git ls-files src"],
+    ["git", "git describe --tags"],
+    ["git", "git rev-parse --abbrev-ref HEAD"],
+    ["pwd", "pwd"],
+    ["whoami", "whoami"],
+    ["hostname", "hostname"],
+    ["type", "type notes.txt"],
+    ["Get-Location", "Get-Location"],
+    ["Get-Date", "Get-Date"],
+    ["git", "git tag --list"],
+    ["cat", "cat -n notes.txt"],
+    ["ls", "ls -lah src"],
+    ["dir", "dir /b src"],
+    ["head", "head -n 5 notes.txt"],
+    ["tail", "tail -20 notes.txt"],
+    ["wc", "wc -l notes.txt"],
+    ["echo", "echo hello there"],
+    ["Get-Content", "Get-Content notes.txt -TotalCount 5"],
+    ["Get-ChildItem", "Get-ChildItem -Path src -File -Depth 2"],
+    ["Select-String", "Select-String -Pattern needle -Path notes.txt"],
+    ["Test-Path", "Test-Path notes.txt"],
+    ["Resolve-Path", "Resolve-Path notes.txt"],
+    ["Get-Item", "Get-Item notes.txt"],
+    ["Get-PSDrive", "Get-PSDrive"],
+  ]) {
+    assert.equal(auto(command, [rule]), true, command);
   }
 });
 
@@ -115,9 +303,11 @@ test("the credential stores of the tools this app drives ask", () => {
   }
 });
 
-test("a backslash asks outside PowerShell cmdlets, because a POSIX shell removes it after the review", () => {
+test("a backslash always asks: the same text means different things in different shells", () => {
   // Each of the first eight ran a program, wrote a file or read a fake secret under bash and sh.
   for (const command of [
+    "Get-Content C:\\Users\\me\\notes.txt",
+    "Get-Content src\\notes.txt",
     "cat .e\\nv",
     "cat secrets.js\\on",
     "cat /pr\\oc/self/environ",
@@ -129,9 +319,10 @@ test("a backslash asks outside PowerShell cmdlets, because a POSIX shell removes
     "dir src\\sub",
     "cat C:\\Users\\me\\notes.txt",
   ]) {
-    assert.equal(auto(command, ["git", "cat", "dir"]), false, command);
+    assert.equal(auto(command, ["git", "cat", "dir", "Get-Content"]), false, command);
   }
-  assert.equal(auto("Get-Content C:\\Users\\me\\notes.txt", ["Get-Content"]), true);
+  assert.equal(auto("Get-Content C:\\notes.txt", ["Get-Content C:\\notes.txt"]), false, "not even as an exact rule");
+  assert.equal(normalizeRule("Get-Content C:\\notes.txt"), "", "Studio refuses to save it");
 });
 
 test("git commands that read outside the tracked tree or print remote credentials ask", () => {
@@ -159,7 +350,7 @@ test("git commands that read outside the tracked tree or print remote credential
   ]) {
     assert.equal(auto(command, ["git"]), false, command);
   }
-  for (const command of ["git remote", "git log HEAD..main", "git diff HEAD src/App.tsx", "git status", "git branch --show-current", "git rev-parse --show-toplevel"]) {
+  for (const command of ["git remote", "git log HEAD..main", "git diff --stat HEAD", "git status", "git branch --show-current", "git rev-parse --show-toplevel"]) {
     assert.equal(auto(command, ["git"]), true, command);
   }
 });

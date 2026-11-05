@@ -20,6 +20,12 @@ function status(action: StepAction, mode?: ApprovalMode, extra: Partial<Paramete
 }
 
 describe("planner approvals", () => {
+  it("only an unattended turn is denied by the skip setting; someone present still gets a card", () => {
+    expect(status(click, "ask", { unattended: false, unattendedPolicy: "skip" })).toBe("pending");
+    expect(status(click, "ask", { unattended: true, unattendedPolicy: "skip" })).toBe("denied");
+    expect(status(click, "ask", { unattended: true, unattendedPolicy: "ask" })).toBe("pending");
+  });
+
   it("auto-runs only rule-covered read-only commands, in every mode", () => {
     for (const mode of [undefined, ...MODES]) {
       expect(status(command("Get-Date"), mode)).toBe("approved");
