@@ -27,7 +27,7 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ENTRIES START BELOW
 
 ### Session 8 · 2026-11-05 · T10 SB-03 PR 2: turn engine (fake-driver tested) · done (live part blocked on Q1)
-- **Branch / PR / head sha:** `cursor/sb-03b-turn-engine-93f7` · PR link in the session summary · cut from `7068fc3` (deploy/vercel after #18) · code head `b76ef17` (final head after the log commit is in the session summary). Session 7 (same day, docs PR #20: T05 + STATUS refresh) is on its own branch; its entry arrives with that merge.
+- **Branch / PR / head sha:** `cursor/sb-03b-turn-engine-93f7` · https://github.com/arbiter1170/sandbench/pull/22 · cut from `7068fc3` (deploy/vercel after #18) · code head `b76ef17` (final head after the log commit is in the session summary). Session 7 (same day, docs PR #20: T05 + STATUS refresh) is on its own branch; its entry arrives with that merge.
 - **Checks on the head:** pending at the time of writing.
 - **What was done** (WORKPLAN T10, steps 1-8 in order, one commit each):
   - `runner/worker/turns.mjs` `runTurn`: agent record (`store.get`), the thread's messages as history (newest 20 done ones, minus this turn's two records), SB-08 `buildSystemPrompt`, SB-09 `resolveWorkspacePath` with the **agent's slug from the job** (profile `slug` or record id; never the request), the key by name from the secret store with the agent's scope, `driver.startTurn`, every driver event → `job_events` (per-job `seq`, inserts chained so order holds), the reply → the `messages` record `replyId` (patched if the page's stand-in exists, created otherwise).

@@ -17,13 +17,13 @@
 | T07 | Retry runner-side bot-event delete | todo | `sb-fu-bot-event-delete` | n/a | independent |
 | T08 | SB-06 slice A policy classifier | todo | `sb-06a-classifier` | n/a | independent, not wired |
 | T09 | Prune dry run for logs and computer rows | todo | `sb-fu-prune-dry-run` | n/a | independent |
-| T10 | SB-03 PR 2 turn engine | PR open | `cursor/sb-03b-turn-engine-93f7` | this PR | fake-driver tested on Postgres (16 engine, 4 queue, 5 jobs-api, 2 redaction, 10 vitest); tools in runner-mode turns denied until SB-29; live part blocked on Q1 and the laptop runner |
+| T10 | SB-03 PR 2 turn engine | PR open | `cursor/sb-03b-turn-engine-93f7` | #22 | fake-driver tested on Postgres (16 engine, 4 queue, 5 jobs-api, 2 redaction, 10 vitest); tools in runner-mode turns denied until SB-29; live part blocked on Q1 and the laptop runner |
 | – | SB-29 agent isolation (build) | todo | – | – | decided 2026-10-27 in PR #16, simplified 2026-10-28; gates SB-04, SB-10's acting tools and the engine's tools in runner mode |
 | – | SB-04, SB-10, SB-11, SB-12, SB-06 wiring | blocked | – | – | not scheduled; Supervisor re-plans (WORKPLAN §5). After T10 merges: SB-06 wiring and SB-10 (read-only tools) are next by the brief's merge order |
 
 ## Open PRs awaiting Vincent's merge
 - **#20** docs (T05 + STATUS/WORKPLAN refresh). Docs only.
-- **This PR** (T10, SB-03 PR 2). The image job builds the pinned Claude Code CLI now; watch its runtime against the 20-minute limit.
+- **#22** T10 (SB-03 PR 2). The image job builds the pinned Claude Code CLI now; watch its runtime against the 20-minute limit.
 - Both branches were cut from `deploy/vercel`; whichever merges second gets a WORKLOG/STATUS conflict: keep both entries, newest first, and take the newer STATUS.
 
 ## Blockers and questions
