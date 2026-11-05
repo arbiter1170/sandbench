@@ -81,10 +81,10 @@ async function scriptedTurn(requests, allow, answer = () => undefined, body = {}
   return { ran, events, last, requests: events.filter((event) => event.type === "permission_request") };
 }
 
-test("a `git` rule auto-runs git status but `git push` waits for a card and does not run when denied", async () => {
+test("a `git status` rule auto-runs git status but `git push` waits for a card and does not run when denied", async () => {
   const { ran, requests } = await scriptedTurn(
     [{ command: "git status" }, { command: "git push origin main" }, { command: "git push --force origin main", tool: "Bash" }],
-    ["git"],
+    ["git status"],
     () => false,
   );
   assert.deepEqual(ran, ["git status"]);
@@ -122,23 +122,29 @@ test("the real drivers label their requests, so the gate can tell a shell comman
   assert.ok(driver("grok").includes('tool: "grok"'));
 });
 
+test("a `git` rule auto-runs no git command", async () => {
+  const { ran, requests } = await scriptedTurn([{ command: "git status" }, { command: "git log --oneline" }], ["git"], () => false);
+  assert.deepEqual(ran, []);
+  assert.deepEqual(requests.map((event) => event.auto), [false, false]);
+});
+
 test("the gate uses the rules in the request, not built-in ones", async () => {
   const covered = await scriptedTurn([{ command: "pwd" }], ["pwd"], () => false);
   assert.deepEqual(covered.ran, ["pwd"]);
-  const uncovered = await scriptedTurn([{ command: "pwd" }], ["git"], () => false);
+  const uncovered = await scriptedTurn([{ command: "pwd" }], ["git status"], () => false);
   assert.deepEqual(uncovered.ran, [], "this request's rules do not cover it");
 });
 
 test("an explicit approval runs that one request only; the same command asks again next time", async () => {
   let answered = 0;
-  const { ran, requests } = await scriptedTurn([{ command: "git push origin main" }, { command: "git push origin main" }], ["git"], () => (answered++ === 0 ? true : false));
+  const { ran, requests } = await scriptedTurn([{ command: "git push origin main" }, { command: "git push origin main" }], ["git status"], () => (answered++ === 0 ? true : false));
   assert.deepEqual(ran, ["git push origin main"]);
   assert.equal(requests.length, 2);
   assert.ok(requests.every((event) => event.auto === false));
 });
 
 test("an unattended turn denies what the rules do not cover and runs nothing else", async () => {
-  const { ran, requests } = await scriptedTurn([{ command: "git status" }, { command: "git push origin main" }], ["git"], () => undefined, { unattendedDeny: true });
+  const { ran, requests } = await scriptedTurn([{ command: "git status" }, { command: "git push origin main" }], ["git status"], () => undefined, { unattendedDeny: true });
   assert.deepEqual(ran, ["git status"]);
   assert.equal(requests[1].denied, true);
 });
@@ -150,7 +156,7 @@ test("a card nobody answers expires as a denial and the command does not run", a
     const { events, finished } = watch(turns, (event) => {
       if (event.type === "permission_request" && !event.auto) setImmediate(() => mock.timers.tick(30 * 60_000));
     });
-    turns.start({ driver: scripted.id, prompt: JSON.stringify([{ command: "git push origin main" }]), allow: ["git"] });
+    turns.start({ driver: scripted.id, prompt: JSON.stringify([{ command: "git push origin main" }]), allow: ["git status"] });
     await finished;
     assert.deepEqual(ran, []);
     assert.deepEqual(events.filter((event) => event.type === "permission_resolved").map((event) => event.allow), [false]);
@@ -165,13 +171,13 @@ test("stopping a turn while a card waits denies it and nothing runs", async () =
   const { events, finished } = watch(turns, (event) => {
     if (event.type === "permission_request" && !event.auto) setImmediate(() => turns.interrupt(id));
   });
-  ({ id } = turns.start({ driver: scripted.id, prompt: JSON.stringify([{ command: "git push origin main" }]), allow: ["git"] }));
+  ({ id } = turns.start({ driver: scripted.id, prompt: JSON.stringify([{ command: "git push origin main" }]), allow: ["git status"] }));
   await finished;
   assert.deepEqual(ran, []);
   assert.equal(events.find((event) => event.type === "permission_resolved")?.allow, false);
 });
 
-test("the real http driver: a model asking for `git push` under a `git` rule gets a card, and a denial keeps it from running", async () => {
+test("the real http driver: a model asking for `git push` under a `git status` rule gets a card, and a denial keeps it from running", async () => {
   const replies = [
     { choices: [{ message: { content: "", tool_calls: [{ id: "c1", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "git status" }) } }] } }] },
     { choices: [{ message: { content: "", tool_calls: [{ id: "c2", type: "function", function: { name: "run_command", arguments: JSON.stringify({ command: "git push origin main" }) } }] } }] },
@@ -192,7 +198,7 @@ test("the real http driver: a model asking for `git push` under a `git` rule get
     const { events, finished } = watch(turns, (event) => {
       if (event.type === "permission_request" && !event.auto) setImmediate(() => turns.permit(event.permissionId, false));
     });
-    turns.start({ driver: "http", prompt: "tidy up", model: "m", base: `http://127.0.0.1:${upstream.address().port}/v1`, secret: "COMPAT_API_KEY", allow: ["git"] });
+    turns.start({ driver: "http", prompt: "tidy up", model: "m", base: `http://127.0.0.1:${upstream.address().port}/v1`, secret: "COMPAT_API_KEY", allow: ["git status"] });
     const last = await finished;
     assert.equal(last.type, "done");
     assert.deepEqual(ran, ["git status"]);

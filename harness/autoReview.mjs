@@ -15,20 +15,20 @@
 //   5. A rule that matches only a leading part counts only when the whole command fits that
 //      program's entry below, flag by flag and argument by argument. A flag or an argument
 //      shape that is not listed asks, so abbreviations and new options ask too. Paths must be
-//      relative and canonical. git forms that print file contents without naming the file ask.
+//      relative and canonical. git is not listed: a repository's own config or attributes can
+//      make any git command run a program (core.fsmonitor, diff.external, a textconv driver),
+//      and a folder with plain `HEAD`, `config`, `objects/` and `refs/` is a repository, so
+//      nothing in the command text can show it is safe. A git command only skips the card under
+//      a rule for exactly that command.
 //
 // What this does not establish, so this is a narrowing gate and not a sandbox:
-//   - A read-only git command still runs whatever the repository's own config or attributes
-//     tell it to (core.fsmonitor, diff.external, a textconv driver), and no word in the command
-//     shows this: a folder with plain `HEAD`, `config`, `objects/` and `refs/` is a repository
-//     with no `.git` in sight. `git status` and `git diff --stat` can also rewrite the index.
 //   - The program name is resolved by the shell: an entry earlier on PATH, or a PowerShell
 //     profile, alias or function, runs instead.
 //   - The sensitive list is best-effort. Under a `cat` rule, a secret in a file it does not
 //     name is read, and a symlink inside the folder can lead outside it.
-//   - git commit messages and file names are still printed.
-//   - An exact rule is taken literally apart from checks 1 to 3: it can use absolute paths, or
-//     run project code (`npm test` runs what `package.json` says at that moment).
+//   - An exact rule is taken literally apart from checks 1 to 3: it can use absolute paths, run
+//     project code (`npm test` runs what `package.json` says at that moment), or run a git
+//     command, with the repository-config risk above.
 //   - It sees only what reaches it: a driver CLI's own read tools produce no request.
 
 const SAFE = /^[A-Za-z0-9 _\-./:=+]+$/;
@@ -67,28 +67,22 @@ const isDate = (arg) => /^[A-Za-z0-9_][A-Za-z0-9_.:+-]*$/.test(arg);
 // A canonical relative path, so the text can be checked as written. No empty, `.` or `..`
 // segment, and no trailing dot, which Windows removes: `.env/.`, `a.key.` and `.git/./config`
 // all open something the sensitive list would have named. No Windows device such as `CON`.
-// Also fits a branch name or a `HEAD..main` range.
 const isRelative = (arg) => {
   if (arg === ".") return true;
   if (!/^[A-Za-z0-9_.][A-Za-z0-9_./-]*$/.test(arg)) return false;
   return arg.split("/").every((part) => part && !part.endsWith(".") && !/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(part));
 };
-const isRevAndPath = (arg) => {
-  const [rev, path, ...rest] = arg.split(":");
-  return rest.length === 0 && isRelative(rev) && path !== undefined && isRelative(path);
-};
 
 /**
  * One program's validated form.
- *   flags: bare flags. values: flags that take the next word. inline: `--flag=value` forms.
+ *   flags: bare flags. values: flags that take the next word.
  *   counts: allows `-5`. positional: the shape of other words. max: how many of them.
  *   anyCase: PowerShell parameters ignore case; other programs' flags do not.
  */
-function form({ flags = [], values = {}, inline = {}, counts = false, positional = null, min = 0, max = Infinity, anyCase = false }) {
+function form({ flags = [], values = {}, counts = false, positional = null, min = 0, max = Infinity, anyCase = false }) {
   const key = (name) => (anyCase ? name.toLowerCase() : name);
   const flagSet = new Set(flags.map(key));
   const valueMap = new Map(Object.entries(values).map(([name, check]) => [key(name), check]));
-  const inlineMap = new Map(Object.entries(inline));
   return (args) => {
     let used = 0;
     for (let index = 0; index < args.length; index += 1) {
@@ -101,10 +95,7 @@ function form({ flags = [], values = {}, inline = {}, counts = false, positional
       }
       if (arg.startsWith("-")) {
         if (counts && /^-\d+$/.test(arg)) continue;
-        const equals = arg.indexOf("=");
-        const check = equals > 0 ? inlineMap.get(arg.slice(0, equals)) : undefined;
-        if (!check || !check(arg.slice(equals + 1))) return false;
-        continue;
+        return false;
       }
       if (!positional || !positional(arg)) return false;
       used += 1;
@@ -144,54 +135,10 @@ const PROGRAMS = new Map(
   }),
 );
 
-/** A form that also needs one of `required`, such as a flag that stops it printing contents. */
-function needing(required, check) {
-  return (args) => args.some((arg) => required.includes(arg)) && check(args);
-}
-
-// A secret committed under an ordinary name has nothing the sensitive list can recognize, so a
-// form that reveals file contents without naming the file is not validated: `git diff` needs a
-// stat or names flag, and `git log -p` and `git blame` are not listed. Nor is `git grep`, in
-// any form: even `-l` and `-c` answer guesses about a file's contents, one at a time, including
-// in old commits. `git show` prints the commit's diff, or a blob whatever flags it has, so it takes
-// only `HEAD` with a stat or names flag, or a `rev:path` whose path the sensitive list checks.
-// `git diff` compares files directly when there is no repository and it has two paths, so it
-// takes one positional at most. `git remote -v` can print a token stored in a remote's URL.
-const STAT_FLAGS = ["--stat", "--shortstat", "--numstat", "--name-only", "--name-status"];
-const showHead = needing(
-  [...STAT_FLAGS, "--no-patch", "-s"],
-  form({ flags: [...STAT_FLAGS, "--oneline", "--no-patch", "-s", "--no-color"], positional: (arg) => arg === "HEAD", max: 1 }),
-);
-const GIT = new Map(
-  Object.entries({
-    status: form({ flags: ["--short", "-s", "--porcelain", "--branch", "-b"], ...paths }),
-    log: form({
-      flags: ["--oneline", "--stat", "--graph", "--decorate", "--all", "--name-only", "--name-status", "--no-color", "--no-merges", "--merges", "--reverse", "--first-parent", "--abbrev-commit", "--follow"],
-      values: { "-n": isNumber },
-      inline: { "--max-count": isNumber, "--format": isPlain, "--pretty": isPlain, "--since": isDate, "--until": isDate, "--author": isPlain },
-      counts: true,
-      ...paths,
-    }),
-    diff: needing(STAT_FLAGS, form({ flags: [...STAT_FLAGS, "--cached", "--staged", "--no-color", "-w"], positional: isRelative, max: 1 })),
-    show: (args) => (args.length === 1 && isRevAndPath(args[0])) || showHead(args),
-    "rev-parse": form({ flags: ["--show-toplevel", "--abbrev-ref", "--short", "--verify", "--is-inside-work-tree", "--git-dir"], positional: isRelative, max: 1 }),
-    "ls-files": form({ flags: ["--cached", "-c", "--modified", "-m"], ...paths }),
-    describe: form({ flags: ["--tags", "--always", "--dirty"] }),
-    branch: form({ flags: ["-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current", "--no-color"] }),
-    tag: form({ flags: ["-l", "--list"] }),
-    remote: form({}),
-  }),
-);
-
 /** True when the whole command fits a validated read-only form (rule 5 above). */
 export function readOnlyCommand(words) {
   const [head, ...args] = words;
   const name = String(head ?? "").toLowerCase();
-  if (name === "git") {
-    const [sub, ...rest] = args;
-    const check = GIT.get(sub);
-    return Boolean(check) && check(rest);
-  }
   const check = PROGRAMS.get(name);
   return Boolean(check) && check(args);
 }

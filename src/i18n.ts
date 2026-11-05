@@ -270,7 +270,7 @@ const en = {
   secretValue: "Value",
   secretNote: "Kept on the harness or runner; this page sees only the name. Use {{NAME}} in connector headers.",
   autoReview: "Auto-review",
-  autoReviewNote: "A rule is a command or the start of one. A command matching a rule exactly runs without asking. A shorter rule such as git or Get-ChildItem only covers built-in read-only forms (git status, git log --oneline, not git push); any other flag or argument asks, and so do absolute paths and git forms that reveal file contents without naming the file, such as git diff. Pipes, chaining, redirects, quotes, backslashes and $ or % expansion always ask, and so do clicks, file changes and connector tools.",
+  autoReviewNote: "A rule is a command or the start of one. A command matching a rule exactly runs without asking. A shorter rule such as Get-ChildItem only covers built-in read-only forms; any other flag or argument asks, and so do absolute paths. git commands only skip a card under a rule for exactly that command. Pipes, chaining, redirects, quotes, backslashes and $ or % expansion always ask, and so do clicks, file changes and connector tools.",
   addRule: "Add rule",
   unattended: "When a routine runs with nobody here",
   unattendedAsk: "Leave the approval waiting",

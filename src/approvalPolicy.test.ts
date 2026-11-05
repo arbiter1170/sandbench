@@ -4,7 +4,7 @@ import { CAPABILITIES } from "./capabilities";
 import type { ApprovalMode } from "./types";
 import type { StepAction } from "./work";
 
-const RULES = ["Get-ChildItem", "Get-Date", "git"];
+const RULES = ["Get-ChildItem", "Get-Date", "git status"];
 const MODES: ApprovalMode[] = ["ask", "auto", "full"];
 
 const command = (text: string): StepAction => ({ kind: "command", command: text, reason: "test" });
@@ -59,7 +59,8 @@ describe("planner approvals", () => {
   });
 
   it("uses the same matcher as the harness gate", () => {
-    expect(autoApproved("git status", ["git"])).toBe(true);
+    expect(autoApproved("git status", ["git"])).toBe(false);
+    expect(autoApproved("git status", ["git status"])).toBe(true);
     expect(autoApproved("git push", ["git"])).toBe(false);
     expect(autoApproved("npm test", ["npm test"])).toBe(true);
     expect(autoApproved("npm install", ["npm"])).toBe(false);
@@ -70,8 +71,8 @@ describe("capability map approval rows", () => {
   const row = (name: string) => CAPABILITIES.find((item) => item.observed === name)!.web;
 
   it("claims only what the approval code does", () => {
-    expect(row("Auto-review rules and approvals")).toMatch(/git status, not git push/);
-    expect(autoApproved("git status", ["git"]) && !autoApproved("git push", ["git"])).toBe(true);
+    expect(row("Auto-review rules and approvals")).toMatch(/git commands only skip a card under a rule for exactly that command/);
+    expect(autoApproved("Get-ChildItem src", ["Get-ChildItem"]) && !autoApproved("git status", ["git"])).toBe(true);
     expect(row("Computer use (local exec daemon, window capture)")).toMatch(/always wait, whatever the bot's permission mode/);
     for (const action of [click, typing, write, tool, question]) expect(status(action, "full")).toBe("pending");
   });

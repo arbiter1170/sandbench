@@ -23,9 +23,6 @@ test("the default rules still cover the harmless commands they were meant for", 
 
 test("a command-name rule does not cover subcommands that change things", () => {
   const rules = ["git", "npm", "Remove-Item", "node", "docker"];
-  for (const command of ["git status", "git status --porcelain", "git log -n 5 --oneline", "git diff --stat HEAD", "git branch", "git branch -a", "git tag -l", "git remote"]) {
-    assert.equal(auto(command, rules), true, command);
-  }
   for (const command of [
     "git push",
     "git push origin main",
@@ -86,10 +83,6 @@ test("git expands abbreviated options and clustered flags, so those spellings of
   ]) {
     assert.equal(auto(command, ["git"]), false, command);
   }
-  // Ordinary read-only options that only look close must keep working.
-  for (const command of ["git log --oneline", "git log -n 5 --stat", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
-    assert.equal(auto(command, ["git"]), true, command);
-  }
 });
 
 test("a sensitive path still asks when it is attached to a parameter name or a revision", () => {
@@ -104,7 +97,7 @@ test("a sensitive path still asks when it is attached to a parameter name or a r
   ]) {
     assert.equal(auto(command, rules), false, command);
   }
-  for (const command of ["git show HEAD:src/App.tsx", "Get-Content notes.txt", "Get-Content -Path notes.txt"]) {
+  for (const command of ["Get-Content notes.txt", "Get-Content -Path notes.txt"]) {
     assert.equal(auto(command, rules), true, command);
   }
 });
@@ -235,6 +228,37 @@ test("git forms that print file contents ask, because a tracked secret has no re
   }
 });
 
+test("a rule for git, or for part of a git command, covers no git command but itself", () => {
+  // A repository's own config can make any git command run a program, and a folder with plain
+  // HEAD, config, objects/ and refs/ is a repository: nothing in the command text shows it.
+  const commands = [
+    "git status",
+    "git status --short",
+    "git log",
+    "git log --oneline",
+    "git log -n 5 --stat",
+    "git log HEAD..main",
+    "git diff --stat HEAD",
+    "git diff --name-only HEAD",
+    "git show --stat HEAD",
+    "git show HEAD:src/App.tsx",
+    "git branch",
+    "git branch -a",
+    "git branch --show-current",
+    "git tag -l",
+    "git remote",
+    "git rev-parse --show-toplevel",
+    "git ls-files src",
+    "git describe --tags",
+  ];
+  for (const command of commands) {
+    assert.equal(auto(command, ["git"]), false, command);
+    assert.equal(auto(command, [command.split(" ").slice(0, 2).join(" ")]) && command.split(" ").length > 2, false, `subcommand rule: ${command}`);
+    assert.equal(auto(command, [command]), true, `exact: ${command}`);
+  }
+  assert.equal(auto("git log --oneline", ["git log"]), false);
+});
+
 test("a pattern search asks in every form, because its results reveal what a file holds", () => {
   // Issuing only these, a review script recovered a whole tracked secret, one guess at a time.
   for (const command of ["git grep -l FAKEabc", "git grep -l -e FAKEabc", "git grep -c -e FAKEabc 7cacd33", "git grep -c FAKE blobtag", "git grep --count x", "git grep --files-with-matches x", "git grep -l -i x src"]) {
@@ -257,11 +281,10 @@ test("a rule for one program covers no other program", () => {
   assert.equal(auto("git status", [["git"]]), false, "a non-string rule");
 });
 
-test("git show takes one rev:path alone, with no flags beside it", () => {
+test("git show asks in every form under a rule for git", () => {
   for (const command of ["git show --output=out.txt HEAD:a", "git show -p HEAD:a", "git show --stat HEAD:a", "git show HEAD:a HEAD:b"]) {
     assert.equal(auto(command, ["git"]), false, command);
   }
-  assert.equal(auto("git show HEAD:a", ["git"]), true);
 });
 
 test("a value after a flag has the same shape limits as a positional", () => {
@@ -300,23 +323,12 @@ test("every credential name asks, even as an exact rule or attached to something
 
 test("a read-only command in the validated form auto-runs under a shorter rule", () => {
   for (const [rule, command] of [
-    ["git", "git status --short"],
-    ["git", "git log --oneline --graph -n 20"],
-    ["git", "git log -5 src/App.tsx"],
-    ["git", "git log --since=2026-01-01 --author=someone"],
-    ["git", "git diff --cached --name-only"],
-    ["git", "git diff --stat HEAD"],
-    ["git", "git show HEAD --stat"],
-    ["git", "git ls-files src"],
-    ["git", "git describe --tags"],
-    ["git", "git rev-parse --abbrev-ref HEAD"],
     ["pwd", "pwd"],
     ["whoami", "whoami"],
     ["hostname", "hostname"],
     ["type", "type notes.txt"],
     ["Get-Location", "Get-Location"],
     ["Get-Date", "Get-Date"],
-    ["git", "git tag --list"],
     ["cat", "cat -n notes.txt"],
     ["ls", "ls -lah src"],
     ["dir", "dir src"],
@@ -389,9 +401,6 @@ test("git commands that read outside the tracked tree or print remote credential
   ]) {
     assert.equal(auto(command, ["git"]), false, command);
   }
-  for (const command of ["git remote", "git log HEAD..main", "git diff --stat HEAD", "git status", "git branch --show-current", "git rev-parse --show-toplevel"]) {
-    assert.equal(auto(command, ["git"]), true, command);
-  }
 });
 
 test("PowerShell provider paths and remote parameters ask, under the default rules too", () => {
@@ -461,7 +470,7 @@ test("arguments match case-sensitively, because -d and -D are different commands
   assert.equal(auto("git branch -d feature", ["git branch -d feature"]), true);
   assert.equal(auto("git checkout -B main", ["git checkout -b main"]), false);
   assert.equal(auto("NPM test", ["npm test"]), true, "the program name may differ in case");
-  assert.equal(auto("git status", ["GIT"]), true);
+  assert.equal(auto("GIT status", ["git status"]), true);
 });
 
 test("codex and grok requests always ask, because their requests can be file changes or other tools", () => {
@@ -577,10 +586,10 @@ test("non-shell tool requests from a driver always ask, even when the rule names
   for (const tool of ["Write", "Edit", "MultiEdit", "NotebookEdit", "WebFetch", "WebSearch", "mcp__fs__write"]) {
     assert.equal(reviewPermission({ command: `${tool} notes.txt`, tool }, [tool, `${tool} notes.txt`]).auto, false, tool);
   }
-  assert.equal(reviewPermission({ command: "git status", tool: "Bash" }, ["git"]).auto, true);
+  assert.equal(reviewPermission({ command: "git status", tool: "Bash" }, ["git status"]).auto, true);
   assert.equal(reviewPermission({ command: "Get-Date", tool: "PowerShell" }, ["Get-Date"]).auto, true);
   assert.equal(reviewPermission({ command: "git push", tool: "Bash" }, ["git"]).auto, false);
-  assert.equal(reviewPermission({ command: "git status" }, ["git"]).auto, true, "the http and anthropic drivers send no tool");
+  assert.equal(reviewPermission({ command: "git status" }, ["git status"]).auto, true, "the http and anthropic drivers send no tool");
   assert.equal(reviewPermission({ command: "edit src/a.ts", tool: "codex" }, ["edit"]).auto, false);
 });
 
