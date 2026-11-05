@@ -24,7 +24,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Computer use (local exec daemon, window capture)",
-    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply",
+    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. Only commands covered by an auto-review rule skip the card; clicks, keystrokes, file changes, tool calls and questions always wait, whatever the bot's permission mode. File changes show the new text or a line diff first. Clicks use primary-screen pixels and attach a small screenshot to the reply",
     state: "partial",
   },
   {
@@ -34,7 +34,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Auto-review rules and approvals",
-    web: "Allow-list of read-only commands, plus a setting for unattended routines",
+    web: "Rules are exact commands, or a command name that then covers only built-in read-only uses (git status, not git push). Chained, piped, redirected, quoted or expanded commands always ask. The same check gates planner and agent-driver turns. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
     state: "working",
   },
   {
