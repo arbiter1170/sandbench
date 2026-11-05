@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-05 14:57 ET · interrupted local turns settle honestly (audit batch 2, Cursor cloud run) · done
+- **Branch / PR / head sha:** `cursor/interrupted-turn-recovery-a8ab` · no PR yet (opened right after this commit) · code head `4ae79ea32e55b69b0309c4d8498a55081271ce64`. Based on `deploy/vercel` `7068fc3`; not stacked on #23/#24 (STOP_POINTS rule 2).
+- **Checks on the head:** pending (not pushed when this was written).
+- **What was done:** local harness turns only. Repro: a reply saved mid-stream showed "Receiving" forever after a reload; a harness event stream that closed without done/error was treated as a finished turn and its waiting cards were relabelled "denied"; on Stop or a stream error, reply messages created after a card stayed "streaming". Now `harnessEvents` resumes a dropped stream from the last event seen (harness replay buffer; nothing shown twice, nothing re-run) and throws `TurnLostError` when the harness restarted (new `GET /turns/<id>` says `unknown`) or stays unreachable; the turn's messages become interrupted errors with their partial text kept. A local load settles replies still marked streaming, in-flight cards ("…") and driver cards nobody can answer from the page; nothing is sent to the harness, planner cards stay answerable. Runner mode untouched.
+- **Tests run (real results):** `npm run typecheck` → ok. `npm run test:web` → 55 passed (new `src/turnRecovery.test.ts`, 16). `npm run test:node` (local Postgres 16) → 139 tests, 137 pass, 0 fail, 2 skipped (same two). New tests with the original behavior put back → 7 of 15 fail (reload repro and dropped/gone/unreachable/stop streams). `npm run build` → ok. Scratch merge with #21, #22, #23, #24 → no code conflicts (WORKLOG only); combined: typecheck ok, 74 web tests pass, node 199 pass / 2 fail / 2 skipped: #24's runner-CLI label test (correctly: #22 installs the Claude CLI in the image) and #22's queue test, which passes 3/3 alone (timing under parallel load).
+- **Not run / could not run:** no browser run (the page needs Google sign-in); no live harness kill/reload on Windows.
+- **Decisions made and why:** no reattach to a harness turn after a reload (that needs the turn id saved and the whole turn pipeline resumable, closer to T10); a reloaded driver card is marked "not answered" rather than left approvable, because approving it would run a command whose result this page can no longer show. The harness still denies it after 30 minutes.
+- **Deviations from the plan:** not a WORKPLAN task; Vincent approved it as audit batch 2. STATUS and PLAN not edited.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** review. Batch 3 (local Claude MCP connectors) and batch 4 (memory saving) follow as separate PRs.
+
 ### Session 6 · 2026-11-05 · T04 SB-03 PR 1: merge `deploy/vercel` into #18 to clear conflicts · done
 - **Branch / PR / head sha:** `sb-03a-contracts` · https://github.com/arbiter1170/sandbench/pull/18 · merge of `04f237f` (deploy/vercel: #16 SB-29 decision, #19 skill front-matter) into `b2edf03`
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
