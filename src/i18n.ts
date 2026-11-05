@@ -84,7 +84,8 @@ const en = {
   lockedLead: "This browser is locked.",
   aboutBody:
     "Sandbench is an unofficial clean-room demo of capabilities observed in the iOS app. It does not contain that app’s code, artwork, or accounts. Widgets, HomeKit, Live Activities, and background calls still need a native iOS build on a Mac.",
-  mapNote: "The comparison below is in English so the capability names stay exact.",
+  mapNote: "The comparison below is in English so the capability names stay exact. It is a fixed table written by hand: it does not check what is installed or running on this computer. \"Needs\" says what must be running for a row to work: this page alone, the local harness, or the harness or the Docker runner.",
+  needs: "Needs",
   observed: "Observed on iOS",
   webHere: "In this demo",
   nativeOnly: "Native iOS only",
@@ -233,7 +234,7 @@ const en = {
   noOutput: "(no output)",
   harnessOff: "Local harness is not running",
   harnessOn: "Local harness connected",
-  harnessHint: "Run npm run harness in grokbot-poc to give bots this computer. Commands run in ~/.sandbench/workspace after you approve them.",
+  harnessHint: "Run npm run harness in the Sandbench folder to give bots this computer. Commands run in ~/.sandbench/workspace after you approve them or they match an auto-review rule.",
   watchScreen: "Watch screen",
   stopWatching: "Stop watching",
   shareScreen: "Share a window",
