@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · capability map labels: fixes from a second independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `6dfca53` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `158a885`.
+- **What was done:** a second independent review of `158a885` found rows that broke the Needs rule, sentences that ignored CLI drivers, and six breakages the tests missed. Corrected those rows and sentences, and tied the tests to the page, the driver path and the runner's own server file.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 42 passed. `npm run test:node` → 164 tests, 130 pass, 2 fail (the same two Windows-only failures as untouched `deploy/vercel`), 32 skipped, including the DB tests. `npm run build` + bundle key grep → ok, none. Each of the reviewer's six breakages now fails a test.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). The page was not opened in a browser. The routines row's behaviour when a runner stops answering is traced in the code, not run.
+- **Decisions made and why:** none new. The phone-width table overflow is left as it is: the pane scrolls and nothing is clipped.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Independent review of this head. Merge #29 before this PR.
+
 ### Session 8 · 2026-11-05 · capability map labels: fixes from independent review (#30) · review fix
 - **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `9c75869` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `27a4106`.
