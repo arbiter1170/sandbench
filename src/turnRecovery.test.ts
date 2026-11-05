@@ -177,3 +177,40 @@ describe("following a turn's events", () => {
     expect(harness.calls).toEqual([10]);
   });
 });
+
+describe("harnessEvents (the local driver path)", () => {
+  it("throws TurnLostError when the stream ends and the harness no longer knows the turn", async () => {
+    const { harnessEvents, TurnLostError } = await import("./harness");
+    const { HARNESS_RESTARTED } = await import("./turnRecovery");
+    const urls: string[] = [];
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      urls.push(url);
+      if (url.includes("/events")) {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode('id: 5\ndata: {"seq":5,"turnId":"t","type":"message_delta","text":"Hi"}\n\n'));
+            controller.close();
+          },
+        });
+        return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+      }
+      return new Response(JSON.stringify({ state: "unknown" }), { status: 200, headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      const seen: string[] = [];
+      const following = harnessEvents("0123456789abcdef", 4, new AbortController().signal, (event) => {
+        if (event.text) seen.push(event.text);
+        return event.type === "done";
+      });
+      await expect(following).rejects.toBeInstanceOf(TurnLostError);
+      await expect(following).rejects.toThrow(HARNESS_RESTARTED);
+      expect(seen).toEqual(["Hi"]);
+      expect(urls.filter((url) => url.includes("/events"))).toHaveLength(1);
+      expect(urls.some((url) => url.endsWith("/turns/0123456789abcdef"))).toBe(true);
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+});
