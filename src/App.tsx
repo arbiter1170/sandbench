@@ -1671,6 +1671,8 @@ export function App({ user }: { user: User }) {
     };
     try {
       await harnessEvents(turnId, after, args.signal, (event) => {
+        // The harness's resolved folder, shown so a path the agent uses can be checked against it.
+        if (event.type === "turn_start" && event.cwd) args.appendThinking(`Working folder: ${event.cwd}`);
         if (event.type === "thinking" && event.text) args.appendThinking(event.text);
         if (event.type === "message_delta" && event.text) {
           const chunk = event.text;

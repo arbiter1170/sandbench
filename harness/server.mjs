@@ -607,6 +607,8 @@ const agentTurns = createTurns({
   runShell,
   captureScreen,
   secrets,
+  // Every local turn is told its resolved working directory (harness/workingDirectory.mjs).
+  workspaceRoot: WORKSPACE,
   resolveFolder: (folder) => {
     const cwd = folder ? workspacePath(folder) : WORKSPACE;
     if (cwd) mkdirSync(cwd, { recursive: true });

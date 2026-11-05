@@ -230,6 +230,8 @@ export type AgentEvent = {
   message?: string;
   stopped?: boolean;
   screenThumb?: string;
+  /** On turn_start from the local harness: the resolved folder the driver runs in. */
+  cwd?: string;
 };
 export type TurnRequest = {
   driver: string;
