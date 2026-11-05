@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "firebase-admin": "^13.5.0",
+    "pg-boss": "12.38.1",
     "playwright": "1.64.1",
     "postgres": "^3.4.9"
   }

@@ -47,6 +47,11 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends gh \
  && rm -rf /var/lib/apt/lists/*
 RUN npm install -g --no-audit --no-fund firebase-tools@14.27.0 && npm cache clean --force
+# SB-03 PR 2: the Claude Code CLI the `claude` driver runs, pinned. It reads ANTHROPIC_API_KEY from
+# the runner's environment (deploy/.env, Q1); nothing here holds a key. The build fails if `claude`
+# can't start.
+RUN npm install -g --no-audit --no-fund @anthropic-ai/claude-code@2.1.318 && npm cache clean --force \
+ && claude --version
 WORKDIR /app
 COPY runner/package.json runner/package-lock.json ./runner/
 # Browsers come from the base image (PLAYWRIGHT_BROWSERS_PATH=/ms-playwright).
