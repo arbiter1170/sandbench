@@ -30,7 +30,6 @@ import {
   harnessHealth,
   harnessInput,
   harnessInterrupt,
-  harnessPermit,
   harnessReadFile,
   harnessRecordRun,
   harnessScreen,
@@ -50,6 +49,7 @@ import {
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
+import { driveRunnerTurn, permitTurn } from "./runnerTurns";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
 import {
@@ -1609,7 +1609,8 @@ export function App({ user }: { user: User }) {
     const permissionId = message.approval.permissionId;
     if (permissionId) {
       patchMessage(threadId, messageId, (item) => (item.approval ? { ...item, approval: { ...item.approval, status: approve ? "approved" : "denied", ...(approve ? { output: "…" } : {}) } } : item));
-      void harnessPermit(permissionId, approve).catch((error) => {
+      // Runner mode answers the engine's approval row; local harness mode is harnessPermit as before.
+      void permitTurn(permissionId, approve).catch((error) => {
         patchMessage(threadId, messageId, (item) =>
           item.approval ? { ...item, approval: { ...item.approval, status: "failed", output: error instanceof Error ? error.message : String(error) } } : item,
         );
@@ -1638,6 +1639,31 @@ export function App({ user }: { user: User }) {
     signal: AbortSignal;
     appendThinking: (step: string) => void;
   }): Promise<string> {
+    if (runnerMode) {
+      // SB-03 PR 2: on a hosted runner the turn is a job the runner finishes with or without this
+      // tab (src/runnerTurns.ts). Everything below this block is the local harness path, unchanged.
+      const route = routeFor(args.bot, settingsRef.current, keyNamesRef.current);
+      const messages = threadsRef.current.find((thread) => thread.id === args.threadId)?.messages ?? [];
+      const index = messages.findIndex((message) => message.id === args.assistantId);
+      const previous = index > 0 ? messages[index - 1] : [...messages].reverse().find((message) => message.role === "user");
+      return driveRunnerTurn(
+        {
+          botId: args.bot.id,
+          threadId: args.threadId,
+          assistantId: args.assistantId,
+          messageId: previous?.role === "user" ? previous.id : undefined,
+          prompt: args.prompt,
+          driver: args.driver,
+          model: route.model,
+          base: route.provider === "anthropic" ? "https://api.anthropic.com/v1" : route.apiBase.trim() || (route.useProxy ? "https://api.x.ai/v1" : ""),
+          secret: route.secret,
+          folder: args.folder,
+          signal: args.signal,
+          appendThinking: args.appendThinking,
+        },
+        { patchMessage, beginAssistant, addActivity, bumpUsage },
+      );
+    }
     const { bot, threadId } = args;
     const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
     const { id: turnId, after } = await harnessStartTurn({
