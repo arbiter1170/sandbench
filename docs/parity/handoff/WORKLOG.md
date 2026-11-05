@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · capability map labels: fixes from independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `9c75869` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `27a4106`.
+- **What was done:** an independent review of `27a4106` found false labels. Corrected: Bot teammates (`MEMORY.md`), Tasks and routines, Agent drivers, Computer use, Test stack profiles, Chat, Grok Bot migration, the README dev-proxy sentence and the map note. "Needs" now means what must be running for everything in a row to work. The tests read CRLF checkouts and tie more rows to the routes that serve them.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 42 passed. `npm run test:node` → 161 tests, 127 pass, 2 fail (the same two Windows-only failures as untouched `deploy/vercel`), 32 skipped, including the DB tests. `npm run build` + bundle key grep → ok, none.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). The page was not opened in a browser. "A runner build does not run routines" is traced in the code, not run.
+- **Decisions made and why:** this corrects the Session 8 note above that called the README's dev-proxy sentence "not clearly false": the page never calls `/api-proxy`, so it was false. One rule for "Needs" (the strongest requirement in the row) because mixed rows were labelled inconsistently.
+- **Deviations from the plan:** none beyond the earlier entry.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Re-review of this head. Merge #29 before this PR.
+
 ### Session 8 · 2026-11-05 · capability map labels, clean carry-over of #24 (audit batch 1, part 2) · partial
 - **Branch / PR / head sha:** `claude/capability-map-labels` · PR link in the session summary · code head `8de4cc9` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing.
