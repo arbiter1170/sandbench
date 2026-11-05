@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · approval-rule safety: fixes from the third independent review (#29) · review fix
+- **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `f2ee18c` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `479464f`.
+- **What was done:** a review of the rewritten matcher found no shell or flag bypass, and these: `git grep` recovered a whole tracked fake secret through auto-approved `-l` guesses, so it is no longer listed in any form. `dir /s`, `/b` and `/w` were root-level paths, so they are gone. `cat`, `head`, `tail`, `wc`, `type` and `Select-String` with no file would stall on standard input, so they need one. Copy says what asks only under a shorter rule. Tests now cover the review's surviving mutations, including exact rules and the drivers' `tool` labels.
+- **Tests run (real results):** see the PR body for the output. Same two Windows-only node failures as untouched `deploy/vercel`; 32 skipped, including the DB tests.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). No live Claude CLI, Codex or Grok turn. No real Linux or macOS run.
+- **Decisions made and why:** not fixed here, because it is Vincent's decision: a folder with plain `HEAD`, `config`, `objects/` and `refs/` is a repository with no `.git` in the command, and `git status` ran its `core.fsmonitor` hook in review. The header now says so.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** 1. Git under shorter rules: remove it, or keep it with `safe.bareRepository=explicit` and `core.fsmonitor=false` set for spawned commands, or keep the limit. 2. Merge method and the GitHub author field.
+- **Next step:** Vincent answers question 1. #25 waits for it.
+
 ### Session 8 · 2026-11-05 · approval-rule safety: positive validation, after a second independent review (#29) · review fix
 - **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `c71f353` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `a188c80`.
