@@ -69,6 +69,51 @@ test("git options that run programs, write files or switch repositories always a
   }
 });
 
+test("git expands abbreviated options and clustered flags, so those spellings of a risky option ask too", () => {
+  // Each of these ran a program or wrote a file on real git 2.52 under only a `git` rule.
+  for (const command of [
+    "git grep --open=evil x",
+    "git grep --open-files=evil x",
+    "git grep --op=evil x",
+    "git grep -iOevil x",
+    "git grep -nOevil x",
+    "git grep -ivOevil x",
+    "git log -p --outpu=out",
+    "git show HEAD --outp=out",
+    "git diff HEAD --ext-dif",
+    "git diff HEAD --text",
+  ]) {
+    assert.equal(auto(command, ["git"]), false, command);
+  }
+  // Ordinary read-only options that only look close must keep working.
+  for (const command of ["git log --oneline", "git log -n 5 --stat", "git grep -in needle", "git diff --name-only HEAD", "git show --stat HEAD", "git log --format=short"]) {
+    assert.equal(auto(command, ["git"]), true, command);
+  }
+});
+
+test("a sensitive path still asks when it is attached to a parameter name or a revision", () => {
+  const rules = ["Get-Content", "Test-Path", "git", "cat", "wc"];
+  for (const command of [
+    "Get-Content -Path:.env",
+    "Get-Content -LiteralPath:.ssh/id_rsa",
+    "Test-Path -Path:\\\\host\\share",
+    "git show HEAD:.env",
+    "git show HEAD:deploy/.env",
+    "wc --files0-from=.env",
+  ]) {
+    assert.equal(auto(command, rules), false, command);
+  }
+  for (const command of ["Get-Content -Path:notes.txt", "git show HEAD:src/App.tsx", "Get-Content C:\\Users\\me\\notes.txt"]) {
+    assert.equal(auto(command, rules), true, command);
+  }
+});
+
+test("the credential stores of the tools this app drives ask", () => {
+  for (const command of ["cat .sandbench/config", "cat C:\\Users\\me\\.sandbench\\workspace.json", "cat .claude/.credentials.json", "cat .config/gh/hosts.yml", "cat id_rsa", "cat .ssh./id_rsa"]) {
+    assert.equal(auto(command, ["cat"]), false, command);
+  }
+});
+
 test("compounds, redirects, substitution and expansion always ask, on POSIX and Windows shells", () => {
   const rules = [...DEFAULTS, "git", "echo", "cat"];
   for (const command of [

@@ -25,8 +25,18 @@ const SENSITIVE = [
   /^(-[A-Za-z]+:)?(env|variable|function|alias|cert|hklm|hkcu|hkey_[a-z_]+|wsman|registry):/i,
   /(^|[\\/])proc([\\/]|$)/i,
   /^(\\\\|\/\/)/,
-  /secrets\.json|harness-token|\.git-credentials|\.npmrc|\.netrc|(^|[\\/])\.(ssh|aws|gnupg|docker|kube|azure)([\\/]|$)|(^|[\\/])\.env(\.|$)/i,
+  /secrets\.json|harness-token|\.git-credentials|\.credentials\.json|\.npmrc|\.netrc|id_(rsa|dsa|ecdsa|ed25519)|(^|[\\/])\.(ssh|aws|gnupg|docker|kube|azure|sandbench)\.*([\\/]|$)|(^|[\\/])\.config[\\/]gh([\\/]|$)|(^|[\\/])\.env(\.|$)/i,
 ];
+
+// A path can be attached to a parameter name or a revision (`-Path:.env`, `HEAD:.env`,
+// `--files0-from=.env`), so each word is also checked from after every `:` and `=`.
+function touchesSensitive(word) {
+  const forms = [word];
+  for (let index = 0; index < word.length; index += 1) {
+    if (word[index] === ":" || word[index] === "=") forms.push(word.slice(index + 1));
+  }
+  return forms.some((form) => SENSITIVE.some((pattern) => pattern.test(form)));
+}
 
 const READ_ONLY = new Set(
   [
@@ -55,8 +65,17 @@ const READ_ONLY = new Set(
 );
 
 // Options that make an otherwise read-only git command write a file, run a program or reach
-// the network.
-const GIT_RISKY = /^(--output|--ext-diff|--textconv|--exec|--upload-pack|--receive-pack|--open-files-in-pager|-O)/;
+// the network. Git also accepts any unambiguous prefix of a long option (`--open=prog`) and
+// short flags run together (`-iOprog`), so those spellings count too. A harmless option that
+// is a prefix of a risky one (`--text`) asks as well; that errs on the side of a card.
+const GIT_RISKY_LONG = ["--output", "--ext-diff", "--textconv", "--exec", "--upload-pack", "--receive-pack", "--open-files-in-pager"];
+
+function gitRisky(arg) {
+  if (!arg.startsWith("--")) return /^-[A-Za-z0-9]*O/.test(arg);
+  const name = arg.split("=")[0];
+  return name !== "--" && GIT_RISKY_LONG.some((risky) => risky.startsWith(name) || name.startsWith(risky));
+}
+
 const GIT_ANY_ARGS = new Set(["status", "log", "diff", "show", "rev-parse", "ls-files", "describe", "blame", "shortlog", "grep"]);
 const GIT_BRANCH_FLAGS = new Set(["-a", "--all", "-r", "--remotes", "-v", "-vv", "--verbose", "-l", "--list", "--show-current", "--merged", "--no-merged", "--contains", "--no-contains", "--no-color"]);
 const GIT_TAG_FLAGS = new Set(["-l", "--list", "--merged", "--no-merged", "--contains", "--no-contains", "--points-at"]);
@@ -74,7 +93,7 @@ function gitReadOnly(args) {
   const [sub, ...rest] = args;
   // Options before the subcommand (-c, -C, --git-dir, --exec-path, ...) change what runs.
   if (!sub || sub.startsWith("-")) return false;
-  if (rest.some((arg) => GIT_RISKY.test(arg))) return false;
+  if (rest.some(gitRisky)) return false;
   if (GIT_ANY_ARGS.has(sub)) return true;
   if (sub === "branch") return listOnly(rest, GIT_BRANCH_FLAGS);
   if (sub === "tag") return listOnly(rest, GIT_TAG_FLAGS);
@@ -104,7 +123,7 @@ export function reviewCommand(command, rules) {
   if (!SAFE.test(text)) return { auto: false, why: "not a single simple command" };
   const parts = words(text);
   if (!PROGRAM.test(parts[0])) return { auto: false, why: "program is a path or file name" };
-  if (parts.some((part) => SENSITIVE.some((pattern) => pattern.test(part)))) return { auto: false, why: "touches a sensitive location" };
+  if (parts.some(touchesSensitive)) return { auto: false, why: "touches a sensitive location" };
   const lower = parts.map((part) => part.toLowerCase());
   let prefix = false;
   for (const rule of Array.isArray(rules) ? rules : []) {
