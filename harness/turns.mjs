@@ -46,8 +46,6 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     const rules = Array.isArray(body.allow) ? body.allow.filter((item) => typeof item === "string") : [];
     const ran = new Set();
     const granted = new Set();
-    // Only the local harness passes `ctx.connectors`; the bot's own synced servers, never the request's.
-    const mcp = driver.id === "claude" && ctx.connectors ? ctx.connectors.attach({ turnId: id, botId: body.botId }) : null;
     const turn = {
       id,
       prompt: body.prompt.slice(0, 20_000),
@@ -61,8 +59,11 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       key: TURN_SECRETS.has(body.secret) ? (secrets?.get(body.secret) ?? "") : "",
       cwd,
       // Driver extras (claude.mjs) are set by the engine in later items, never from the request.
-      extras: mcp?.file ? { mcpConfig: mcp.file } : {},
+      extras: {},
     };
+    // Only the local harness passes `ctx.connectors`: the bot's own synced servers, never the request's.
+    const mcp = driver.id === "claude" && ctx.connectors ? ctx.connectors.attach({ turnId: id, botId: body.botId }) : null;
+    if (mcp?.file) turn.extras = { mcpConfig: mcp.file };
     const io = {
       signal: controller.signal,
       emit: (event) => {
