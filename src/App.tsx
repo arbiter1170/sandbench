@@ -31,6 +31,8 @@ import {
   harnessInput,
   harnessInterrupt,
   harnessPermit,
+  harnessTurnState,
+  type AgentEvent,
   harnessReadFile,
   harnessRecordRun,
   harnessScreen,
@@ -49,6 +51,7 @@ import {
   runnerMode,
 } from "./harness";
 import { pickWithDecisionModel } from "./decision";
+import { DROPPED, followTurn, HARNESS_RESTARTED, settleLoadedThreads, settleMessage } from "./turnRecovery";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -270,7 +273,8 @@ export function App({ user }: { user: User }) {
         skills: bot.skills ?? [],
       }));
       const nextBots = loaded.some((bot) => bot.id === REA_BOT_ID) ? loaded : [...loaded, createReaBot()];
-      setThreads(snapshot.threads);
+      // A local turn cannot outlive the page that drove it; a runner turn can, so runner data is left alone.
+      setThreads(runnerMode ? snapshot.threads : settleLoadedThreads(snapshot.threads));
       setReminders(snapshot.reminders);
       setEvents(snapshot.events);
       setContacts(snapshot.contacts);
@@ -1659,6 +1663,9 @@ export function App({ user }: { user: User }) {
     const stop = () => void harnessInterrupt(turnId).catch(() => undefined);
     args.signal.addEventListener("abort", stop, { once: true });
     let current: string | null = args.assistantId;
+    const created = [args.assistantId];
+    let outcome: "ended" | "stopped" | "lost" = "lost";
+    let lost = DROPPED;
     let reply = "";
     let failure: string | undefined;
     const cards = new Map<string, { id: string; command: string }>();
@@ -1666,67 +1673,86 @@ export function App({ user }: { user: User }) {
       if (current) return current;
       const id = beginAssistant(threadId, bot.id);
       patchMessage(threadId, id, (message) => ({ ...message, localStandIn: false }));
+      created.push(id);
       current = id;
       return id;
     };
     try {
-      await harnessEvents(turnId, after, args.signal, (event) => {
-        if (event.type === "thinking" && event.text) args.appendThinking(event.text);
-        if (event.type === "message_delta" && event.text) {
-          const chunk = event.text;
-          reply += chunk;
-          patchMessage(threadId, target(), (message) => ({ ...message, text: message.text + chunk }));
-        }
-        if (event.type === "permission_request" && event.permissionId) {
-          const id = target();
-          cards.set(event.permissionId, { id, command: event.command ?? "" });
-          const status = event.auto ? "approved" : event.denied ? "denied" : "pending";
-          const approval: Approval = {
-            command: event.command ?? "",
-            reason: event.reason || "The agent asked to run this.",
-            status,
-            permissionId: event.permissionId,
-            ...(event.auto ? { auto: true, output: "…" } : {}),
-          };
-          patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
-          current = null;
-        }
-        if (event.type === "permission_resolved" && event.permissionId) {
-          const id = cards.get(event.permissionId)?.id;
-          if (id) {
-            patchMessage(threadId, id, (message) =>
-              message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } } : message,
-            );
+      const followed = await followTurn<AgentEvent>({
+        after,
+        signal: args.signal,
+        subscribe: (from, onEvent) => harnessEvents(turnId, from, args.signal, onEvent),
+        state: async () => (await harnessTurnState(turnId)).state,
+        onEvent: (event) => {
+          if (event.type === "thinking" && event.text) args.appendThinking(event.text);
+          if (event.type === "message_delta" && event.text) {
+            const chunk = event.text;
+            reply += chunk;
+            patchMessage(threadId, target(), (message) => ({ ...message, text: message.text + chunk }));
           }
-        }
-        if (event.type === "tool_end" && event.permissionId) {
-          const card = cards.get(event.permissionId);
-          if (card) {
-            const { id, command } = card;
-            const thumb = typeof event.screenThumb === "string" ? event.screenThumb : undefined;
-            patchMessage(threadId, id, (message) =>
-              message.approval
-                ? {
-                    ...message,
-                    approval: { ...message.approval, output: event.output ?? "", ...(event.code !== undefined ? { exitCode: event.code } : {}) },
-                    ...(thumb && thumb.length < 200_000 ? { screenThumb: thumb } : {}),
-                  }
-                : message,
-            );
-            addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
-            bumpUsage({ commands: 1 });
+          if (event.type === "permission_request" && event.permissionId) {
+            const id = target();
+            cards.set(event.permissionId, { id, command: event.command ?? "" });
+            const status = event.auto ? "approved" : event.denied ? "denied" : "pending";
+            const approval: Approval = {
+              command: event.command ?? "",
+              reason: event.reason || "The agent asked to run this.",
+              status,
+              permissionId: event.permissionId,
+              ...(event.auto ? { auto: true, output: "…" } : {}),
+            };
+            patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
+            current = null;
           }
-        }
-        if (event.type === "error") failure = event.message || "The agent stopped with an error.";
-        return event.type === "done" || event.type === "error";
+          if (event.type === "permission_resolved" && event.permissionId) {
+            const id = cards.get(event.permissionId)?.id;
+            if (id) {
+              patchMessage(threadId, id, (message) =>
+                message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } } : message,
+              );
+            }
+          }
+          if (event.type === "tool_end" && event.permissionId) {
+            const card = cards.get(event.permissionId);
+            if (card) {
+              const { id, command } = card;
+              const thumb = typeof event.screenThumb === "string" ? event.screenThumb : undefined;
+              patchMessage(threadId, id, (message) =>
+                message.approval
+                  ? {
+                      ...message,
+                      approval: { ...message.approval, output: event.output ?? "", ...(event.code !== undefined ? { exitCode: event.code } : {}) },
+                      ...(thumb && thumb.length < 200_000 ? { screenThumb: thumb } : {}),
+                    }
+                  : message,
+              );
+              addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
+              bumpUsage({ commands: 1 });
+            }
+          }
+          if (event.type === "error") failure = event.message || "The agent stopped with an error.";
+          return event.type === "done" || event.type === "error";
+        },
       });
+      if (followed === "ended") outcome = "ended";
+      else if (followed === "gone") lost = HARNESS_RESTARTED;
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") outcome = "stopped";
+      else lost = error instanceof Error && error.message ? `${DROPPED} (${error.message})` : DROPPED;
+      if (outcome === "stopped") throw error;
     } finally {
       args.signal.removeEventListener("abort", stop);
-      for (const { id } of cards.values()) {
-        patchMessage(threadId, id, (message) => (message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: "denied" } } : message));
+      for (const id of created) {
+        patchMessage(threadId, id, (message) => {
+          if (outcome === "lost") return settleMessage(message, lost);
+          // Stop interrupts the harness turn, which denies whatever was still waiting.
+          const approval = message.approval?.status === "pending" && message.approval.permissionId ? { ...message.approval, status: "denied" as const } : message.approval;
+          const status = message.status === "streaming" ? (failure ? "error" : "done") : message.status;
+          return approval === message.approval && status === message.status ? message : { ...message, status, ...(approval ? { approval } : {}) };
+        });
       }
     }
-    if (current) patchMessage(threadId, current, (message) => ({ ...message, status: "done" }));
+    if (outcome === "lost") throw new Error(lost);
     if (failure) throw new Error(failure);
     return reply;
   }

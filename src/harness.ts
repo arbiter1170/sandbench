@@ -258,6 +258,12 @@ export function harnessInterrupt(turnId: string): Promise<{ ok: boolean }> {
   return call(`/turns/${turnId}/interrupt`, { method: "POST", body: "{}" });
 }
 
+export type TurnState = "running" | "finished" | "unknown";
+
+export function harnessTurnState(turnId: string): Promise<{ state: TurnState }> {
+  return call(`/turns/${turnId}`);
+}
+
 export function harnessPermit(permissionId: string, allow: boolean): Promise<{ ok: boolean }> {
   return call(`/permissions/${permissionId}`, { method: "POST", body: JSON.stringify({ allow }) });
 }
