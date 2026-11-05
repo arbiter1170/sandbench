@@ -12,7 +12,7 @@
 | T02 | SB-08 profile memory and skills | merged | `sb-08-profile-memory` | #14 | `264cf6d` |
 | T03 | SB-13 browser emulator | merged | `sb-13-browser-emulator` | #17 | `8735ee8`; image 3.24GB |
 | T04 | SB-03 PR 1 contracts, `003_jobs.sql`, route registry | merged | `sb-03a-contracts` | #18 | `7068fc3`; no behaviour change |
-| T05 | PLAN.md stale host text (docs only) | PR open | `cursor/docs-plan-laptop-text-93f7` | this PR | docs only; carries this STATUS/WORKPLAN refresh |
+| T05 | PLAN.md stale host text (docs only) | PR open | `cursor/docs-plan-laptop-text-93f7` | #20 | docs only; carries this STATUS/WORKPLAN refresh |
 | T06 | SB-15a team pack importer | todo | `sb-15a-team-pack-import` | n/a | unblocked; live part blocked on Q7 (team pack location) |
 | T07 | Retry runner-side bot-event delete | todo | `sb-fu-bot-event-delete` | n/a | independent |
 | T08 | SB-06 slice A policy classifier | todo | `sb-06a-classifier` | n/a | independent, not wired |
@@ -22,7 +22,7 @@
 | – | SB-04, SB-10, SB-11, SB-12, SB-06 wiring | blocked | – | – | not scheduled; Supervisor re-plans (see WORKPLAN §5). SB-29 (sandbox) gates SB-04 and SB-10's acting tools |
 
 ## Open PRs awaiting Vincent's merge
-- This session's docs PR (T05 + this refresh). Docs only; the four required checks run on it like any PR.
+- **#20** docs PR (T05 + this refresh). Docs only; the four required checks run on it like any PR.
 - The T10 engine PR follows on its own branch cut from `deploy/vercel` (not stacked). Whichever merges second gets a WORKLOG/STATUS conflict; keep both entries, newest first.
 - #15 and #18 are merged; prior STATUS text that calls them open is superseded by this one.
 

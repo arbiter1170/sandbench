@@ -27,7 +27,7 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ENTRIES START BELOW
 
 ### Session 7 · 2026-11-05 · T05 PLAN.md host text + STATUS/WORKPLAN refresh (docs only) · done
-- **Branch / PR / head sha:** `cursor/docs-plan-laptop-text-93f7` · PR link in the session summary · cut from `7068fc3` (deploy/vercel after #18)
+- **Branch / PR / head sha:** `cursor/docs-plan-laptop-text-93f7` · https://github.com/arbiter1170/sandbench/pull/20 · cut from `7068fc3` (deploy/vercel after #18)
 - **Checks on the head:** pending at the time of writing (the four required checks run on every PR).
 - **What was done:**
   - `deploy/vercel` now holds #10 (gap audit, `506d0e4`), #15 (iPhone sign-in, `aa42aa0`), #18 (SB-03 PR 1, `7068fc3`) and #19 (`04f237f`); CI is green on `7068fc3`. Older STATUS text called #15 and #18 open; this entry supersedes it.
