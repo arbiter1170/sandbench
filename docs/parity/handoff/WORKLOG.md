@@ -26,6 +26,20 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 7 · 2026-11-05 · T05 PLAN.md host text + STATUS/WORKPLAN refresh (docs only) · done
+- **Branch / PR / head sha:** `cursor/docs-plan-laptop-text-93f7` · PR link in the session summary · cut from `7068fc3` (deploy/vercel after #18)
+- **Checks on the head:** pending at the time of writing (the four required checks run on every PR).
+- **What was done:**
+  - `deploy/vercel` now holds #10 (gap audit, `506d0e4`), #15 (iPhone sign-in, `aa42aa0`), #18 (SB-03 PR 1, `7068fc3`) and #19 (`04f237f`); CI is green on `7068fc3`. Older STATUS text called #15 and #18 open; this entry supersedes it.
+  - T05, exactly as specified: `docs/parity/PLAN.md` diagram (laptop + Tailscale Funnel), SB-01 "Done when", Change (compose profiles) and Approach/Acceptance (what is true today, per `docs/runner.md` "Laptop runner"), Q1 and Q9 marked answered with the earlier answers kept as "superseded", the Cloudflare-domain "still open" bullet removed, SB-23 and the risks bullet annotated "(Tailscale Funnel today; Cloudflare Access only if a VM is ever used)". No task, estimate, dependency or checkbox changed. One Progress log line.
+  - `WORKPLAN.md`: T04 ticked as merged (#18). `STATUS.md` rewritten (T04 merged, T05 PR open, T10 in progress; blockers kept, Q1 and the local "Thinking" symptom added as open items).
+- **Tests run (real results):** none needed (docs only). `grep -n -i "hetzner\|cx43" docs/parity/PLAN.md` returns only the two lines that say "no Hetzner" / "superseded".
+- **Not run / could not run:** gitleaks locally (CI runs it).
+- **Decisions made and why:** none new. The branch name follows the cloud-agent naming rule (`cursor/<name>-93f7`) instead of the task's `docs-plan-laptop-text`, as Session 6 did for its merge; the task id is in the PR title.
+- **Deviations from the plan:** the STATUS/WORKPLAN refresh rides in this docs PR instead of the next code PR (WORKPLAN §0 step 2 allows either; Vincent asked for a separate, reviewable docs refresh first).
+- **Open questions for Vincent or the Supervisor:** none new; Q1 (API key for the runner's Claude CLI) still blocks the live part of T10.
+- **Next step:** T10 (SB-03 PR 2) on its own branch from `deploy/vercel`, fake-driver tested. Vincent merges this docs PR when its checks are green.
+
 ### Session 6 · 2026-11-05 · T04 SB-03 PR 1: merge `deploy/vercel` into #18 to clear conflicts · done
 - **Branch / PR / head sha:** `sb-03a-contracts` · https://github.com/arbiter1170/sandbench/pull/18 · merge of `04f237f` (deploy/vercel: #16 SB-29 decision, #19 skill front-matter) into `b2edf03`
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
