@@ -49,7 +49,7 @@ describe("capability map", () => {
       else if (item.state === "omitted") expect(["none", "browser"], item.observed).toContain(item.needs);
       else expect(["browser", "harness", "harnessOrRunner"], item.observed).toContain(item.needs);
     }
-    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Model per bot")!)).toBe("This page + model key");
+    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Model per bot")!)).toBe("Local harness or runner + model key");
     expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Connectors and custom MCP")!)).toBe("Local harness");
   });
 

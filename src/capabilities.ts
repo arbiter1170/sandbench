@@ -87,9 +87,9 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Model per bot",
-    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider",
+    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider. The local harness or the runner holds the key and makes the call",
     state: "working",
-    needs: "browser",
+    needs: "harnessOrRunner",
     key: true,
   },
   {
