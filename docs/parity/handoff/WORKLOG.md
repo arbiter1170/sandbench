@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · approval-rule safety: git removed from shorter rules (#29) · review fix
+- **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `d4778db` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. See the previous head's checks in the PR.
+- **What was done:** Vincent chose to remove git from shorter rules. A saved `git` rule now covers no git command, and a git command only skips a card under a rule for exactly that command. The git table and the code only it used are gone from `harness/autoReview.mjs`. Copy and tests follow.
+- **Tests run (real results):** see the PR body for the output. Same two Windows-only node failures as untouched `deploy/vercel`; 32 skipped, including the DB tests. 28 mutations, each caught by at least one test.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). No live Claude CLI, Codex or Grok turn. No real Linux or macOS run.
+- **Decisions made and why:** Vincent: option A of three. In review, a folder with plain `HEAD`, `config`, `objects/` and `refs/` made `git status` run a hook, with nothing in the command text to show it. A saved exact git command still carries that risk, by the user's own choice, one command at a time.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** 1. Merge method and the GitHub author field.
+- **Next step:** Independent review of this head, then the #25 carry-over.
+
 ### Session 8 · 2026-11-05 · approval-rule safety: fixes from the third independent review (#29) · review fix
 - **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `f2ee18c` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `479464f`.
