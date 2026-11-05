@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 9 · 2026-11-05 · accurate Capability map and README labels (first batch from the capability-map audit, Cursor cloud run) · done
+- **Branch / PR / head sha:** `cursor/capability-map-labels-a8ab` · no PR yet (opened right after this commit) · code head `d825dcb`. Numbered after Session 8 (#23, approval-rule safety); not stacked on it.
+- **Checks on the head:** pending (not pushed when this was written).
+- **What was done:** the Capability map gains a hand-written "Needs" column (this page, local harness, harness or runner, native app, plus "model key") and a note that the table is static, not a runtime check. All 33 rows kept. Corrected: sign-in is required (was "omitted"); five drivers with CLI availability, the runner image shipping no CLIs and API drivers listed before a key; driver turns get no connectors and are not resumed after a harness restart; live trace views are harness-only; routines need an open tab and the runner does not run them; bots read memories but do not save them; the Windows migration script is lossy (now "partial"). README matches; the harness hint and an MCP doc path no longer name the old repo folder. The two approval rows are left to #23.
+- **Tests run (real results):** `npm run typecheck` → ok. `npm run test:web` → 42 passed. `npm run test:node` (local Postgres 16) → 145 tests, 143 pass, 0 fail, 2 skipped (same two as before). New `harness/test/capabilityMap.test.mjs` with the old wording put back → 0 pass, 7 fail; after → 7 pass. `npm run build` → ok, no keys in `dist/`. Scratch merge of this branch + #23 + #21 → only the expected WORKLOG conflict; typecheck ok, 48 web tests, node 173 pass / 0 fail / 2 skipped.
+- **Not run / could not run:** `docker build` (no Docker here). The page was not opened in a browser for this change; the column is one extra `<td>` per row.
+- **Decisions made and why:** "Needs" is one value per row plus a key flag, written by hand, because nothing in the page can see the harness or runner without calling it. Behavior-tied tests read the harness, runner, Dockerfile and import script instead of snapshotting text.
+- **Deviations from the plan:** not a WORKPLAN task; approved by Vincent as the first audit batch. STATUS, PLAN and parity docs not edited.
+- **Open questions for Vincent or the Supervisor:** none beyond #23's `full` mode question.
+- **Next step:** review. Interrupted-turn recovery, local Claude MCP connectors and memory saving are not yet implemented.
+
 ### Session 6 · 2026-11-05 · T04 SB-03 PR 1: merge `deploy/vercel` into #18 to clear conflicts · done
 - **Branch / PR / head sha:** `sb-03a-contracts` · https://github.com/arbiter1170/sandbench/pull/18 · merge of `04f237f` (deploy/vercel: #16 SB-29 decision, #19 skill front-matter) into `b2edf03`
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
