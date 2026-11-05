@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 · approval-rule safety: positive validation, after a second independent review (#29) · review fix
+- **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `c71f353` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `a188c80`.
+- **What was done:** Vincent's decision: any command whose shell, quoting, escaping or arguments cannot be positively validated must ask. `harness/autoReview.mjs` is rewritten around that. It was a blocklist of risky options; now a rule shorter than the command covers it only when the whole command fits that program's listed flags and argument shapes. A second independent review, of `a188c80`, found more reads of secrets; each is now a test. Paths must be relative and canonical, `.git` asks, and git forms that print file contents without naming the file ask (`git diff`, `git grep needle`, `git log -p`, `git show HEAD`, `git blame`).
+- **Tests run (real results):** see the PR body for the output. Same two Windows-only node failures as untouched `deploy/vercel`; 32 skipped, including the DB tests.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). No live Claude CLI, Codex or Grok turn. No real Linux or macOS run.
+- **Decisions made and why:** Vincent: `full` keeps asking for commands no rule covers. Backslashes always ask rather than passing for PowerShell: the page does not know which shell will run the command. Tracked file contents ask because a secret committed under an ordinary name has nothing to recognize. This costs usability: `dir .\sub`, plain `git diff` and `git grep needle` now show a card. Rules saved with a backslash no longer match.
+- **Deviations from the plan:** a larger change than the carry-over of #23, at Vincent's direction. `docs/parity/PLAN.md`, `GAP_AUDIT.md` and `CLAUDE_CODE_PROMPT.md` still describe first-word matching.
+- **Open questions for Vincent or the Supervisor:** 1. Merge method and the GitHub author field. 2. Repository config can still make read-only git commands run a program; taking git out of shorter rules is the only fix at this level. 3. Claude Code's own read tools never reach this gate.
+- **Next step:** Independent review of this head. #25 waits for it.
+
 ### Session 8 · 2026-11-05 · approval-rule safety: fixes from independent review (#29) · review fix
 - **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `ded3c63` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `d08d6a8`.
