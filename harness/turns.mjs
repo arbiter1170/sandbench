@@ -46,6 +46,8 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     const rules = Array.isArray(body.allow) ? body.allow.filter((item) => typeof item === "string") : [];
     const ran = new Set();
     const granted = new Set();
+    // Only the local harness passes `ctx.connectors`; the bot's own synced servers, never the request's.
+    const mcp = driver.id === "claude" && ctx.connectors ? ctx.connectors.attach({ turnId: id, botId: body.botId }) : null;
     const turn = {
       id,
       prompt: body.prompt.slice(0, 20_000),
@@ -59,7 +61,7 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       key: TURN_SECRETS.has(body.secret) ? (secrets?.get(body.secret) ?? "") : "",
       cwd,
       // Driver extras (claude.mjs) are set by the engine in later items, never from the request.
-      extras: {},
+      extras: mcp?.file ? { mcpConfig: mcp.file } : {},
     };
     const io = {
       signal: controller.signal,
@@ -128,6 +130,10 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     publish(id, { type: "turn_start", driver: driver.id });
     const handle = driver.startTurn(turn, io);
     turns.set(id, { controller, handle });
+    if (mcp?.servers.length) {
+      publish(id, { type: "thinking", text: `Connectors for this turn: ${mcp.servers.map((item) => item.connector).join(", ")}. Each tool asks for approval.` });
+    }
+    for (const item of mcp?.skipped ?? []) publish(id, { type: "thinking", text: `Connector ${item.name} left out: ${item.reason}` });
     handle.done
       .then(() => {
         for (const permissionId of granted) {
@@ -139,7 +145,10 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
         const aborted = controller.signal.aborted || error?.name === "AbortError";
         publish(id, aborted ? { type: "done", stopped: true } : { type: "error", message: error instanceof Error ? error.message : String(error) });
       })
-      .finally(() => turns.delete(id));
+      .finally(() => {
+        turns.delete(id);
+        mcp?.release();
+      });
     return { id, after };
   }
 
