@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 8 · 2026-11-05 14:28 ET · approval-rule safety (first batch from the capability-map audit, Cursor cloud run) · done
+- **Branch / PR / head sha:** `cursor/approval-rule-safety-a8ab` · no PR yet (opened right after this commit) · code head `994335cf7fb3f73cc854d632c4cf6b3297eb8ea9`. Numbered after the two open Session 7 entries (#20, #21).
+- **Checks on the head:** pending (not pushed when this was written).
+- **What was done:** one auto-review matcher, `harness/autoReview.mjs`, used by both the harness gate (`harness/turns.mjs`, every driver) and the page (`src/approvalPolicy.ts`, planner turns). A rule matches word for word; a rule shorter than the command (`git`) only covers a built-in read-only list (`git status`, never `git push`). Compound, redirected, quoted, `$`/`%`-expanded and path-program commands, environment drives, `/proc` and credential files always ask; non-shell driver tools (Claude `Write`, `WebFetch`, MCP) always ask. Planner permission modes: `full` used to approve every action (clicks, file writes, MCP calls, questions); now no mode auto-approves anything but rule-covered commands, and `auto`/`full` behave like `ask`. Stored modes and rules are untouched. Studio's rule form keeps every word. Mode labels, the auto-review note and README updated. The runner image's UI stage copies the shared module.
+- **Tests run (real results):** `npm run typecheck` → ok. `npm run test:web` → 44 passed. `npm run test:node` (local Postgres 16) → 156 tests, 154 pass, 0 fail, 2 skipped (skills dir unset, auth emulator not running; same as before). New `harness/test/approvals.test.mjs` against the old `turns.mjs` → 1 pass, 7 fail; after → 8 pass. New matcher tests against the old logic → 3 pass, 7 fail; after → 10 pass. UI stage of the image built from only the files it copies (`npm run build`) → ok.
+- **Not run / could not run:** `docker build` (no Docker here; CI builds the image). No live Windows/PowerShell or Claude CLI run; Windows cases are string fixtures.
+- **Decisions made and why:** shared dependency-free module in `harness/` (the runner ships `harness/` without root node_modules; T08's classifier can consume it later). `full` made conservative pending Vincent's call rather than inventing new auto-run semantics.
+- **Deviations from the plan:** not a WORKPLAN task; approved by Vincent as the first audit batch. `runner/Dockerfile` gains one COPY line in the UI stage. STATUS and PLAN not edited to avoid colliding with #20.
+- **Open questions for Vincent or the Supervisor:** 1. Should `full` let a bot run any single simple command without a rule (clicks, file writes, tools and questions would still ask)? Default here: no, `full` = `ask`.
+- **Next step:** review; the labels PR follows. Interrupted-turn recovery, local Claude MCP connectors and memory saving are not yet implemented.
+
 ### Session 6 · 2026-11-05 · T04 SB-03 PR 1: merge `deploy/vercel` into #18 to clear conflicts · done
 - **Branch / PR / head sha:** `sb-03a-contracts` · https://github.com/arbiter1170/sandbench/pull/18 · merge of `04f237f` (deploy/vercel: #16 SB-29 decision, #19 skill front-matter) into `b2edf03`
 - **Checks on the head:** pending at the time of writing (pushed with this entry).
