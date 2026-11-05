@@ -34,7 +34,7 @@ export function needsLabel(item: Capability): string {
 export const CAPABILITIES: Capability[] = [
   {
     observed: "Bot teammates",
-    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins. Bots do not save new memories themselves yet",
+    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins, or an error for a bot set to an API driver. Bots do not save new memories themselves yet",
     state: "working",
     needs: "harness",
     key: "orCli",
@@ -53,9 +53,10 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Computer use (local exec daemon, window capture)",
-    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply. On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness",
+    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply. On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness. Without a model key, the next step only follows what the request already spelled out",
     state: "partial",
     needs: "harness",
+    key: true,
   },
   {
     observed: "Agent drivers",
@@ -79,26 +80,28 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Plugins, templates, and team sharing",
-    web: "Built-in and custom plugins per bot, starter templates, a sandbench-team.json file with bots, group chats, paused routines, and connector slots (previewed before it is added), and a Markdown export. Secrets are removed",
+    web: "Built-in and custom plugins per bot, starter templates, a sandbench-team.json file with bots, group chats, paused routines, and connector slots (previewed before it is added), and a Markdown export. Secrets are removed. Plugin instructions only reach a model or a CLI driver; the local stand-in ignores most of them",
     state: "working",
-    needs: "browser",
+    needs: "harnessOrRunner",
+    key: "orCli",
   },
   {
     observed: "Group chats",
-    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick one bot to answer. The working folder only acts through the local harness or the runner",
+    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick who answers. The working folder only acts through the local harness or the runner. Without a model key or a signed-in CLI driver, replies are local stand-ins",
     state: "working",
     needs: "harnessOrRunner",
+    key: "orCli",
   },
   {
     observed: "Model per bot",
-    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider. The local harness or the runner holds the key and makes the call; a local provider address works only with the local harness",
+    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider. The local harness or the runner holds the key and makes the call; page model calls to a local provider address work only with the local harness",
     state: "working",
     needs: "harness",
     key: true,
   },
   {
     observed: "Test stack profiles",
-    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher. Choosing a profile works in the page; its key and driver hints come from the local harness or the runner, and without one a profile can show as ready when it is not. Ready does not check that a local server such as Ollama is running. The CLI and Ollama profiles work only with the local harness",
+    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher. Choosing a profile works in the page; its key and driver hints come from the local harness or the runner, and without one a profile can show as ready when it is not. Ready does not check that a local server such as Ollama is running. The CLI and Ollama profiles work only with the local harness, because the runner image has no CLI and no local server",
     state: "working",
     needs: "harness",
     key: "orCli",
@@ -124,15 +127,16 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Tasks, routines, and reminders",
-    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Webhooks and recent runs need the local harness. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine with a stand-in reply. Bots set reminders from chat. Each bot keeps a task list",
+    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Webhooks and recent runs need the local harness. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine, and that run counts as done: the reply is an error, or a stand-in if the page never saw a key. Bots set reminders from chat. Each bot keeps a task list",
     state: "partial",
     needs: "harness",
+    key: "orCli",
   },
   {
     observed: "Billing and top-up",
     web: "A local usage meter only. There is no billing",
     state: "omitted",
-    needs: "none",
+    needs: "browser",
   },
   {
     observed: "Device check, card text recognition, WebAuthn signer, VNC, cloud computers",
@@ -191,9 +195,10 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Background audio and voice calls",
-    web: "A call mode that listens, sends, and reads replies in the bot's voice while the tab is open. No background audio session",
+    web: "A call mode that listens, sends, and reads replies in the bot's voice while the tab is open. No background audio session. Without a model key or a signed-in CLI driver, the replies are local stand-ins",
     state: "partial",
-    needs: "browser",
+    needs: "harnessOrRunner",
+    key: "orCli",
   },
   {
     observed: "Home screen widget",
@@ -223,7 +228,7 @@ export const CAPABILITIES: Capability[] = [
     observed: "AppsFlyer, Braze, and Sentry",
     web: "Not included. Errors stay in a local log",
     state: "omitted",
-    needs: "none",
+    needs: "browser",
   },
   {
     observed: "Google sign-in and 1Password",

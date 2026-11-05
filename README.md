@@ -94,7 +94,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A saved draft for each bot and group chat
 - Mermaid diagrams in replies
 - Call mode: speak, the bot answers in its own voice, and it listens again. Use Chrome or Edge on `http://127.0.0.1:5173` or `http://localhost:5173`; the first Call may prompt for the microphone—allow it for that origin. Agent drivers and test-stack profiles stay in the same loop. Read replies aloud and mute are set for each bot
-- Triggers: schedules and webhooks per bot, created in the side panel or from chat ("every weekday at 9:00, check the build"). A card in chat lets you edit, pause, or undo it, and Recent runs lists what ran or was skipped. While the local harness is running, schedules and webhook deliveries queue with the browser closed; open the page again and the bot runs the turns it missed. A Windows balloon says a routine is waiting. Nothing runs until a Sandbench tab is open; without the harness, schedules are only checked while the tab is open. While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine with a stand-in reply. Webhooks and Recent runs need the local harness.
+- Triggers: schedules and webhooks per bot, created in the side panel or from chat ("every weekday at 9:00, check the build"). A card in chat lets you edit, pause, or undo it, and Recent runs lists what ran or was skipped. While the local harness is running, schedules and webhook deliveries queue with the browser closed; open the page again and the bot runs the turns it missed. A Windows balloon says a routine is waiting. Nothing runs until a Sandbench tab is open; without the harness, schedules are only checked while the tab is open. While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine, and that run counts as done: the reply is an error, or a stand-in if the page never saw a key. Webhooks and Recent runs need the local harness.
 - A handoff that sends a note from one teammate to another
 - Conversations stored in IndexedDB, with streaming replies
 - Markdown, fenced code, and keyword coloring
@@ -110,7 +110,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A widget-shaped preview of the latest text
 - Optional model calls: put your own API key in Settings
 
-With no key and no signed-in CLI driver, replies are a local stand-in. When you are signed in, threads sync to your own workspace, stand-in replies included. With a key, model calls go through the local harness or the runner (see above), which hold the key; the page keeps only its name and a short preview.
+With no key and no signed-in CLI driver, replies are a local stand-in, or an error for a bot set to an API driver. When you are signed in, threads sync to your own workspace, stand-in replies included. With a key, model calls go through the local harness or the runner (see above), which hold the key; the page keeps only its name and a short preview.
 
 ## Still native-only or not built
 

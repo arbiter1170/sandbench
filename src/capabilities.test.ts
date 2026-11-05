@@ -49,14 +49,45 @@ describe("capability map", () => {
       else if (item.state === "omitted") expect(["none", "browser"], item.observed).toContain(item.needs);
       else expect(["browser", "harness", "harnessOrRunner"], item.observed).toContain(item.needs);
     }
-    const label = (observed: string) => needsLabel(CAPABILITIES.find((item) => item.observed === observed)!);
-    expect(label("Model per bot")).toBe("Local harness + model key");
-    expect(label("Connectors and custom MCP")).toBe("Local harness + model key");
-    expect(label("Agent drivers")).toBe("Local harness + model key or signed-in CLI");
-    expect(label("Bot teammates")).toBe("Local harness + model key or signed-in CLI");
-    expect(label("Test stack profiles")).toBe("Local harness + model key or signed-in CLI");
-    expect(label("Grok Bot migration")).toBe("Local harness + model key");
-    expect(label("Chat with markdown and code")).toBe("Local harness or runner + model key or signed-in CLI");
+    const ON_THE_PAGE = "This page";
+    const NATIVE = "Native app";
+    const ANY_REPLY = "Local harness or runner + model key or signed-in CLI";
+    const labels: Record<string, string> = {
+      "Bot teammates": "Local harness + model key or signed-in CLI",
+      "Appearance and voice": ON_THE_PAGE,
+      "Thinking trace and computer usage": "Local harness",
+      "Computer use (local exec daemon, window capture)": "Local harness + model key",
+      "Agent drivers": "Local harness + model key or signed-in CLI",
+      "Auto-review rules and approvals": "Local harness",
+      "Connectors and custom MCP": "Local harness + model key",
+      "Plugins, templates, and team sharing": ANY_REPLY,
+      "Group chats": ANY_REPLY,
+      "Model per bot": "Local harness + model key",
+      "Test stack profiles": "Local harness + model key or signed-in CLI",
+      "Grok Bot migration": "Local harness + model key",
+      "Bot list": ON_THE_PAGE,
+      "Bot file library and viewer": ON_THE_PAGE,
+      "Tasks, routines, and reminders": "Local harness + model key or signed-in CLI",
+      "Billing and top-up": ON_THE_PAGE,
+      "Device check, card text recognition, WebAuthn signer, VNC, cloud computers": NATIVE,
+      "Chat with markdown and code": ANY_REPLY,
+      "Camera and photo library": ON_THE_PAGE,
+      "Microphone and dictation": ON_THE_PAGE,
+      Contacts: ON_THE_PAGE,
+      Calendar: ON_THE_PAGE,
+      Reminders: ON_THE_PAGE,
+      "Location when requested": ON_THE_PAGE,
+      "Face ID": ON_THE_PAGE,
+      "Background audio and voice calls": ANY_REPLY,
+      "Home screen widget": ON_THE_PAGE,
+      "Notification service extension": ON_THE_PAGE,
+      "Live Activities": NATIVE,
+      HomeKit: NATIVE,
+      "AppsFlyer, Braze, and Sentry": ON_THE_PAGE,
+      "Google sign-in and 1Password": ON_THE_PAGE,
+      "Listed interface languages": ON_THE_PAGE,
+    };
+    expect(Object.fromEntries(CAPABILITIES.map((item) => [item.observed, needsLabel(item)]))).toEqual(labels);
   });
 
   it("does not call sign-in omitted", () => {

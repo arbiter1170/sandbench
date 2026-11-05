@@ -234,7 +234,7 @@ const en = {
   noOutput: "(no output)",
   harnessOff: "Local harness is not running",
   harnessOn: "Local harness connected",
-  harnessHint: "Run npm run harness in the Sandbench folder, and open the local dev page or the desktop app, to give bots this computer. Commands run in ~/.sandbench/workspace after you approve them or they match an auto-review rule.",
+  harnessHint: "Run npm run harness in the Sandbench folder and open the local dev page, or open the desktop app, which starts its own harness, to give bots this computer. Commands run in ~/.sandbench/workspace after you approve them or they match an auto-review rule.",
   watchScreen: "Watch screen",
   stopWatching: "Stop watching",
   shareScreen: "Share a window",

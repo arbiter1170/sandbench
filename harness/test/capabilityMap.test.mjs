@@ -1,6 +1,7 @@
-// The capability map (src/capabilities.ts) is a hand-written table. These tests tie the rows
-// that describe harness, runner and import behavior to the code, so a behavior change fails
-// here until the label is updated too.
+// The capability map (src/capabilities.ts) is a hand-written table. These tests tie a set of
+// rows that describe harness, runner and import behavior to the code. They do not pin every
+// sentence, so a behavior change can still leave a row out of date. src/capabilities.test.ts
+// pins every row's Needs label.
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
@@ -43,7 +44,7 @@ test("the runner image installs none of the CLI drivers, as the row says", () =>
   assert.match(row("Agent drivers").web, /runner image ships none/);
   const dockerfile = read("runner/Dockerfile");
   const runnerPackage = read("runner/package.json");
-  for (const cli of ["@anthropic-ai/claude-code", "@openai/codex", "x.ai/cli", "grok", "claude.ai/install", "install.sh"]) {
+  for (const cli of ["@anthropic-ai/claude-code", "@openai/codex", "x.ai/cli", "grok", "codex", "claude.ai/install", "install.sh"]) {
     assert.ok(!dockerfile.includes(cli), cli);
     assert.ok(!runnerPackage.includes(cli), cli);
   }
@@ -115,8 +116,8 @@ test("the routines row matches the page's own schedule check", () => {
   // The page's loop stands down whenever a harness or a runner answers /health, and the runner
   // has no schedule routes, so a healthy runner build runs nothing. If it stops answering, the
   // loop runs again.
-  assert.ok(read("src/App.tsx").includes("if (sendingRef.current || harnessRef.current) return;"));
-  assert.match(row("Tasks, routines, and reminders").web, /While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine with a stand-in reply/);
+  assert.match(read("src/App.tsx"), /^\s*if \(sendingRef\.current \|\| harnessRef\.current\) return;/m);
+  assert.match(row("Tasks, routines, and reminders").web, /While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine, and that run counts as done/);
 });
 
 test("the migration row lists what the Windows import script drops", () => {
@@ -127,7 +128,9 @@ test("the migration row lists what the Windows import script drops", () => {
   assert.match(web, /placeholder schedule \(weekdays at 9:00\)/);
   assert.ok(script.includes("bots[index % bots.length]"));
   assert.match(web, /dealt out to bots in turn/);
-  assert.ok(script.includes("connectors: []") && !script.includes("webhooks"));
+  // The pack's own list, not the one on each bot.
+  assert.match(script, /bots,\r?\n\s+plugins: \[\],\r?\n\s+connectors: \[\],/);
+  assert.ok(!script.includes("webhooks"));
   assert.match(web, /writes no connectors or webhooks/);
   assert.ok(script.includes("threads.slice(0, 40)") && script.includes("routines.slice(0, 40)"));
   assert.match(web, /at most 40 chats and 40 routines/);
@@ -154,7 +157,7 @@ test("a local provider base works only on the harness, as the model and profile 
   assert.ok(read("harness/server.mjs").includes("allowLocal: true"));
   assert.ok(read("runner/api/server.mjs").includes("allowLocal: false"));
   assert.ok(read("src/testProfiles.ts").includes("http://127.0.0.1:11434/v1"));
-  assert.match(row("Model per bot").web, /a local provider address works only with the local harness/);
+  assert.match(row("Model per bot").web, /page model calls to a local provider address work only with the local harness/);
   assert.match(row("Test stack profiles").web, /Ready does not check that a local server such as Ollama is running/);
 });
 
@@ -176,15 +179,24 @@ test("the teammates row does not promise MEMORY.md on planner turns", () => {
 
 test("the hosted site cannot reach the local harness, as the map note says", () => {
   assert.ok(read("src/harness.ts").includes('RUNNER_URL || "/harness"'));
-  assert.ok(read("vite.config.ts").includes("/harness"));
+  assert.ok(read("vite.config.ts").includes('"/harness":'));
   assert.ok(read("electron/main.mjs").includes('startsWith("/harness")'));
   assert.ok(!read("vercel.json").includes("/harness"));
   assert.match(read("src/i18n.ts"), /local harness is reached through the local dev page \(npm run dev\) or the desktop app, not the hosted site/);
 });
 
+test("the table shows the label, the note states the rule, and the hint is usable", () => {
+  assert.ok(read("src/views.tsx").includes("<td>{needsLabel(item)}</td>"));
+  const i18n = read("src/i18n.ts");
+  assert.match(i18n, /says what must be running for everything in a row to work/);
+  assert.match(i18n, /or open the desktop app, which starts its own harness/);
+  assert.ok(!i18n.includes("grokbot-poc"));
+  assert.ok(read("electron/main.mjs").includes("harness/server.mjs"), "the desktop app starts its own harness");
+});
+
 test("the sign-in row matches the gate the page is wrapped in", () => {
   const main = read("src/main.tsx");
   assert.match(main, /<AuthGate>\{\(user\) => <App user=\{user\} \/>\}<\/AuthGate>/);
-  assert.match(read("src/AuthGate.tsx"), /isEmailAllowed\(user\.email\)/);
+  assert.match(read("src/AuthGate.tsx"), /^\s*if \(!isEmailAllowed\(user\.email\)\) \{/m);
   assert.match(row("Google sign-in and 1Password").web, /sign-in is required before the app opens, and only allowlisted accounts/);
 });
