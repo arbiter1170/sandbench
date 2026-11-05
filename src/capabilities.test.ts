@@ -49,10 +49,14 @@ describe("capability map", () => {
       else if (item.state === "omitted") expect(["none", "browser"], item.observed).toContain(item.needs);
       else expect(["browser", "harness", "harnessOrRunner"], item.observed).toContain(item.needs);
     }
-    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Model per bot")!)).toBe("Local harness or runner + model key");
-    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Connectors and custom MCP")!)).toBe("Local harness");
-    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Agent drivers")!)).toBe("Local harness or runner + model key or signed-in CLI");
-    expect(needsLabel(CAPABILITIES.find((item) => item.observed === "Chat with markdown and code")!)).toBe("Local harness or runner + model key");
+    const label = (observed: string) => needsLabel(CAPABILITIES.find((item) => item.observed === observed)!);
+    expect(label("Model per bot")).toBe("Local harness + model key");
+    expect(label("Connectors and custom MCP")).toBe("Local harness + model key");
+    expect(label("Agent drivers")).toBe("Local harness + model key or signed-in CLI");
+    expect(label("Bot teammates")).toBe("Local harness + model key or signed-in CLI");
+    expect(label("Test stack profiles")).toBe("Local harness + model key or signed-in CLI");
+    expect(label("Grok Bot migration")).toBe("Local harness + model key");
+    expect(label("Chat with markdown and code")).toBe("Local harness or runner + model key or signed-in CLI");
   });
 
   it("does not call sign-in omitted", () => {

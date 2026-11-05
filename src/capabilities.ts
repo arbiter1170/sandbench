@@ -34,9 +34,10 @@ export function needsLabel(item: Capability): string {
 export const CAPABILITIES: Capability[] = [
   {
     observed: "Bot teammates",
-    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key, replies are local stand-ins. Bots do not save new memories themselves yet",
+    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins. Bots do not save new memories themselves yet",
     state: "working",
     needs: "harness",
+    key: "orCli",
   },
   {
     observed: "Appearance and voice",
@@ -58,22 +59,23 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Agent drivers",
-    web: "Five drivers: Anthropic (API), OpenAI-compatible tools, Claude Code (local CLI), Codex (local CLI), and Grok (local CLI). A CLI driver needs that CLI installed and signed in on the harness computer; the runner image ships none, so only the two API drivers can work there. The API drivers are listed as available before a key is stored and fail on the first turn without one. Commands use the same approval cards and auto-review rules as other turns. Driver turns do not get the bot's connectors yet, and a turn cut off by a harness restart is not resumed",
+    web: "Five drivers: Anthropic (API), OpenAI-compatible tools, Claude Code (local CLI), Codex (local CLI), and Grok (local CLI). A CLI driver needs that CLI installed and signed in on the harness computer; the runner image ships none, so only the two API drivers can work there. The API drivers are listed as available before a key is stored and fail on the first turn without one. Commands use approval cards and auto-review rules, but tools a CLI permits on its own show no card, and a bot's permission mode does not apply to driver turns. Driver turns do not get the bot's connectors yet, and a turn cut off by a harness restart is not resumed",
     state: "partial",
-    needs: "harnessOrRunner",
+    needs: "harness",
     key: "orCli",
   },
   {
     observed: "Auto-review rules and approvals",
-    web: "Allow-list of read-only commands, plus a setting for unattended routines",
+    web: "Allow-list of read-only commands, plus a setting for unattended routines. Command cards also work on the runner; clicks and routines need the local harness",
     state: "working",
-    needs: "harnessOrRunner",
+    needs: "harness",
   },
   {
     observed: "Connectors and custom MCP",
     web: "Add a streamable HTTP MCP server or the Composio preset, test it, and give it to a bot. Calls go through the local harness. With an API key the model chooses the tool. Without one, a matching tool or /tool is proposed. You approve the call. Agent-driver turns (Claude Code and the others) do not get connectors yet. Header values are kept as write-only secrets",
     state: "working",
     needs: "harness",
+    key: true,
   },
   {
     observed: "Plugins, templates, and team sharing",
@@ -83,28 +85,30 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Group chats",
-    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick one bot to answer",
+    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick one bot to answer. The working folder only acts through the local harness or the runner",
     state: "working",
-    needs: "browser",
+    needs: "harnessOrRunner",
   },
   {
     observed: "Model per bot",
-    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider. The local harness or the runner holds the key and makes the call",
+    web: "Each bot can use its own model id through xAI, Anthropic, or a second OpenAI-compatible provider. The local harness or the runner holds the key and makes the call; a local provider address works only with the local harness",
     state: "working",
-    needs: "harnessOrRunner",
+    needs: "harness",
     key: true,
   },
   {
     observed: "Test stack profiles",
-    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher. Choosing a profile works in the page; its key and driver hints come from the local harness or the runner, and without one a profile can show as ready when it is not",
+    web: "Named profiles (xAI, Claude API, Claude Code CLI, Ollama, Groq) with readiness hints; default for new bots and a per-bot switcher. Choosing a profile works in the page; its key and driver hints come from the local harness or the runner, and without one a profile can show as ready when it is not. Ready does not check that a local server such as Ollama is running. The CLI and Ollama profiles work only with the local harness",
     state: "working",
-    needs: "harnessOrRunner",
+    needs: "harness",
+    key: "orCli",
   },
   {
     observed: "Grok Bot migration",
-    web: "Import sandbench-migration.json (from Team → Import migration pack, or node scripts/import-grok-desktop.mjs on Windows) to bring bots, memories, chats, paused routines and webhooks, and connector slots without xAI. The Windows script is lossy: each bot's description becomes its only memory, chats are dealt out to bots in turn rather than matched to their bot, every routine gets a placeholder schedule (weekdays at 9:00), it keeps at most 40 chats and 40 routines, and it writes no connectors or webhooks",
+    web: "Import sandbench-migration.json (from Team → Import migration pack, or node scripts/import-grok-desktop.mjs on Windows) to bring bots, memories, chats, paused routines and webhooks, and connector slots without xAI. The Windows script is lossy: each bot's description becomes its only memory, chats are dealt out to bots in turn rather than matched to their bot, every routine gets a placeholder schedule (weekdays at 9:00), it keeps at most 40 chats and 40 routines, and it writes no connectors or webhooks. The import itself runs in the page; imported webhooks need the local harness, and imported bots need a model key",
     state: "partial",
-    needs: "browser",
+    needs: "harness",
+    key: true,
   },
   {
     observed: "Bot list",
@@ -120,7 +124,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Tasks, routines, and reminders",
-    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Webhooks and recent runs need the local harness. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. A runner build does not run routines, even with a tab open. Bots set reminders from chat. Each bot keeps a task list",
+    web: "Triggers: schedules and webhooks, created in the side panel or from chat, with pause, edit, undo, and recent runs. Webhooks and recent runs need the local harness. Nothing runs while every Sandbench tab is closed: with the local harness, due schedules and webhook deliveries wait in its queue and run once a tab is open; without it, schedules are only checked while the tab is open. While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine with a stand-in reply. Bots set reminders from chat. Each bot keeps a task list",
     state: "partial",
     needs: "harness",
   },
@@ -138,10 +142,10 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Chat with markdown and code",
-    web: "Local threads, fenced code, and stand-in replies work in the page alone. Real streaming replies need a model key held by the local harness or the runner",
+    web: "Local threads, fenced code, and stand-in replies work in the page alone. Real streaming replies need a model key held by the local harness or the runner, or a signed-in CLI driver on the local harness",
     state: "working",
     needs: "harnessOrRunner",
-    key: true,
+    key: "orCli",
   },
   {
     observed: "Camera and photo library",

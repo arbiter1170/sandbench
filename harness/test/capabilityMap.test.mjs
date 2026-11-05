@@ -43,10 +43,28 @@ test("the runner image installs none of the CLI drivers, as the row says", () =>
   assert.match(row("Agent drivers").web, /runner image ships none/);
   const dockerfile = read("runner/Dockerfile");
   const runnerPackage = read("runner/package.json");
-  for (const cli of ["@anthropic-ai/claude-code", "@openai/codex", "x.ai/cli", "grok"]) {
+  for (const cli of ["@anthropic-ai/claude-code", "@openai/codex", "x.ai/cli", "grok", "claude.ai/install", "install.sh"]) {
     assert.ok(!dockerfile.includes(cli), cli);
     assert.ok(!runnerPackage.includes(cli), cli);
   }
+});
+
+test("each row that depends on more than the page says so", () => {
+  const expected = {
+    "Bot teammates": "harness",
+    "Thinking trace and computer usage": "harness",
+    "Computer use (local exec daemon, window capture)": "harness",
+    "Agent drivers": "harness",
+    "Auto-review rules and approvals": "harness",
+    "Connectors and custom MCP": "harness",
+    "Group chats": "harnessOrRunner",
+    "Model per bot": "harness",
+    "Test stack profiles": "harness",
+    "Grok Bot migration": "harness",
+    "Tasks, routines, and reminders": "harness",
+    "Chat with markdown and code": "harnessOrRunner",
+  };
+  for (const [name, needs] of Object.entries(expected)) assert.equal(row(name).needs, needs, name);
 });
 
 test("driver turns get no connector config from the request, as the drivers and connectors rows say", () => {
@@ -79,19 +97,26 @@ test("rows that need harness-only routes do not claim the runner", () => {
     "Thinking trace and computer usage": ["/screen", "/processes"],
     "Computer use (local exec daemon, window capture)": ["/input", "/screen"],
     "Connectors and custom MCP": ["/mcp/call"],
-    "Tasks, routines, and reminders": ["/schedules", "/triggers"],
+    "Tasks, routines, and reminders": ["/schedules", "/triggers", "/due"],
   };
   for (const [name, routes] of Object.entries(needs)) {
     for (const route of routes) {
-      assert.ok(harness.includes(`"${route}"`), `harness serves ${route}`);
-      assert.ok(!new RegExp(`["'\`]${route}["'\`]`).test(runner), `runner does not serve ${route}`);
+      assert.ok(harness.includes(`"${route}`), `harness serves ${route}`);
+      // A sub-path such as "/triggers/runs" counts as serving it.
+      assert.ok(!new RegExp(`["'\`]${route}["'\`/]`).test(runner), `runner does not serve ${route}`);
     }
-    assert.notEqual(row(name).needs, "harnessOrRunner", name);
+    assert.equal(row(name).needs, "harness", name);
   }
   assert.match(row("Thinking trace and computer usage").web, /the runner does not serve them/);
-  assert.match(row("Tasks, routines, and reminders").web, /A runner build does not run routines, even with a tab open/);
-  assert.equal(row("Tasks, routines, and reminders").needs, "harness", "webhooks and recent runs are harness-only");
   assert.match(row("Tasks, routines, and reminders").web, /Webhooks and recent runs need the local harness/);
+});
+
+test("the routines row matches the page's own schedule check", () => {
+  // The page's loop stands down whenever a harness or a runner answers /health, and the runner
+  // has no schedule routes, so a healthy runner build runs nothing. If it stops answering, the
+  // loop runs again.
+  assert.ok(read("src/App.tsx").includes("if (sendingRef.current || harnessRef.current) return;"));
+  assert.match(row("Tasks, routines, and reminders").web, /While a runner answers, a runner build does not run routines, even with a tab open; if it stops answering, the page's own check can fire a due routine with a stand-in reply/);
 });
 
 test("the migration row lists what the Windows import script drops", () => {
@@ -109,18 +134,28 @@ test("the migration row lists what the Windows import script drops", () => {
 });
 
 test("rows that say the harness or the runner are served by both", () => {
-  const runner = [read("runner/api/server.mjs"), ...readdirSync(path.join(root, "runner/api/routes")).map((file) => read(`runner/api/routes/${file}`))].join("\n");
+  // The runner's server file only: routes/index.mjs lists these names as reserved, which is not
+  // the same as serving them.
+  const runner = read("runner/api/server.mjs");
   const harness = read("harness/server.mjs");
-  const both = { "Model per bot": ["/model"], "Chat with markdown and code": ["/model"], "Agent drivers": ["/drivers", "/turns"], "Test stack profiles": ["/secrets", "/drivers"] };
+  const both = { "Chat with markdown and code": ["/model"], "Group chats": ["/exec", "/turns"] };
   for (const [name, routes] of Object.entries(both)) {
     assert.equal(row(name).needs, "harnessOrRunner", name);
     for (const route of routes) {
-      assert.ok(harness.includes(route), `harness serves ${route}`);
-      assert.ok(runner.includes(route), `runner serves ${route}`);
+      assert.ok(harness.includes(`"${route}"`), `harness serves ${route}`);
+      assert.ok(runner.includes(`route === "${route}"`), `runner serves ${route}`);
     }
   }
   // Every model call from the page goes through this one route.
   assert.ok(read("src/harness.ts").includes("fetch(`${BASE}/model`"));
+});
+
+test("a local provider base works only on the harness, as the model and profile rows say", () => {
+  assert.ok(read("harness/server.mjs").includes("allowLocal: true"));
+  assert.ok(read("runner/api/server.mjs").includes("allowLocal: false"));
+  assert.ok(read("src/testProfiles.ts").includes("http://127.0.0.1:11434/v1"));
+  assert.match(row("Model per bot").web, /a local provider address works only with the local harness/);
+  assert.match(row("Test stack profiles").web, /Ready does not check that a local server such as Ollama is running/);
 });
 
 test("the computer use row says what works on the runner", () => {
@@ -133,15 +168,18 @@ test("the teammates row does not promise MEMORY.md on planner turns", () => {
   const { web, needs } = row("Bot teammates");
   assert.equal(needs, "harness", "MEMORY.md is read through the harness");
   assert.ok(!read("src/work.ts").includes("memoryDoc"), "the planner decision prompt has no memory document");
+  assert.match(read("src/App.tsx"), /system: assembleBotSystem\(\{[\s\S]{0,300}memoryDoc,/, "driver turns get the memory document");
   assert.doesNotMatch(web, /on every turn/);
+  assert.match(web, /Without a key or a signed-in CLI driver, replies are local stand-ins/);
   assert.match(web, /MEMORY\.md .*reaches agent-driver turns, and planner replies only when the decision step fails/);
 });
 
 test("the hosted site cannot reach the local harness, as the map note says", () => {
   assert.ok(read("src/harness.ts").includes('RUNNER_URL || "/harness"'));
   assert.ok(read("vite.config.ts").includes("/harness"));
+  assert.ok(read("electron/main.mjs").includes('startsWith("/harness")'));
   assert.ok(!read("vercel.json").includes("/harness"));
-  assert.match(read("src/i18n.ts"), /local harness is reached through the local dev page/);
+  assert.match(read("src/i18n.ts"), /local harness is reached through the local dev page \(npm run dev\) or the desktop app, not the hosted site/);
 });
 
 test("the sign-in row matches the gate the page is wrapped in", () => {
