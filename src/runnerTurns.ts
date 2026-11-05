@@ -24,7 +24,10 @@ export type RunnerTurnRequest = {
   replyId?: string;
 };
 
-export type RunnerJobEvent = AgentEvent & {
+/** The engine's events: the harness shapes plus the queue's own markers. */
+export type RunnerJobEventType = AgentEvent["type"] | "queued" | "interrupted";
+export type RunnerJobEvent = Omit<AgentEvent, "type"> & {
+  type: RunnerJobEventType;
   jobId: string;
   at?: number;
   deniedReason?: string;
@@ -34,7 +37,7 @@ export type RunnerJobEvent = AgentEvent & {
 
 export type RunnerTurnStarted = { jobId: string; messageId: string; replyId: string };
 
-const TERMINAL = new Set<AgentEvent["type"]>(["done", "error"]);
+const TERMINAL = new Set<RunnerJobEventType>(["done", "error"]);
 
 async function fail(response: Response, what: string): Promise<never> {
   const body = (await response.json().catch(() => null)) as { error?: string } | null;

@@ -161,7 +161,7 @@ test("a paused agent is refused with 409, an unknown agent with 404, and a body 
   assert.equal(slug.status, 400);
   assert.match(slug.body.error, /agentSlug is not a known field/);
   assert.equal((await call("vincent", "POST", "/jobs", { ...turn("hi"), owner: "u-other" })).status, 400);
-  assert.equal((await call("vincent", "POST", "/jobs", { ...turn("hi"), key: "sk-ant-x" })).status, 400);
+  assert.equal((await call("vincent", "POST", "/jobs", { ...turn("hi"), key: "not-a-field" })).status, 400);
   assert.equal((await call("vincent", "POST", "/jobs", { threadId: "t-qa", text: "" })).status, 400);
   assert.equal((await fetch(`${base}/jobs`, { method: "POST", headers: { authorization: "Bearer vincent", "content-type": "application/json" }, body: "{not json" })).status, 400);
   assert.equal(await count(), before);

@@ -3,6 +3,7 @@
 // (sb_engine_boss_<name>) so engines never take each other's jobs, except the restart test, whose
 // engine generations share one queue, as a real restart does.
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { after, before, test } from "node:test";
 import { FAILED_TWICE_MESSAGE, INTERRUPTED_MESSAGE } from "../worker/engine.mjs";
 import { SHELL_GATE_MESSAGE, TOOLS_GATE_MESSAGE } from "../worker/turns.mjs";
@@ -108,18 +109,19 @@ test("the page's stand-in reply record is patched, not duplicated, and earlier m
 });
 
 test("the named key reaches the driver on the turn object only, with the agent's scope applied", { skip }, async () => {
-  const { engine, fake } = await started("keys", { secretsEnv: { ANTHROPIC_API_KEY: "sk-ant-test-value-0123456789" } });
+  const generated = `k-${randomBytes(12).toString("hex")}`; // a test key, made here, never committed
+  const { engine, fake } = await started("keys", { secretsEnv: { ANTHROPIC_API_KEY: generated } });
   const { jobId } = await engine.startTurn({ owner: OWNER, request: request("qa", "with a key", { secret: "ANTHROPIC_API_KEY", model: "claude-sonnet-5", base: "https://api.anthropic.com/v1" }) });
   assert.equal((await finished(engine, jobId)).status, "done");
   const call = fake.calls.at(-1);
-  assert.equal(call.rawKey, "sk-ant-test-value-0123456789");
+  assert.equal(call.rawKey, generated);
   assert.equal(call.turn.model, "claude-sonnet-5");
   assert.equal(call.turn.base, "https://api.anthropic.com/v1");
   assert.deepEqual(call.turn.extras, {});
   // The job row never holds the value: payload carries the name only.
   const job = await engine.getJob(OWNER, jobId);
   assert.equal(job.payload.secret, "ANTHROPIC_API_KEY");
-  assert.equal(JSON.stringify(job).includes("sk-ant-test"), false);
+  assert.equal(JSON.stringify(job).includes(generated), false);
 });
 
 test("two turns for one agent run one after the other; different agents run together, never more than the cap", { skip }, async () => {
@@ -273,7 +275,7 @@ test("a paused agent, an unknown agent, another owner's agent and a bad body are
   await assert.rejects(engine.startTurn({ owner: OTHER, request: request("pixelpets", "hi") }), (error) => error.status === 404, "pixelpets belongs to the other owner");
   await assert.rejects(engine.startTurn({ owner: OWNER, request: { ...request("qa", "hi"), agentSlug: "pixelpets" } }), (error) => error.status === 400 && /agentSlug/.test(error.message));
   await assert.rejects(engine.startTurn({ owner: OWNER, request: { ...request("qa", "hi"), owner: OTHER } }), (error) => error.status === 400 && /owner/.test(error.message));
-  await assert.rejects(engine.startTurn({ owner: OWNER, request: { ...request("qa", "hi"), key: "sk-ant-nope" } }), (error) => error.status === 400 && /key/.test(error.message));
+  await assert.rejects(engine.startTurn({ owner: OWNER, request: { ...request("qa", "hi"), key: "not-a-field" } }), (error) => error.status === 400 && /key/.test(error.message));
   await assert.rejects(engine.startTurn({ owner: OWNER, request: request("qa", "hi", { secret: "GITHUB_TOKEN" }) }), (error) => error.status === 400 && /secret/.test(error.message));
   await assert.rejects(engine.startTurn({ owner: OWNER, request: request("qa", "hi", { base: "http://10.0.0.5/v1" }) }), (error) => error.status === 400 && /base/.test(error.message));
   await assert.rejects(engine.startTurn({ owner: OWNER, request: request("qa", "hi", { driver: "nope" }) }), (error) => error.status === 400 && /driver/.test(error.message));
