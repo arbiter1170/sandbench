@@ -79,3 +79,24 @@ export async function moveLegacySecrets(found: LegacySecret[]): Promise<LegacySe
   }
   return left;
 }
+
+/**
+ * Put found keys somewhere durable before any copy that holds them is rewritten without
+ * them: this device's pending list, or failing that the harness or runner. Returns the keys
+ * that are still only in memory (empty when all are safe); while any are, the caller must
+ * not rewrite the copies they came from.
+ */
+export async function secureLegacySecrets(
+  found: LegacySecret[],
+  savePending: (list: LegacySecret[]) => Promise<void>,
+  move: (list: LegacySecret[]) => Promise<LegacySecret[]> = moveLegacySecrets,
+): Promise<LegacySecret[]> {
+  const unique = [...new Map(found.map((item) => [item.name, item])).values()];
+  if (!unique.length) return [];
+  try {
+    await savePending(unique);
+    return [];
+  } catch {
+    return move(unique).catch(() => unique);
+  }
+}

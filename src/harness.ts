@@ -32,6 +32,17 @@ export type HarnessTriggers = {
 
 export { call as harnessCall };
 
+/** True when the page talks to a hosted runner (VITE_RUNNER_URL), not the local harness. */
+export const runnerMode = Boolean(RUNNER_URL);
+
+/** A raw call to the harness or runner with the signed-in user's token (for streams). */
+export async function runnerFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(`${BASE}${path}`, {
+    ...init,
+    headers: { ...(await authHeaders()), ...(init.body ? { "content-type": "application/json" } : {}), ...(init.headers ?? {}) },
+  });
+}
+
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${BASE}${path}`, {
     ...init,

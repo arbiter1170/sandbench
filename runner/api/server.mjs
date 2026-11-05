@@ -13,9 +13,13 @@ import { listDrivers } from "../../harness/drivers/index.mjs";
 import { proxyModel } from "../../harness/modelProxy.mjs";
 import { createSecretStore } from "../../harness/secrets.mjs";
 import { createTurns } from "../../harness/turns.mjs";
-import { createShell, insideRoot } from "../shell.mjs";
+import { createShell } from "../shell.mjs";
+import { resolveWorkspacePath, workspaceRoots } from "../workspace/index.mjs";
 import { createAuth } from "./auth.mjs";
 import { createDataRoutes } from "./data.mjs";
+import { createMemoryRoutes } from "./memory.mjs";
+import { buildSystemPrompt } from "../agent/prompt.mjs";
+import { createSkills } from "../agent/skills.mjs";
 import { readJson, send } from "./http.mjs";
 import { createStatic } from "./static.mjs";
 
@@ -23,13 +27,22 @@ import { createStatic } from "./static.mjs";
 const CORS_HEADERS = "authorization, content-type, x-sandbench-client";
 const CORS_METHODS = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
 
-export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, secretsFile, env = process.env }) {
+export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, publicOrigin = "", allowedOrigins = [], store = null, memory = null, teamDir = "", secretsFile, env = process.env }) {
   // The runner's own address plus any page hosted elsewhere (e.g. the Vercel site).
   // Exact matches only: no wildcards, no credentials or cookies (the ID token is a header).
   const origins = new Set([publicOrigin, ...allowedOrigins].map((item) => String(item || "").trim().replace(/\/$/, "")).filter(Boolean));
-  const workspace = path.join(home, "workspace");
-  mkdirSync(workspace, { recursive: true });
-  const workspacePath = (relative) => insideRoot(workspace, relative);
+  // SB-09: shared/, agents/<slug>/ and wt/ sit next to the page's own workspace/ folder.
+  const roots = workspaceRoots(home);
+  for (const folder of Object.values(roots)) mkdirSync(folder, { recursive: true });
+  const workspace = roots.legacy;
+  // Page calls are the owner context (no agent). A refused path keeps today's 400 answers.
+  const resolve = (relative, write, agentSlug = null) => {
+    try {
+      return resolveWorkspacePath(roots, agentSlug, relative, { write });
+    } catch {
+      return null;
+    }
+  };
   const runShell = createShell(workspace);
   const authenticate = createAuth({ verifyIdToken, allowedEmails });
   const serveStatic = createStatic(uiDir);
@@ -38,8 +51,10 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
   const turns = createTurns({
     runShell,
     secrets,
-    resolveFolder: (folder) => {
-      const cwd = folder ? workspacePath(folder) : workspace;
+    resolveFolder: (folder, ctx = {}) => {
+      const agentSlug = ctx.agentSlug ?? null;
+      const own = agentSlug ? path.join(roots.agents, agentSlug) : workspace;
+      const cwd = folder ? resolve(folder, true, agentSlug) : own;
       if (cwd) mkdirSync(cwd, { recursive: true });
       return cwd;
     },
@@ -47,12 +62,24 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
 
   // SB-02 records; without DATABASE_URL the runner still works, minus these routes.
   const dataRoute = store ? createDataRoutes(store) : null;
+  // SB-08 memory and prompts need the database; skills (SANDBENCH_TEAM_DIR) work without it.
+  const skills = createSkills({ dir: teamDir });
+  const memoryRoute = createMemoryRoutes({
+    memory,
+    skills,
+    // A missing agent is the store's 404.
+    buildPrompt: async (owner, agentId) => buildSystemPrompt({ owner, agent: await store.get(owner, "agents", agentId), memory, skills, teamDir }),
+  });
 
   async function api(req, res, url, user) {
     const route = url.pathname.slice("/api".length) || "/";
     if (/^\/(data|changes|stream)(\/|$)/.test(route)) {
       if (!dataRoute) return send(res, 503, { error: "This runner has no database (set DATABASE_URL)." });
       if (await dataRoute(req, res, route, url, user)) return;
+    }
+    if (/^\/(memory|skills|prompt)(\/|$)/.test(route)) {
+      if (!route.startsWith("/skills") && (!store || !memory)) return send(res, 503, { error: "This runner has no database (set DATABASE_URL)." });
+      if (await memoryRoute(req, res, route, url, user)) return;
     }
     if (req.method === "GET" && route === "/health") {
       return send(res, 200, { ok: true, platform: process.platform, host: os.hostname(), workspace, user: user.email });
@@ -90,7 +117,8 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
       return send(res, 200, { drivers: await listDrivers() });
     }
     if (req.method === "POST" && route === "/turns") {
-      return send(res, 200, turns.start(await readJson(req)));
+      // SB-03 passes the slug from the job, never from the request body.
+      return send(res, 200, turns.start(await readJson(req), { agentSlug: null }));
     }
     const interrupt = /^\/turns\/([a-f0-9]{16})\/interrupt$/.exec(route);
     if (req.method === "POST" && interrupt) {
@@ -106,7 +134,7 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
       return turns.subscribe(req, res, url);
     }
     if (req.method === "GET" && route === "/workspace/read") {
-      const target = workspacePath(url.searchParams.get("path"));
+      const target = resolve(url.searchParams.get("path"), false);
       if (!target) return send(res, 400, { error: "The path must stay inside the workspace folder." });
       if (!existsSync(target)) return send(res, 200, { exists: false, content: "" });
       return send(res, 200, { exists: true, content: readFileSync(target, "utf8").slice(0, 64 * 1024) });
@@ -114,7 +142,7 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
     if (req.method === "POST" && route === "/workspace/write") {
       const body = await readJson(req);
       if (body.approved !== true) return send(res, 403, { error: "File change was not approved." });
-      const target = workspacePath(body.path);
+      const target = resolve(body.path, true);
       if (!target) return send(res, 400, { error: "The path must stay inside the workspace folder." });
       if (body.op === "delete") {
         if (!existsSync(target)) return send(res, 404, { error: "That file does not exist." });
@@ -133,7 +161,7 @@ export function createRunner({ home, uiDir, allowedEmails, verifyIdToken, public
       const body = await readJson(req);
       if (typeof body.command !== "string" || !body.command.trim()) return send(res, 400, { error: "No command." });
       if (body.approved !== true) return send(res, 403, { error: "Command was not approved." });
-      const cwd = body.folder ? workspacePath(body.folder) : workspace;
+      const cwd = body.folder ? resolve(body.folder, true) : workspace;
       if (!cwd) return send(res, 400, { error: "The working folder must stay inside the workspace folder." });
       mkdirSync(cwd, { recursive: true });
       console.log(`[exec] ${user.email} ${body.folder ? `(${body.folder}) ` : ""}${body.command}`);

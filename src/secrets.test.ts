@@ -74,3 +74,33 @@ describe("moveLegacySecrets", () => {
     }
   });
 });
+
+describe("secureLegacySecrets", () => {
+  const keys = [
+    { name: "XAI_API_KEY", value: "old" },
+    { name: "XAI_API_KEY", value: "newer" },
+    { name: "COMPAT_API_KEY", value: "c" },
+  ];
+
+  it("saves found keys on the device (one per name, last wins) before anything is rewritten", async () => {
+    const { secureLegacySecrets } = await import("./secrets");
+    const saved: unknown[] = [];
+    const held = await secureLegacySecrets(keys, async (list) => void saved.push(list), async () => {
+      throw new Error("not reached");
+    });
+    expect(held).toEqual([]);
+    expect(saved).toEqual([[{ name: "XAI_API_KEY", value: "newer" }, { name: "COMPAT_API_KEY", value: "c" }]]);
+  });
+
+  it("when the device can't save them, moves them to the server, and reports any it couldn't", async () => {
+    const { secureLegacySecrets } = await import("./secrets");
+    const failing = async () => {
+      throw new Error("IndexedDB is unavailable");
+    };
+    expect(await secureLegacySecrets(keys, failing, async () => [])).toEqual([]);
+    expect(await secureLegacySecrets(keys, failing, async (list) => list.slice(1))).toEqual([{ name: "COMPAT_API_KEY", value: "c" }]);
+    expect(await secureLegacySecrets(keys, failing, async () => Promise.reject(new Error("offline")))).toHaveLength(2);
+    expect(await secureLegacySecrets([], failing)).toEqual([]);
+  });
+});
+

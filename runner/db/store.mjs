@@ -97,11 +97,18 @@ export function createStore(sql, { onLogged } = {}) {
   }
 
   return {
-    async list(owner, kind, { threadId, since = 0, limit = 1000, includeDeleted = false } = {}) {
+    /**
+     * One page of records. With `after` (an id, or "" for the first page) the page is in id
+     * order and starts after that id, so a full load can follow `more` without skipping a row
+     * that was edited mid-load (an edit moves a row in updated_at order, never in id order).
+     */
+    async list(owner, kind, { threadId, since = 0, limit = 1000, includeDeleted = false, after } = {}) {
       const spec = checkKind(kind);
       const cap = Math.min(Math.max(Number(limit) || 1000, 1), 5000);
-      const after = new Date(Number(since) || 0);
+      const changedAfter = new Date(Number(since) || 0);
       const showDeleted = includeDeleted || Number(since) > 0;
+      const keyset = typeof after === "string";
+      if (keyset && after) checkId(after);
       if (kind === "messages" && threadId) checkId(threadId);
       const rows = await sql`
         select * from ${sql(spec.table)}
@@ -109,8 +116,9 @@ export function createStore(sql, { onLogged } = {}) {
           ${spec.table === "workspace_items" ? sql`and kind = ${kind}` : sql``}
           ${kind === "messages" && threadId ? sql`and thread_id = ${threadId}` : sql``}
           ${showDeleted ? sql`` : sql`and not deleted`}
-          and updated_at > ${after}
-        order by ${kind === "messages" ? sql`created_at, id` : sql`updated_at, id`}
+          and updated_at > ${changedAfter}
+          ${keyset && after ? sql`and id > ${after}` : sql``}
+        order by ${keyset ? sql`id` : kind === "messages" ? sql`created_at, id` : sql`updated_at, id`}
         limit ${cap + 1}`;
       return { items: rows.slice(0, cap).map((row) => toRecord(kind, row)), more: rows.length > cap };
     },
@@ -203,6 +211,12 @@ export function createStore(sql, { onLogged } = {}) {
       }
       // The cursor follows the change rows themselves, so it always moves forward.
       return { changes: out, last: changes.length ? Number(changes[changes.length - 1].seq) : Number(since) || 0, more: changes.length === cap };
+    },
+
+    /** The newest change seq for this owner (0 if none): where a fresh device starts its feed. */
+    async head(owner) {
+      const [row] = await sql`select coalesce(max(seq), 0) as seq from changes where owner = ${owner}`;
+      return Number(row.seq);
     },
 
     /** Call `fn(owner)` after any committed write; returns an unsubscribe function. */

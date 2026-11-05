@@ -103,23 +103,29 @@ export async function loadSnapshot(): Promise<LocalBundle> {
   }
 }
 
+/** What this device keeps of a workspace: everything but the oldest logs and computer events. */
+export function localCopy(snapshot: Snapshot): Snapshot {
+  return { ...snapshot, logs: snapshot.logs.slice(0, 40), computer: snapshot.computer.slice(0, 40) };
+}
+
 export async function saveSnapshot(snapshot: Snapshot, updatedAt = Date.now()): Promise<number> {
   const db = await openDb();
   try {
     const tx = db.transaction("kv", "readwrite");
     const store = tx.objectStore("kv");
     const done = settled(tx);
-    store.put(snapshot.threads, "threads");
-    store.put(snapshot.reminders, "reminders");
-    store.put(snapshot.events, "events");
-    store.put(snapshot.contacts, "contacts");
-    store.put(snapshot.settings, "settings");
-    store.put(snapshot.logs.slice(0, 40), "logs");
-    store.put(snapshot.bots, "bots");
-    store.put(snapshot.tasks, "tasks");
-    store.put(snapshot.routines, "routines");
-    store.put(snapshot.computer.slice(0, 40), "computer");
-    store.put(snapshot.studio, "studio");
+    const copy = localCopy(snapshot);
+    store.put(copy.threads, "threads");
+    store.put(copy.reminders, "reminders");
+    store.put(copy.events, "events");
+    store.put(copy.contacts, "contacts");
+    store.put(copy.settings, "settings");
+    store.put(copy.logs, "logs");
+    store.put(copy.bots, "bots");
+    store.put(copy.tasks, "tasks");
+    store.put(copy.routines, "routines");
+    store.put(copy.computer, "computer");
+    store.put(copy.studio, "studio");
     store.put(updatedAt, "updatedAt");
     await done;
     return updatedAt;
@@ -196,6 +202,67 @@ export async function savePendingSecrets(list: { name: string; value: string }[]
     if (list.length) tx.objectStore("kv").put(list, "pendingSecrets");
     else tx.objectStore("kv").delete("pendingSecrets");
     await done;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Runner mode (SB-02b): the records as this device last agreed with the runner, with their
+ * versions. Edits made while the runner was away are the difference between this and the
+ * local copy, and are replayed on the runner's copy at the next load. Device only.
+ */
+export async function loadSyncBase<T>(uid: string): Promise<T[] | null> {
+  const db = await openDb();
+  try {
+    const value = await run(db.transaction("kv", "readonly").objectStore("kv").get(`syncBase:${uid}`));
+    return Array.isArray(value) ? (value as T[]) : null;
+  } finally {
+    db.close();
+  }
+}
+
+export async function saveSyncBase<T>(uid: string, records: T[]): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction("kv", "readwrite");
+    const done = settled(tx);
+    tx.objectStore("kv").put(records, `syncBase:${uid}`);
+    await done;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * A copy of this device's workspace from before the runner's records first replaced it,
+ * kept once per user.
+ */
+export async function saveBackupOnce(uid: string, snapshot: Snapshot): Promise<void> {
+  const db = await openDb();
+  try {
+    const tx = db.transaction("kv", "readwrite");
+    const done = settled(tx);
+    const store = tx.objectStore("kv");
+    const existing = store.get(`backupBeforeRunner:${uid}`);
+    existing.onsuccess = () => {
+      if (existing.result === undefined) store.put({ savedAt: Date.now(), snapshot }, `backupBeforeRunner:${uid}`);
+    };
+    await done;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * True when another account has synced with a runner from this browser. The local copy is
+ * shared by everyone who signs in here, so it is then likely theirs, not this account's.
+ */
+export async function hasOtherSyncBase(uid: string): Promise<boolean> {
+  const db = await openDb();
+  try {
+    const keys = await run(db.transaction("kv", "readonly").objectStore("kv").getAllKeys());
+    return keys.some((key) => typeof key === "string" && key.startsWith("syncBase:") && key !== `syncBase:${uid}`);
   } finally {
     db.close();
   }
