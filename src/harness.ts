@@ -286,9 +286,4 @@ export async function harnessEvents(turnId: string, after: number, signal: Abort
   }
 }
 
-export function autoApproved(command: string, rules: string[]): boolean {
-  const trimmed = command.trim();
-  if (/[;&|>`]|\$\(/.test(trimmed)) return false;
-  const head = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
-  return rules.some((rule) => rule.trim().toLowerCase() === head);
-}
+export { autoApproved } from "./approvalPolicy";

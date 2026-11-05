@@ -48,6 +48,7 @@ import {
   runnerFetch,
   runnerMode,
 } from "./harness";
+import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
@@ -109,7 +110,6 @@ import {
   inFolder,
   interpretResult,
   MAX_ACTIONS,
-  needsHarness,
   nextLocalAction,
   parseModelDecision,
   parseRoute,
@@ -1338,19 +1338,16 @@ export function App({ user }: { user: User }) {
   }
 
   function makeApproval(action: StepAction, unattended: boolean, bot?: Bot): Approval {
-    const auto = action.kind === "command" && autoApproved(action.command, studioRef.current.autoApprove);
-    const mode = bot?.approvalMode ?? "ask";
-    const autoOk = mode === "auto" || mode === "full" ? auto || mode === "full" : auto;
     return {
       ...approvalFields(action),
-      status:
-        needsHarness(action) && !harnessRef.current
-          ? "unavailable"
-          : autoOk
-            ? "approved"
-            : unattended && !auto && studioRef.current.unattended === "skip"
-              ? "denied"
-              : "pending",
+      status: initialApprovalStatus({
+        action,
+        rules: studioRef.current.autoApprove,
+        mode: bot?.approvalMode,
+        harness: Boolean(harnessRef.current),
+        unattended,
+        unattendedPolicy: studioRef.current.unattended,
+      }),
     };
   }
 
