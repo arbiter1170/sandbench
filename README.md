@@ -55,7 +55,7 @@ npm run build
 npm run electron:dev   # loads http://127.0.0.1:5173 if Vite is running, else dist/
 ```
 
-`electron:dev` starts the harness child, waits for `/health`, and opens a window. Packaged layout: `npm run electron:pack` (Windows dir target). See also [docs/mcp-server.md](docs/mcp-server.md) and [docs/team-import.md](docs/team-import.md).
+`electron:dev` starts the harness child, waits for `/health`, and opens a window. Packaged layout: `npm run electron:pack` (Windows dir target). See also [docs/mcp-server.md](docs/mcp-server.md), [docs/team-import.md](docs/team-import.md) and [docs/bot-memory.md](docs/bot-memory.md).
 
 ### Agents
 

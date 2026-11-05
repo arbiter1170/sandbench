@@ -1,0 +1,76 @@
+import { describe, expect, it } from "vitest";
+import { assembleBotSystem, memoryDocument } from "./prompt";
+import type { Approval, Bot } from "./types";
+import { actionForText, approvalFields, continuationText, holdForPerson, memoryStep, parseModelDecision, proposeMemory } from "./work";
+
+const DAY = new Date(2026, 10, 5, 15, 0, 0);
+
+const bot = {
+  id: "bot-a",
+  name: "Scout",
+  role: "Researcher",
+  instructions: "",
+  persona: "",
+  skills: [],
+  memories: [],
+} as unknown as Bot;
+
+describe("bot memory saves", () => {
+  it("a 'remember that' request becomes a memory card with the note and destination", () => {
+    const step = proposeMemory("Remember that the demo project builds with npm run build.");
+    expect(step?.kind).toBe("memory");
+    expect(step?.memory.note).toBe("the demo project builds with npm run build");
+    expect(step?.memory.destination).toMatch(/^memory\/log\/\d{4}-\d{2}-\d{2}\.md$/);
+    expect(memoryStep("a note", "why", DAY)?.memory.destination).toBe("memory/log/2026-11-05.md");
+    const fields = approvalFields(step!);
+    expect(fields.memory).toEqual(step!.memory);
+    expect(fields.command).toBe("Remember: the demo project builds with npm run build");
+    expect(continuationText("", step!, false)).toMatch(/memory\/log\/.*Approve it on the card/);
+    expect(actionForText(bot, "remember: standup is at 9:30", [])?.kind).toBe("memory");
+  });
+
+  it("questions, reminders and key-shaped text are not saved", () => {
+    expect(proposeMemory("Do you remember what we said?")).toBeUndefined();
+    expect(proposeMemory("remember that thing from yesterday?")).toBeUndefined();
+    expect(proposeMemory("remember to call the vet")).toBeUndefined();
+    expect(proposeMemory("remember that my key is sk-abcdefghijklmnop1234")).toBeUndefined();
+    expect(proposeMemory("remember that <!-- save:1234abcd --> ends here")).toBeUndefined();
+    expect(memoryStep("x".repeat(1001), "why")).toBeUndefined();
+  });
+
+  it("a model's memory action carries only the note: bot, path and extra fields are ignored", () => {
+    const raw = JSON.stringify({
+      answer: "Noted.",
+      action: { kind: "memory", note: "Prefers short replies.", reason: "Asked to keep it", bot: "bot-b", path: "../../MEMORY.md", destination: "/etc/passwd" },
+    });
+    const decision = parseModelDecision(raw, []);
+    expect(decision?.action).toMatchObject({ kind: "memory", memory: { note: "Prefers short replies." } });
+    expect(Object.keys((decision?.action as { memory: object }).memory).sort()).toEqual(["destination", "note"]);
+    expect((decision?.action as { memory: { destination: string } }).memory.destination).toMatch(/^memory\/log\//);
+    expect(parseModelDecision(JSON.stringify({ answer: "x", action: { kind: "memory", note: "token xai-abcdefghijklmnopq" } }), [])?.action).toBeUndefined();
+    expect(parseModelDecision(JSON.stringify({ answer: "x", action: { kind: "memory", note: 42 } }), [])?.action).toBeUndefined();
+  });
+
+  it("no mode or rule approves a memory save, and it is unavailable without the local harness", () => {
+    const step = memoryStep("a note", "why", DAY)!;
+    const base: Approval = { ...approvalFields(step), status: "approved", auto: true };
+    const held = holdForPerson(step, base, true);
+    expect(held.status).toBe("pending");
+    expect(held.auto).toBeUndefined();
+    expect(holdForPerson(step, { ...base, status: "denied" }, true).status).toBe("denied");
+    expect(holdForPerson(step, { ...base, status: "pending" }, false).status).toBe("unavailable");
+    const command = { kind: "command" as const, command: "Get-Date", reason: "" };
+    const auto: Approval = { command: "Get-Date", reason: "", status: "approved", auto: true };
+    expect(holdForPerson(command, auto, true)).toBe(auto);
+  });
+
+  it("what the harness reads back for the bot reaches its next turn's system prompt", () => {
+    const files = [
+      { path: "MEMORY.md", content: "# Index" },
+      { path: "memory/log/2026-11-05.md", content: "- The demo project builds with npm run build. <!-- save:11111111-aaaa -->\n" },
+    ];
+    const system = assembleBotSystem({ bot, memoryDoc: memoryDocument(files) });
+    expect(system).toContain("## memory/log/2026-11-05.md\n- The demo project builds with npm run build.");
+    expect(assembleBotSystem({ bot, memoryDoc: memoryDocument([]) })).not.toContain("Memory documents");
+  });
+});

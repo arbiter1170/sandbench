@@ -1,6 +1,15 @@
 // Ordered system prompt for a bot turn: soul → instructions → channel → plugins → memories → files.
 import type { Bot } from "./types";
 
+/** A bot's harness memory files as one prompt section; each file is cut to 6,000 characters. */
+export function memoryDocument(files: { path: string; content: string }[]): string {
+  return files
+    .slice(0, 8)
+    .map((file) => `## ${file.path}\n${file.content.slice(0, 6000)}`)
+    .join("\n\n")
+    .slice(0, 24_000);
+}
+
 export function assembleBotSystem(input: {
   bot: Bot;
   sharedInstructions?: string;

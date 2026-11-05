@@ -1,5 +1,5 @@
 import { botWithDefaultProfile } from "./testProfiles";
-import type { Approval, ApprovalFile, ApprovalQuestion, Bot, BotFile, BotShape, BotVoice, Connector, Plugin, PointerAction, PointerKey, Routine, Settings, SkillId, Thread, WebhookTrigger } from "./types";
+import type { Approval, ApprovalFile, ApprovalMemory, ApprovalQuestion, Bot, BotFile, BotShape, BotVoice, Connector, Plugin, PointerAction, PointerKey, Routine, Settings, SkillId, Thread, WebhookTrigger } from "./types";
 
 export const SHAPES: BotShape[] = ["pebble", "bean", "capsule", "gem", "hex"];
 export const COLORS = ["#0c5f73", "#8d2348", "#1f4b3a", "#3d4a88", "#8a5a12", "#243044"];
@@ -60,7 +60,8 @@ export type StepAction =
   | { kind: "tool"; connectorId: string; name: string; args: Record<string, unknown>; label: string; why: string }
   | { kind: "pointer"; pointer: PointerAction; label: string; reason: string }
   | { kind: "question"; question: ApprovalQuestion; label: string; reason: string }
-  | { kind: "file"; file: ApprovalFile; label: string; reason: string };
+  | { kind: "file"; file: ApprovalFile; label: string; reason: string }
+  | { kind: "memory"; memory: ApprovalMemory; label: string; reason: string };
 
 export function actionLabel(action: StepAction): string {
   if (action.kind === "command") return action.command;
@@ -515,6 +516,36 @@ export function fileStep(target: string, op: "write" | "delete", content: string
   return { kind: "file", file, label: `${op === "write" ? "Write" : "Delete"} ${target}`, reason };
 }
 
+export const MAX_MEMORY_NOTE = 1000;
+
+/** Why a bot's memory note can't be proposed, or "" (the harness checks the same rules again). */
+export function memoryNoteProblem(note: string): string {
+  const text = note.trim();
+  if (!text) return "The note is empty.";
+  if (text.length > MAX_MEMORY_NOTE) return `Notes are at most ${MAX_MEMORY_NOTE} characters.`;
+  if (/<!--|-->/.test(text)) return "The note can't contain comment markers.";
+  if (new RegExp(SECRET_PATTERN.source).test(text)) return "The note looks like it contains an API key or token.";
+  return "";
+}
+
+export function memoryDestination(now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `memory/log/${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}.md`;
+}
+
+export function memoryStep(note: string, reason: string, now = new Date()): Extract<StepAction, { kind: "memory" }> | undefined {
+  if (typeof note !== "string" || memoryNoteProblem(note)) return undefined;
+  const text = note.trim().replace(/\s+/g, " ");
+  return { kind: "memory", memory: { note: text, destination: memoryDestination(now) }, label: `Remember: ${text.slice(0, 80)}`, reason };
+}
+
+/** "remember that …" or "remember: …" as its own request; questions and "remember to …" are not notes. */
+export function proposeMemory(text: string): Extract<StepAction, { kind: "memory" }> | undefined {
+  const match = /^(?:please\s+)?remember(?:\s+that\s+|\s*:\s*)(.+)$/i.exec(text.trim());
+  if (!match || /\?\s*$/.test(match[1])) return undefined;
+  return memoryStep(match[1].replace(/[.!]+$/, ""), "You asked me to remember this.");
+}
+
 function splitChoices(text: string): string[] {
   return text
     .replace(/[?.!]+$/, "")
@@ -575,6 +606,8 @@ export function actionForText(bot: Bot, text: string, connectors: Connector[], a
   if (explicit) return toolStep(explicit);
   const question = proposeQuestion(text);
   if (question) return question;
+  const memory = proposeMemory(text);
+  if (memory) return memory;
   if (bot.skills.includes("computer") || bot.skills.includes("files")) {
     const file = proposeFile(text, answers);
     if (file) return file;
@@ -610,6 +643,18 @@ export function guardAction(bot: Bot, action: StepAction | undefined): StepActio
   if ((action.kind === "command" || action.kind === "pointer") && !bot.skills.includes("computer")) return undefined;
   if (action.kind === "file" && !bot.skills.includes("computer") && !bot.skills.includes("files")) return undefined;
   return action;
+}
+
+/**
+ * A bot's memory save always waits for a person: no approval mode or auto-review rule approves
+ * it, and it needs the local harness (the runner has no memory-save route yet).
+ */
+export function holdForPerson(action: StepAction, approval: Approval, localHarness: boolean): Approval {
+  if (action.kind !== "memory") return approval;
+  if (!localHarness) return { ...approval, status: "unavailable" };
+  if (approval.status !== "approved") return approval;
+  const { auto: _auto, ...rest } = approval;
+  return { ...rest, status: "pending" };
 }
 
 export function planAction(plan: TurnPlan): StepAction | undefined {
@@ -653,13 +698,14 @@ export function lineDiff(previous: string, next: string): string {
   return out.join("\n");
 }
 
-export function approvalFields(action: StepAction): Pick<Approval, "command" | "reason" | "tool" | "pointer" | "question" | "file"> {
+export function approvalFields(action: StepAction): Pick<Approval, "command" | "reason" | "tool" | "pointer" | "question" | "file" | "memory"> {
   if (action.kind === "command") return { command: action.command, reason: action.reason };
   if (action.kind === "tool") {
     return { command: actionLabel(action), reason: action.why, tool: { connectorId: action.connectorId, name: action.name, args: action.args } };
   }
   if (action.kind === "question") return { command: action.label, reason: action.reason, question: action.question };
   if (action.kind === "file") return { command: action.label, reason: action.reason, file: action.file };
+  if (action.kind === "memory") return { command: action.label, reason: action.reason, memory: action.memory };
   return { command: action.label, reason: action.reason, pointer: action.pointer };
 }
 
@@ -675,7 +721,9 @@ export function continuationText(previous: string, action: StepAction, auto: boo
           ? `Next I need your answer: **${action.question.prompt}**`
           : action.kind === "file"
             ? `Next I want to **${action.file.op}** \`${action.file.path}\`. Approve it on the card.`
-            : `Next: **${action.label}**. ${action.reason} Approve it on the card.`;
+            : action.kind === "memory"
+              ? `Next I want to save a note to my memory (\`${action.memory.destination}\`). Approve it on the card.`
+              : `Next: **${action.label}**. ${action.reason} Approve it on the card.`;
   return `${previous}\n\n${line}`;
 }
 
@@ -742,6 +790,7 @@ function decisionAction(act: Record<string, unknown>, connectors: Connector[]): 
     const options = Array.isArray(act.options) ? act.options.filter((item): item is string => typeof item === "string") : [];
     return questionStep(act.prompt, options, act.multi === true, reason);
   }
+  if (act.kind === "memory" && typeof act.note === "string") return memoryStep(act.note, reason);
   if (act.kind === "file") {
     const target = safeWorkspacePath(act.path);
     if (!target) return undefined;
@@ -786,6 +835,7 @@ export function decisionPrompt(input: {
     'Click: {"kind":"click","x":0,"y":0,"reason":"why"}  Type: {"kind":"type","text":"...","reason":"why"}  Key: {"kind":"key","key":"enter","reason":"why"}',
     'Question: {"kind":"question","prompt":"Which one?","options":["A","B"],"multi":false,"reason":"why"}  (options may be empty for a free-text answer)',
     'File: {"kind":"file","path":"notes/today.md","op":"write","content":"...","reason":"why"}  or {"kind":"file","path":"old.txt","op":"delete","reason":"why"}',
+    'Memory: {"kind":"memory","note":"one short fact worth keeping for later chats","reason":"why"}  (appended to your own memory log only after the person approves; never save keys, passwords or tokens)',
     'When the person asks for something that repeats or reacts to deliveries, add a top-level "trigger" next to "answer": {"schedule":"weekdays at 9:00","title":"what to do"} or {"webhook":"name","title":"what to do with each delivery"}. Schedules look like "every 30 minutes", "hourly", or "weekdays at 9:00".',
     "One action only. Stop when the output already answers the request.",
   ]
