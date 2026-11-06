@@ -26,6 +26,16 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 10:40 ET · Merge #40; UX P4 brought up to date · review fix
+- **Branch / PR / head sha:** `claude/ux-p4-phone-basics` · https://github.com/arbiter1170/sandbench/pull/41 · code head `8c2fe5b` (base `1b55894` merged in)
+- **Checks on the head:** pending on push (all four were green on `23507da` before the base merges)
+- **What was done:** with Vincent's approval (chat, #38 → #39 → #40 → #41), Claude merged #40 (head `81fd5ba`, merge commit `1b55894`) once its four checks were green. On this branch: P2 and P3 merged in (`83fe13f`); the layout fixture keeps every page (`?scenario=turns`, `cards`, `long`, `channel`, `&attach=1`) and P4's working composer, and `ui-layout.test.mjs` is P3's file with P4's phone-basics section after it. Then the base (`8c2fe5b`, no further conflicts).
+- **Tests run (real results):** on `83fe13f` (same tree as `8c2fe5b` apart from this log): `npm run typecheck` → clean; `npm run test:web` → 216 passed (15 files); `npm run test:node` → 311 pass, 0 fail, 32 skipped (every layout test for P1 to P4, including P4's touch targets, Enter keys, keyboard inset, contrast and 320 px / 200% zoom reflow on the merged page); `npm run build` → ok.
+- **Not run / could not run:** real iOS and Android keyboards, pinch zoom, VoiceOver and TalkBack, Windows IME (unchanged, §9).
+- **Decisions made and why:** P4's global touch rules now also apply to P2's and P3's new buttons; their own layout tests (44 px buttons and toggles) still pass with them.
+- **Open questions for Vincent or the Supervisor:** none new. Correction, from the commit times: the UX P4 entry below (10:55 ET) was written at about 10:00 ET, and the P3 (10:50), P2 (10:30) and #38 gate (10:20) entries at about 09:59, 09:55 and 09:53 ET.
+- **Next step:** merge #41 once its four checks are green on this head.
+
 ### Session 10 · 2026-11-06 10:35 ET · Merges #38, #39; UX P3 follows #38's MCP labels · review fix
 - **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · https://github.com/arbiter1170/sandbench/pull/40 · code head `62665b7` (base `f5e3a26` merged in)
 - **Checks on the head:** pending on push (all four were green on `a6f70ca` before the base merge)
@@ -35,6 +45,18 @@ ENTRIES START BELOW
 - **Decisions made and why:** follow the merged harness, not the old label format: the old rule made every post-#38 card with a `path` or `command` argument claim its other arguments were hidden when they are shown. A step P2's driver never handed to Claude Code (last round) shows "Approved · no separate result" with P2's note "Approved, but the turn ended before Claude Code was given this step."; accurate, and a separate "Not run" ending stays a follow-up.
 - **Open questions for Vincent or the Supervisor:** report only: the page cannot tell a pre-#38 harness from a current one. With an old harness, a model could pass one argument whose value is itself a JSON object (and put other arguments next to it); that card would read as all the arguments with the exact-call scope. An old harness also has the gate bug #38 fixed, so the harness needs updating anyway. Correction: the times on this session's entries for P3 (10:50 ET), P2 (10:30 ET) and the #38 gate fix (10:20 ET) were written ahead of the clock; this entry was written at about 10:35 ET.
 - **Next step:** merge #40 once its four checks are green on this head, then bring the base into #41 and re-run its layout tests.
+
+### Session 10 · 2026-11-06 10:55 ET · UX P4: phone basics · done
+- **Branch / PR / head sha:** `claude/ux-p4-phone-basics` · PR opened right after this commit. Cut from `deploy/vercel` `a648f9e`.
+- **Release:** Vincent released P4 in chat on 2026-11-06.
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** built by a Claude Code subagent, reviewed by another, fixed, checked here. Composer keys (Enter adds a line on touch, sends on a fine pointer, Ctrl/Cmd+Enter sends anywhere, never during IME composition); `--accent-fill` #c83a3a for primary buttons (text 4.86:1, was 3.75:1); 44 px targets on coarse pointers; the composer stays above the soft keyboard (`src/viewportFit.ts`); the context line breaks into two rows below a 350 px column. Review fixes: a photo with no text can be sent on a phone again (HIGH, a regression in the first commit), keyboard send on coarse pointers, real viewportFit in tests, placeholder and thread list on touch.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 136 passed; `npm run test:node` 291 pass, 0 fail, 32 skipped (ui-layout 52 browser tests, Playwright linked locally); `npm run build` ok.
+- **Not run / could not run:** the soft keyboard and pinch zoom on real iOS and Android, VoiceOver/TalkBack, Windows IME, 200% zoom.
+- **Decisions made and why:** the S3 copy ("Answer the card first…") is left to P2's busy note.
+- **Deviations from the plan:** besides `styles.css` and the composer `onKeyDown`: `src/composerKeys.ts`, `src/viewportFit.ts`, two lines in `src/main.tsx`, `enterKeyHint`, the fixture.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge last (after #38, P2, P3); re-run its layout tests on the merged tip.
 
 ### Session 10 · 2026-11-06 10:50 ET · UX P3: approval cards · done
 - **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · PR opened right after this commit. Cut from `deploy/vercel` `a648f9e`.

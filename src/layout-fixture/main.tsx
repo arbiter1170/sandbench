@@ -12,7 +12,8 @@ import { recordDeny } from "../approvalView";
 import { DROPPED, IN_FLIGHT, REFUSED_ELSEWHERE, STOP_REQUESTED_REPLY, settleMessage, stoppedCard } from "../turnRecovery";
 import { askAgainDraft, claimPlannerAnswer, promptFor, startPlannerAnswer } from "../turnStatus";
 import { focusComposer } from "../views";
-import { defaultSettings, defaultStudio, type Approval, type Bot, type Message, type Thread } from "../types";
+import { defaultSettings, defaultStudio, type Approval, type Bot, type BotTask, type Message, type Reminder, type Routine, type Thread } from "../types";
+import { installViewportFit } from "../viewportFit";
 import { blankBot } from "../work";
 import "../styles.css";
 
@@ -21,6 +22,13 @@ const bot: Bot = { ...blankBot("North", "General", true), id: "north", createdAt
 // ?scenario=channel: a group chat with mixed agents, a long folder name and a reachable harness
 // (synthetic), for the context line's layout. The default page has no harness.
 const channelScenario = new URLSearchParams(location.search).get("scenario") === "channel";
+// ?scenario=long (UX P4): F-P4-a, a pending card whose command is one 175-character run with no
+// spaces, and F-P4-b, a 60-character Windows path under C:\Users\<you>\. Synthetic.
+const longScenario = new URLSearchParams(location.search).get("scenario") === "long";
+// ?attach=1 (UX P4): a photo waits in the composer, so the Send button must send with no text.
+const attached = new URLSearchParams(location.search).get("attach") === "1";
+// The real soft-keyboard tracking, as in src/main.tsx (the test may stand in a visualViewport).
+installViewportFit();
 // ?scenario=cards: one approval card per ending (UX P3), for the card layout and contrast checks.
 const cardsScenario = new URLSearchParams(location.search).get("scenario") === "cards";
 // ?scenario=turns: one message per turn state of the status line (UX P2), with a turn running
@@ -117,6 +125,14 @@ const messages: Message[] = [
   }),
 ];
 
+const P4_COMMAND = `curl.exe--fail--silent--output=C:/Users/you/.sandbench/workspace/${"a".repeat(40)}/download.bin--url=https://example.test/${"b".repeat(30)}`;
+const P4_PATH = "C:\\Users\\<you>\\.sandbench\\workspace\\walkling-team\\notes\\a.md";
+const longMessages: Message[] = [
+  message({ role: "user", text: `Open \`${P4_PATH}\` and fetch the file` }),
+  message({ role: "assistant", text: `Reading ${P4_PATH} first.` }),
+  message({ role: "assistant", text: "", approval: { command: P4_COMMAND, reason: "Download the file.", status: "pending", permissionId: "p4" } }),
+];
+
 // Synthetic cards, one per ending the page can tell apart. The texts the harness or the page's
 // turn recovery would leave on a card come from turnRecovery.ts, so they match the real ones.
 const claude = (tool: string, command: string, patch: Partial<Approval>): Approval => ({ command, reason: `Claude Code asked to use ${tool}.`, agentTool: tool, status: "pending", permissionId: `p-${tool}-${at}`, ...patch });
@@ -169,13 +185,27 @@ const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at,
 const channel: Thread = { id: "channel-1", title: "walklings-team", updatedAt: at, messages: [], memberIds: members.map((item) => item.id), workingFolder: "walklings-team/a-rather-long-project-folder-name" };
 const health = { ok: true, platform: "win32", host: "fixture", workspace: "C:\\Users\\<you>\\.sandbench\\workspace" };
 const drivers = [{ id: "claude", label: "Claude Code (local CLI)", ok: true, detail: "" }];
+// Work-tab rows (UX P4 measures their switches, checkboxes and buttons on touch).
+const routines: Routine[] = [
+  { id: "r1", botId: bot.id, title: "Morning summary", schedule: "daily 09:00", enabled: true },
+  { id: "r2", botId: bot.id, title: "Weekly tidy", schedule: "weekly mon 10:00", enabled: false },
+];
+const tasks: BotTask[] = [{ id: "k1", botId: bot.id, title: "Draft the notes", status: "queued", thinking: [], createdAt: 1 }];
+const reminders: Reminder[] = [{ id: "n1", title: "Water the plants", at: 1_700_000_600_000, done: false, botId: bot.id }];
 const settings = defaultSettings();
 const studio = { ...defaultStudio(), onboarded: true };
 const noop = () => undefined;
 
+// What the composer sent, for the UX P4 key checks (read by the layout test).
+const sent: string[] = [];
+const voice: number[] = [];
+Object.assign(window, { __sent: sent, __voice: voice });
+
 function Fixture() {
   // The app's own breakpoint (App.tsx) decides rail + stage + inspector versus one pane.
   const wide = window.matchMedia("(min-width: 861px)").matches;
+  // The dock and the composer work, so the test can reach the rail and side panel and type.
+  const [focus, setFocus] = useState<"rail" | "chat" | "side">("chat");
   // The cards page answers its waiting card the way App.tsx decideApproval does, so a Deny click
   // can be checked end to end. The default page keeps its cards fixed.
   const [cards, setCards] = useState(cardMessages);
@@ -204,14 +234,14 @@ function Fixture() {
       t={t}
       wide={wide}
       inert={false}
-      focus="chat"
+      focus={focus}
       overlay={null}
       createNonce={0}
       bots={channelScenario ? [bot, ...members] : [bot]}
-      tasks={[]}
-      routines={[]}
+      tasks={tasks}
+      routines={routines}
       computer={[]}
-      reminders={[]}
+      reminders={reminders}
       threads={channelScenario ? [thread, channel] : [thread]}
       selectedId={bot.id}
       openThreadId={thread.id}
@@ -250,7 +280,7 @@ function Fixture() {
       busyNote={note}
       runner={false}
       callActive={false}
-      messages={channelScenario ? [] : cardsScenario ? cards : threads[0].messages}
+      messages={channelScenario ? [] : longScenario ? longMessages : cardsScenario ? cards : threads[0].messages}
       onApproval={cardsScenario ? decide : noop}
       onCreateChannel={noop}
       onSendChannel={noop}
@@ -262,7 +292,7 @@ function Fixture() {
       onRemoveFile={noop}
       hub={null}
       draft={draft}
-      hasPending={false}
+      hasPending={attached}
       recording={false}
       listening={false}
       dragging={false}
@@ -274,7 +304,7 @@ function Fixture() {
       banner=""
       tools={null}
       settingsPanel={null}
-      onFocus={noop}
+      onFocus={setFocus}
       onOverlay={noop}
       onSelect={noop}
       onSelectThread={noop}
@@ -289,7 +319,10 @@ function Fixture() {
         setDraft(value);
         if (note === t("tsAskAgainKept")) setNote("");
       }}
-      onSend={noop}
+      onSend={(_botId, text) => {
+        sent.push(text);
+        setDraft("");
+      }}
       onStop={noop}
       onAddSection={noop}
       onPatchSettings={noop}
@@ -315,13 +348,13 @@ function Fixture() {
       onPhoto={noop}
       onCamera={noop}
       onSwatch={noop}
-      onVoice={noop}
+      onVoice={() => voice.push(Date.now())}
       onDictate={noop}
       onLocation={noop}
       onDragOver={noop}
       onDragLeave={noop}
       onDrop={noop}
-      pending={null}
+      pending={attached ? <ul className="pending"><li>photo.png</li></ul> : null}
     />
   );
 }
