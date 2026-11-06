@@ -46,9 +46,26 @@ jobs:
       - run: npm run typecheck
       - run: npm run test:web
       - run: npm ci --prefix runner --no-audit --no-fund
+      - name: Cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('runner/package-lock.json') }}
       - name: Chromium for the screenshot tests (SB-13)
         working-directory: runner
-        run: npx playwright install --with-deps chromium
+        timeout-minutes: 8
+        # An Ubuntu mirror once stalled apt-get with no output until the job's 15-minute limit
+        # (#42). Each apt request now has a deadline and retries, and the install is tried up to
+        # three times, clearing a stuck apt between tries.
+        run: |
+          printf 'Acquire::Retries "3";\nAcquire::http::Timeout "30";\nAcquire::https::Timeout "30";\n' | sudo tee /etc/apt/apt.conf.d/99-ci-timeouts > /dev/null
+          for attempt in 1 2 3; do
+            if timeout --kill-after=15 135 npx playwright install --with-deps chromium; then exit 0; fi
+            echo "::warning::Playwright install attempt $attempt failed or timed out."
+            sudo pkill -x apt-get || true
+            sleep 5
+          done
+          exit 1
       - run: npm run test:node
       - name: The datastore tests ran (not skipped)
         run: |
