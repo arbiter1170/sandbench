@@ -26,6 +26,16 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 10:40 ET · Merge #40; UX P4 brought up to date · review fix
+- **Branch / PR / head sha:** `claude/ux-p4-phone-basics` · https://github.com/arbiter1170/sandbench/pull/41 · code head `8c2fe5b` (base `1b55894` merged in)
+- **Checks on the head:** pending on push (all four were green on `23507da` before the base merges)
+- **What was done:** with Vincent's approval (chat, #38 → #39 → #40 → #41), Claude merged #40 (head `81fd5ba`, merge commit `1b55894`) once its four checks were green. On this branch: P2 and P3 merged in (`83fe13f`); the layout fixture keeps every page (`?scenario=turns`, `cards`, `long`, `channel`, `&attach=1`) and P4's working composer, and `ui-layout.test.mjs` is P3's file with P4's phone-basics section after it. Then the base (`8c2fe5b`, no further conflicts).
+- **Tests run (real results):** on `83fe13f` (same tree as `8c2fe5b` apart from this log): `npm run typecheck` → clean; `npm run test:web` → 216 passed (15 files); `npm run test:node` → 311 pass, 0 fail, 32 skipped (every layout test for P1 to P4, including P4's touch targets, Enter keys, keyboard inset, contrast and 320 px / 200% zoom reflow on the merged page); `npm run build` → ok.
+- **Not run / could not run:** real iOS and Android keyboards, pinch zoom, VoiceOver and TalkBack, Windows IME (unchanged, §9).
+- **Decisions made and why:** P4's global touch rules now also apply to P2's and P3's new buttons; their own layout tests (44 px buttons and toggles) still pass with them.
+- **Open questions for Vincent or the Supervisor:** none new. Correction: the UX P4 entry below says 10:55 ET; it was written ahead of the clock, at about 10:15 ET.
+- **Next step:** merge #41 once its four checks are green on this head.
+
 ### Session 10 · 2026-11-06 10:35 ET · Merges #38, #39; UX P3 follows #38's MCP labels · review fix
 - **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · https://github.com/arbiter1170/sandbench/pull/40 · code head `62665b7` (base `f5e3a26` merged in)
 - **Checks on the head:** pending on push (all four were green on `a6f70ca` before the base merge)
