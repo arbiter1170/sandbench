@@ -26,6 +26,67 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 9 · 2026-11-05 19:10 ET · capability map labels: fixes from the fourth independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `5d6457e` (final head after this log commit is in the session summary)
+- **Checks on the head:** pending at the time of writing. The previous head is `5501b4d`.
+- **What was done:** a fourth independent review of `5501b4d` found five problems. Corrected:
+  - Group chats and voice calls: with no key, a bot that uses an API driver (as its Agent or through the default agent) gets an error while the local harness or the runner is up, not a stand-in. The rows now say so.
+  - Computer use: "without a model key" now applies to the built-in planner only. A CLI driver picks its own steps with its own sign-in.
+  - Bot teammates and README: the API-driver error happens only while the local harness or the runner is up, and also for a bot with no Agent when the default agent is an API driver.
+  - AppsFlyer, Braze, and Sentry: the error log syncs with the signed-in workspace, so it is not only local.
+  - Tests: deleting the desktop app's `startHarness()` call, ignoring `allowLocal`, or making `isEmailAllowed` return true now fails a test. The allowlist test is in `src/capabilities.test.ts`, because Node cannot load `src/firebase.ts`. A new test ties the API-driver error to the page and the drivers.
+- **Tests run (real results):** Node 22.23.4 on Linux. `npm run typecheck` → clean. `npm run test:web` → 43 passed. `npm run test:node` → 161 tests, 127 pass, 2 fail (`runner/test/screenshot.test.mjs` and `runner/test/ui-layout.test.mjs`: `playwright` is not installed in this checkout), 32 skipped. `npm run build` → ok. Each of the review's three mutations was applied, failed a test, and was reverted.
+- **Not run / could not run:** Postgres DB tests, the Auth emulator test, compose + image, gitleaks (left to CI). The page was not opened in a browser.
+- **Decisions made and why:** the Settings heading "Local error log" and its translations stay as they are; they are outside this PR.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** 1. The Settings heading "Local error log" (`src/i18n.ts`, 12 translations) has the same wording problem; fix it here or in a later PR? 2. #29 also edits `src/capabilities.ts`, so whichever merges second needs a merge of `deploy/vercel`.
+- **Next step:** CI on this head, then an independent review of the final head.
+
+### Session 8 · 2026-11-05 · capability map labels: fixes from the third independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `ac379e9` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `a65a3b1`.
+- **What was done:** a third independent review of `a65a3b1` found rows missing a key, a harness hint that breaks with the desktop app, and sentences that did not match the code. Corrected them. Every row's Needs label is now pinned in one test, and the test header no longer claims every behaviour change fails.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 42 passed. `npm run test:node` → 165 tests, 131 pass, 2 fail (the same two Windows-only failures as untouched `deploy/vercel`), 32 skipped, including the DB tests. `npm run build` + bundle key grep → ok, none.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). The page and the desktop app were not opened. The routines sentence and the two-harness failure in the desktop app are traced, though the two-harness token failure itself was run in review.
+- **Decisions made and why:** most row sentences stay unpinned, because pinning a hand-written sentence only tests the sentence.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** 1. Found in review, outside this PR: the runner's `http` driver accepts a loopback base that its `/model` guard refuses.
+- **Next step:** Independent review of the final head. Merge #29 before this PR.
+
+### Session 8 · 2026-11-05 · capability map labels: fixes from a second independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `6dfca53` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `158a885`.
+- **What was done:** a second independent review of `158a885` found rows that broke the Needs rule, sentences that ignored CLI drivers, and six breakages the tests missed. Corrected those rows and sentences, and tied the tests to the page, the driver path and the runner's own server file.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 42 passed. `npm run test:node` → 164 tests, 130 pass, 2 fail (the same two Windows-only failures as untouched `deploy/vercel`), 32 skipped, including the DB tests. `npm run build` + bundle key grep → ok, none. Each of the reviewer's six breakages now fails a test.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). The page was not opened in a browser. The routines row's behaviour when a runner stops answering is traced in the code, not run.
+- **Decisions made and why:** none new. The phone-width table overflow is left as it is: the pane scrolls and nothing is clipped.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Independent review of this head. Merge #29 before this PR.
+
+### Session 8 · 2026-11-05 · capability map labels: fixes from independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `9c75869` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `27a4106`.
+- **What was done:** an independent review of `27a4106` found false labels. Corrected: Bot teammates (`MEMORY.md`), Tasks and routines, Agent drivers, Computer use, Test stack profiles, Chat, Grok Bot migration, the README dev-proxy sentence and the map note. "Needs" now means what must be running for everything in a row to work. The tests read CRLF checkouts and tie more rows to the routes that serve them.
+- **Tests run (real results):** Node 22.23.4 on Windows. `npm run typecheck` → clean. `npm run test:web` → 42 passed. `npm run test:node` → 161 tests, 127 pass, 2 fail (the same two Windows-only failures as untouched `deploy/vercel`), 32 skipped, including the DB tests. `npm run build` + bundle key grep → ok, none.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (no Docker daemon here; left to CI). The page was not opened in a browser. "A runner build does not run routines" is traced in the code, not run.
+- **Decisions made and why:** this corrects the Session 8 note above that called the README's dev-proxy sentence "not clearly false": the page never calls `/api-proxy`, so it was false. One rule for "Needs" (the strongest requirement in the row) because mixed rows were labelled inconsistently.
+- **Deviations from the plan:** none beyond the earlier entry.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Re-review of this head. Merge #29 before this PR.
+
+### Session 8 · 2026-11-05 · capability map labels, clean carry-over of #24 (audit batch 1, part 2) · partial
+- **Branch / PR / head sha:** `claude/capability-map-labels` · PR link in the session summary · code head `8de4cc9` (final head after this log commit is in the PR)
+- **Checks on the head:** pending at the time of writing.
+- **What was done:**
+  - Carried over the intended changes of #24 (head `609f71c`) onto `1b247e7` as a new branch. Checked: the tree equals a merge of #24 with `deploy/vercel`, apart from this file. The original branch and PR are untouched.
+  - New in this PR, from reviewing #24: "Model per bot" now says it needs the local harness or the runner, because every page model call goes to `/model` there. The test that pinned the old label changes with it.
+- **Tests run (real results):** see the PR body for the output. Same two Windows-only node failures as untouched `deploy/vercel`; CI there is green.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (Docker daemon not running here; left to CI). The page was not opened in a browser.
+- **Decisions made and why:** new PR instead of editing #24, so the original stays as it is and its commit messages do not reach this branch. README's dev-proxy sentence is left alone: dated, not clearly false, and outside this task.
+- **Deviations from the plan:** not a WORKPLAN task (Vincent approved the audit batches). STATUS.md not rewritten here; it waits for the end of the session.
+- **Open questions for Vincent or the Supervisor:** none new.
+- **Next step:** Independent review of this head. Vincent merges when ready.
 ### Session 9 · 2026-11-05 19:01 ET · approval-rule safety: fixes from the fourth independent review (#29) · review fix
 - **Branch / PR / head sha:** `claude/approval-rule-safety` · https://github.com/arbiter1170/sandbench/pull/29 · code head `b8cad9c` (final head after this log commit is in the session summary)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `d73eb75`.

@@ -24,7 +24,7 @@ Environment:
   "mcpServers": {
     "sandbench": {
       "command": "node",
-      "args": ["C:/Users/you/rea-work/grokbot-poc/scripts/mcp-server.mjs"],
+      "args": ["C:/Users/you/sandbench/scripts/mcp-server.mjs"],
       "env": {
         "SANDBENCH_URL": "http://127.0.0.1:8799"
       }

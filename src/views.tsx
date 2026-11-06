@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { CAPABILITIES, type CapabilityState } from "./capabilities";
+import { CAPABILITIES, needsLabel, type CapabilityState } from "./capabilities";
 import { getBlob } from "./db";
 import { fromDateTimeLocal, toDateTimeLocal } from "./device";
 import { highlight } from "./highlight";
@@ -731,6 +731,7 @@ export function ToolsPanel({
             <th scope="col">{t("observed")}</th>
             <th scope="col">{t("webHere")}</th>
             <th scope="col">{t("status")}</th>
+            <th scope="col">{t("needs")}</th>
           </tr>
         </thead>
         <tbody>
@@ -739,6 +740,7 @@ export function ToolsPanel({
               <th scope="row">{item.observed}</th>
               <td>{item.web}</td>
               <td>{stateLabel(t, item.state)}</td>
+              <td>{needsLabel(item)}</td>
             </tr>
           ))}
         </tbody>
