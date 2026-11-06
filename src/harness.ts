@@ -192,6 +192,17 @@ export function connectorHeaders(connector: Connector): Record<string, string> {
   return Object.fromEntries(connector.headers.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
 }
 
+/** Which tested connectors each bot may hand to a local Claude Code turn. Header values stay templates. */
+export function harnessSyncConnectors(connectors: Connector[], bots: { id: string; connectorIds?: string[] }[]): Promise<{ ok: boolean }> {
+  return call("/connectors/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      connectors: connectors.map(({ id, name, url, headers, status }) => ({ id, name, url, headers, status })),
+      bots: Object.fromEntries(bots.map((bot) => [bot.id, bot.connectorIds ?? []])),
+    }),
+  });
+}
+
 export function harnessSyncSchedules(routines: { id: string; botId: string; title: string; schedule: string; enabled: boolean }[]): Promise<{ ok: boolean }> {
   return call("/schedules", { method: "POST", body: JSON.stringify({ routines }) });
 }
@@ -255,6 +266,8 @@ export type TurnRequest = {
   allow: string[];
   unattendedDeny: boolean;
   captureScreen?: boolean;
+  /** The harness looks up this bot's synced connectors itself (local Claude Code turns only). */
+  botId?: string;
 };
 
 export function harnessDrivers(): Promise<{ drivers: AgentDriver[] }> {
