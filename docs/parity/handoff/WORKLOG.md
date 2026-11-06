@@ -26,6 +26,28 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 10:35 ET · Merges #38, #39; UX P3 follows #38's MCP labels · review fix
+- **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · https://github.com/arbiter1170/sandbench/pull/40 · code head `62665b7` (base `f5e3a26` merged in)
+- **Checks on the head:** pending on push (all four were green on `a6f70ca` before the base merge)
+- **What was done:** Vincent approved in chat merging #38 → #39 → #40 → #41 in order. Claude merged #38 (head `f3bb12f`, merge commit `7af2bed`) and, after merging `7af2bed` into it (WORKLOG conflict only, both sides kept) and all four checks passing on `1578dec`, #39 (merge commit `f5e3a26`). Each was a merge commit with the expected head SHA. On this branch: P2 merged in (`3866cd9`; the layout fixture and `ui-layout.test.mjs` keep both the `?scenario=turns` and `?scenario=cards` pages), then the base (`62665b7`). With #38 in, a connector card's label is always every argument in JSON (cut to 299 characters and "…"), and the gate keys that exact call even when an argument is called `command`. `mcpArguments` in `src/approvalView.ts` still read a JSON object with a `path`, `command`, `url`… key as one value ("Target · other arguments are not shown", cautious scope); it now reads any JSON object as all the arguments, so those cards say "Arguments" and the exact-call scope. Text that is not a JSON object (a card from a pre-#38 harness) keeps "Target" and the cautious scope. Test M1 now checks the post-#38 labels and gate key, and still checks the pre-#38 single-value card.
+- **Tests run (real results):** see the session summary for this push (typecheck, test:web, test:node with ui-layout, build on the merged head).
+- **Not run / could not run:** real devices and screen readers (unchanged).
+- **Decisions made and why:** follow the merged harness, not the old label format: the old rule made every post-#38 card with a `path` or `command` argument claim its other arguments were hidden when they are shown. A step P2's driver never handed to Claude Code (last round) shows "Approved · no separate result" with P2's note "Approved, but the turn ended before Claude Code was given this step."; accurate, and a separate "Not run" ending stays a follow-up.
+- **Open questions for Vincent or the Supervisor:** report only: the page cannot tell a pre-#38 harness from a current one. With an old harness, a model could pass one argument whose value is itself a JSON object (and put other arguments next to it); that card would read as all the arguments with the exact-call scope. An old harness also has the gate bug #38 fixed, so the harness needs updating anyway. Correction: the times on this session's entries for P3 (10:50 ET), P2 (10:30 ET) and the #38 gate fix (10:20 ET) were written ahead of the clock; this entry was written at about 10:35 ET.
+- **Next step:** merge #40 once its four checks are green on this head, then bring the base into #41 and re-run its layout tests.
+
+### Session 10 · 2026-11-06 10:50 ET · UX P3: approval cards · done
+- **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · PR opened right after this commit. Cut from `deploy/vercel` `a648f9e`.
+- **Release:** Vincent released P3 (and P4) in chat on 2026-11-06 ("Start P3 and P4 too").
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** built by a Claude Code subagent, reviewed by another, fixed, checked here. Cards say what runs and where, and what approving grants, true to the merged code (Claude Code: that exact call for the rest of the reply; harness drivers: this request; planner: this action); endings stay distinct with a word and an icon at full opacity (I-8); Expired, Not run stay withheld (D-5, D-6). Review fixes: a model can't make a driver card pass for a Claude Code card (the harness's `tool` is stored as `agentTool`); connector single-value labels; 404 and late-result endings; unattended denials. The review also found the gate bug fixed separately in #38.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 166 passed (`approvalView.test.ts` 47); `npm run test:node` 259 pass, 0 fail, 32 skipped; `npm run build` ok.
+- **Not run / could not run:** real devices and screen readers.
+- **Decisions made and why:** display only; approving and denying are unchanged. Small `App.tsx`/`types.ts` additions (agentTool, autoDenied, answerError) where the card needed facts the harness already sends.
+- **Deviations from the plan:** `App.tsx` and `types.ts` are outside P3's §8 list (above).
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge after #38 and #39; the connector scope can become exact-call wording once #38 lands.
+
 ### Session 10 · 2026-11-06 10:30 ET · UX P2: turn status line, Couldn't start, one-time planner answer · done
 - **Branch / PR / head sha:** `claude/ux-p2-turn-status` · PR opened right after this commit. Cut from `deploy/vercel` `70bf68b`, merged with `a648f9e` (after #37).
 - **Release:** Vincent released P2 in chat on 2026-11-06.

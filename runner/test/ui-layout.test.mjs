@@ -7,7 +7,10 @@
 // What it asserts, at phone widths and on the desktop with the side panel: the page and the
 // message list never scroll sideways, every bubble holds its own content (long inline Windows
 // paths, separators, links), approval cards stay inside their bubble with their buttons on
-// screen, and only the preformatted tool output scrolls, inside its own panel.
+// screen, and only the preformatted tool output scrolls, inside its own panel. For UX P3, a page
+// of approval cards in every ending checks that each ending reads as a word plus an icon shape at
+// full opacity and contrast, that cards are labelled groups, and that Approve comes before Deny,
+// both at least 44 x 44 px, with nothing taking focus.
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
@@ -103,7 +106,8 @@ function measure() {
         status: [...card.classList].find((name) => name !== "approval") ?? "",
         right: rect(card).right,
         msgRight: msgRight(card),
-        command: { right: rect(card.querySelector("code")).right },
+        // The widest code value on the card (command, address, file, ...); the card itself if none.
+        command: { right: Math.max(...[...card.querySelectorAll("code")].map((code) => rect(code).right), rect(card).left) },
         buttons: [...card.querySelectorAll("button")].map((button) => ({ right: rect(button).right, shown: shown(button) })),
         pre: pre ? { right: rect(pre).right, clientWidth: pre.clientWidth, scrollWidth: pre.scrollWidth, whiteSpace: getComputedStyle(pre).whiteSpace } : null,
       };
@@ -279,6 +283,150 @@ describe("chat context sheet", () => {
       assert.equal(line.agent, "Mixed agents");
     });
   }
+});
+
+// UX P3: one approval card per ending (src/layout-fixture, ?scenario=cards).
+function measureCards() {
+  const channel = (value) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  const rgb = (text) => (text.match(/[\d.]+/g) ?? []).slice(0, 3).map(Number);
+  const luminance = (text) => {
+    const [r, g, b] = rgb(text).map(channel);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+  };
+  const contrast = (a, b) => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi + 0.05) / (lo + 0.05);
+  };
+  const opacity = (el) => {
+    let value = 1;
+    for (let node = el; node && node !== document.documentElement; node = node.parentElement) value *= Number(getComputedStyle(node).opacity);
+    return value;
+  };
+  const text = (ids) => (ids || "").split(" ").map((id) => document.getElementById(id)?.textContent ?? "").join(" ").trim();
+  return {
+    focusInCard: Boolean(document.activeElement?.closest(".approval")),
+    cards: [...document.querySelectorAll(".approval")].map((card) => {
+      const box = card.getBoundingClientRect();
+      const state = card.querySelector(".approval-state");
+      const icon = state?.querySelector("svg");
+      const bg = getComputedStyle(card).backgroundColor;
+      const texts = [...card.querySelectorAll(".approval-state span, .approval-detail, .approval-scope, .approval-field dt, .approval-field dd")];
+      return {
+        ending: card.dataset.ending,
+        role: card.getAttribute("role"),
+        name: text(card.getAttribute("aria-labelledby")),
+        title: card.querySelector("header strong")?.textContent,
+        description: text(card.getAttribute("aria-describedby")),
+        scope: card.querySelector(".approval-scope")?.textContent ?? "",
+        label: state?.textContent ?? "",
+        opacity: opacity(card),
+        iconShown: Boolean(icon) && icon.getBoundingClientRect().width >= 10,
+        minContrast: Math.min(...texts.map((el) => contrast(getComputedStyle(el).color, bg))),
+        right: box.right,
+        msgRight: card.closest(".msg").getBoundingClientRect().right,
+        scrollWidth: card.scrollWidth,
+        clientWidth: card.clientWidth,
+        buttons: [...card.querySelectorAll("button")].map((button) => {
+          const rect = button.getBoundingClientRect();
+          return { text: button.textContent, width: rect.width, height: rect.height, left: rect.left, top: rect.top, right: rect.right };
+        }),
+      };
+    }),
+  };
+}
+
+describe("approval cards (UX P3)", () => {
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name}: every ending is a labelled group with a word and a shape at full contrast; Approve first, both 44 px`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      await page.goto(`${base}?scenario=cards`, { waitUntil: "load", timeout: 20_000 });
+      await page.waitForSelector(".approval.pending", { timeout: 10_000 });
+      await page.evaluate(() => document.fonts.ready);
+      const facts = await page.evaluate(measureCards);
+      if (SHOTS) {
+        await page.evaluate(() => document.querySelector(".approval.pending").scrollIntoView({ block: "start" }));
+        await page.screenshot({ path: path.join(SHOTS, `${viewport.name}-cards.png`) });
+      }
+      await context.close();
+      assert.deepEqual(errors, [], "the fixture page threw");
+      assert.equal(facts.focusInCard, false, "a card took focus");
+      assert.equal(facts.cards.length, 13);
+      const endings = facts.cards.map((card) => card.ending);
+      assert.equal(new Set(endings).size, endings.length, `two cards share an ending: ${endings.join(", ")}`);
+      const labels = facts.cards.map((card) => card.label);
+      assert.equal(new Set(labels).size, labels.length, `two cards share a label: ${labels.join(" | ")}`);
+      for (const card of facts.cards) {
+        const what = `${card.ending} card`;
+        assert.equal(card.role, "group", `${what} is not a group`);
+        assert.equal(card.name, card.title, `${what} is not named by its title`);
+        assert.ok(card.description.includes(card.scope.trim()), `${what}'s description leaves out the scope`);
+        assert.ok(card.description.includes(card.label.trim()), `${what}'s description leaves out its ending`);
+        assert.equal(card.opacity, 1, `${what} is dimmed`);
+        assert.ok(card.label.trim().length > 3 && card.iconShown, `${what} needs a word and an icon`);
+        assert.ok(card.minContrast >= 4.5, `${what} has text at ${card.minContrast.toFixed(2)}:1`);
+        assert.ok(card.right <= card.msgRight + 0.5, `${what} runs past its bubble`);
+        assert.ok(card.scrollWidth <= card.clientWidth, `${what} scrolls sideways`);
+      }
+      const pending = facts.cards.filter((card) => card.ending === "waiting");
+      assert.equal(pending.length, 1);
+      const [approve, deny] = pending[0].buttons;
+      assert.equal(pending[0].buttons.length, 2);
+      assert.match(approve.text, /^Approve/);
+      assert.equal(deny.text, "Deny");
+      assert.ok(approve.top < deny.top || (approve.top === deny.top && approve.left < deny.left), "Approve is not first");
+      for (const button of [approve, deny]) {
+        assert.ok(button.width >= 44 && button.height >= 44, `${button.text} is ${button.width}x${button.height}`);
+        assert.ok(button.right <= viewport.width + 0.5, `${button.text} is off screen`);
+      }
+      // Decided cards offer no buttons (a lost or reloaded card is not approvable).
+      for (const card of facts.cards.filter((item) => item.ending !== "waiting")) assert.equal(card.buttons.length, 0, `${card.ending} card has buttons`);
+    });
+  }
+
+  test("a click on Deny ends the waiting card as \"Denied by you\", without moving focus elsewhere", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=cards`, { waitUntil: "load", timeout: 20_000 });
+    const card = page.locator(".approval.pending");
+    await card.waitFor();
+    const id = await card.evaluate((node) => node.getAttribute("aria-labelledby"));
+    await card.getByRole("button", { name: "Deny" }).click();
+    const after = page.locator(`.approval:has([id="${id}"])`);
+    await after.locator(".approval-state", { hasText: "Denied by you" }).waitFor({ timeout: 5_000 });
+    const facts = await after.evaluate((node) => ({ ending: node.dataset.ending, buttons: node.querySelectorAll("button").length, detail: node.querySelector(".approval-detail")?.textContent ?? "" }));
+    await context.close();
+    assert.equal(facts.ending, "denied-by-you");
+    assert.equal(facts.buttons, 0, "the denied card still has buttons");
+    assert.match(facts.detail, /^You chose Deny at /);
+  });
+
+  test("keyboard: Tab reaches Approve and then Deny, with a visible focus ring", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=cards`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector(".approval.pending");
+    await page.locator(".approval.pending button.primary").focus();
+    const ring = () => page.evaluate(() => {
+      const style = getComputedStyle(document.activeElement);
+      return { text: document.activeElement.textContent, outline: style.outlineStyle, width: parseFloat(style.outlineWidth) };
+    });
+    const first = await ring();
+    await page.keyboard.press("Tab");
+    const second = await ring();
+    await context.close();
+    assert.match(first.text, /^Approve/);
+    assert.equal(second.text, "Deny");
+    for (const item of [first, second]) {
+      assert.notEqual(item.outline, "none", `${item.text} has no focus ring`);
+      assert.ok(item.width >= 2, `${item.text}'s focus ring is ${item.width}px`);
+    }
+  });
 });
 
 // UX P2: the turn status line on every assistant message, the Couldn't start card with its
