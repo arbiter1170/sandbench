@@ -288,6 +288,12 @@ function ApprovalCard({ approval, t, onDecide }: { approval: Approval; t: Copy; 
       <code>{approval.command}</code>
       <p>{approval.reason}</p>
       {approval.file ? <FilePreview approval={approval} t={t} /> : null}
+      {approval.memory ? (
+        <details open={approval.status === "pending"}>
+          <summary>{t("memorySavePreview").replace("{path}", approval.memory.destination)}</summary>
+          <pre className="wrap">{approval.memory.note}</pre>
+        </details>
+      ) : null}
       {approval.status === "pending" && onDecide ? (
         <div className="approval-actions">
           <button type="button" className="primary" onClick={() => onDecide(true)}>{t("approve")}</button>

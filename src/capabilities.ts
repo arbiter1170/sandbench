@@ -34,7 +34,7 @@ export function needsLabel(item: Capability): string {
 export const CAPABILITIES: Capability[] = [
   {
     observed: "Bot teammates",
-    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins. The exception is a bot that uses an API driver, as its Agent or through the default agent: while the local harness or the runner is up, it gets an error instead. Bots do not save new memories themselves yet",
+    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins. The exception is a bot that uses an API driver, as its Agent or through the default agent: while the local harness or the runner is up, it gets an error instead. With the local harness, a planner reply can propose a memory note; once you approve it, it is added to that bot's day log (memory/log/<date>.md). Agent-driver turns and the runner don't save memories",
     state: "working",
     needs: "harness",
     key: "orCli",

@@ -49,6 +49,12 @@ export type ApprovalFile = {
   existed?: boolean;
 };
 
+/** A note a bot wants kept in its own memory log; the harness picks the bot and the day's file. */
+export type ApprovalMemory = {
+  note: string;
+  destination: string;
+};
+
 export type Approval = {
   command: string;
   reason: string;
@@ -60,6 +66,7 @@ export type Approval = {
   pointer?: PointerAction;
   question?: ApprovalQuestion;
   file?: ApprovalFile;
+  memory?: ApprovalMemory;
   permissionId?: string;
 };
 

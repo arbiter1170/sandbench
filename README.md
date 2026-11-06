@@ -55,7 +55,7 @@ npm run build
 npm run electron:dev   # loads http://127.0.0.1:5173 if Vite is running, else dist/
 ```
 
-`electron:dev` starts the harness child, waits for `/health`, and opens a window. Packaged layout: `npm run electron:pack` (Windows dir target). See also [docs/mcp-server.md](docs/mcp-server.md) and [docs/team-import.md](docs/team-import.md).
+`electron:dev` starts the harness child, waits for `/health`, and opens a window. Packaged layout: `npm run electron:pack` (Windows dir target). See also [docs/mcp-server.md](docs/mcp-server.md), [docs/team-import.md](docs/team-import.md) and [docs/bot-memory.md](docs/bot-memory.md).
 
 ### Agents
 
@@ -78,7 +78,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A dark three-column workspace: bots on the left, the conversation in the middle, and computer usage, skills, and routines on the right
 - A model picker in the top right
 - First-run onboarding that builds a team from templates
-- Teammates you create, with instructions, persona, skills, plugins, connectors, memories, and a file library. With a model key or a signed-in CLI driver, bots read the memories you write. `MEMORY.md` (through the harness) reaches agent-driver turns, and planner replies only when the decision step fails. Bots do not save new memories themselves yet
+- Teammates you create, with instructions, persona, skills, plugins, connectors, memories, and a file library. With a model key or a signed-in CLI driver, bots read the memories you write. `MEMORY.md` (through the harness) reaches agent-driver turns, and planner replies only when the decision step fails. With the local harness, a planner reply can propose a memory note; once you approve it, it is added to that bot's day log (`memory/log/<date>.md`). Agent-driver turns and the runner don't save memories
 - Appearance (color, shape, or an uploaded photo) and a browser voice preview
 - A thinking trace per turn, and with the harness running: live CPU, memory, busiest processes, and a live view of the screen. "Share a window" uses the browser's screen picker instead
 - Approval cards: a bot proposes a command, a click or keystroke, a workspace file write or delete (with the new text or a diff), or an MCP tool call. You approve or deny, the result comes back, and the bot either answers or asks for the next step. With an API key, the model chooses that action. Without one, a local match does, including a chain written with "and then"
