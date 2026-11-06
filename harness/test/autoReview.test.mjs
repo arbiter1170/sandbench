@@ -807,3 +807,21 @@ test("readOnlyCommand alone refuses forms that would read standard input", () =>
     assert.equal(readOnlyCommand(words), true, words.join(" "));
   }
 });
+
+test("a path given to -Path counts as another file or folder under a rule that names one", () => {
+  for (const [rule, command] of [
+    ["Get-ChildItem src", "Get-ChildItem src -Path other -Recurse"],
+    ["Get-Content src", "Get-Content src -Path secret.txt"],
+    ["Get-ChildItem -Path src", "Get-ChildItem -Path src -Path other"],
+    ["Test-Path notes.txt", "Test-Path notes.txt -Path other.txt"],
+  ]) {
+    assert.equal(auto(command, [rule]), false, `${rule} -> ${command}`);
+  }
+  for (const [rule, command] of [
+    ["Get-ChildItem -Path src", "Get-ChildItem -Path src -Recurse"],
+    ["Get-ChildItem src", "Get-ChildItem src -Filter package.json"],
+    ["Get-ChildItem", "Get-ChildItem -Path other -Recurse"],
+  ]) {
+    assert.equal(auto(command, [rule]), true, `${rule} -> ${command}`);
+  }
+});
