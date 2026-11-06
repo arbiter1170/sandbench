@@ -33,6 +33,7 @@ import {
   harnessPermit,
   harnessReadFile,
   harnessRecordRun,
+  harnessSaveBotMemory,
   harnessScreen,
   harnessStartTurn,
   harnessSyncSchedules,
@@ -62,7 +63,7 @@ import {
   verifyPasskey,
 } from "./device";
 import { translate } from "./i18n";
-import { assembleBotSystem } from "./prompt";
+import { assembleBotSystem, memoryDocument } from "./prompt";
 import { speakable } from "./speech";
 import {
   applyProfileToSettings,
@@ -107,6 +108,7 @@ import {
   continuationText,
   decisionPrompt,
   guardAction,
+  holdForPerson,
   inFolder,
   interpretResult,
   MAX_ACTIONS,
@@ -1283,11 +1285,7 @@ export function App({ user }: { user: User }) {
   async function memoryDocFor(botId: string): Promise<string> {
     try {
       const { files } = await harnessBotMemory(botId);
-      return files
-        .slice(0, 8)
-        .map((file) => `## ${file.path}\n${file.content.slice(0, 6000)}`)
-        .join("\n\n")
-        .slice(0, 24_000);
+      return memoryDocument(files);
     } catch {
       return "";
     }
@@ -1448,7 +1446,7 @@ export function App({ user }: { user: User }) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       if (!text) onDelta(prose);
     }
-    const approval = follow ? makeApproval(follow, unattended, bot) : undefined;
+    const approval = follow ? holdForPerson(follow, makeApproval(follow, unattended, bot), !runnerMode) : undefined;
     patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
     attachPrevious(threadId, id, approval);
     bumpUsage({ charsOut: text.length });
@@ -1506,6 +1504,20 @@ export function App({ user }: { user: User }) {
       if (approval.question) {
         const author = threadsRef.current.find((thread) => thread.id === threadId)?.messages.find((message) => message.id === messageId)?.authorBotId ?? "";
         await answerFromResult(threadId, author, approval.command, answer ?? "", undefined, false, unattended, signal);
+        return;
+      }
+      if (approval.memory) {
+        if (auto) throw new Error("A memory save waits for you to approve it.");
+        const author = threadsRef.current.find((thread) => thread.id === threadId)?.messages.find((message) => message.id === messageId)?.authorBotId ?? "";
+        if (!author) throw new Error("This card has no bot to save the note for.");
+        const started = performance.now();
+        const result = await harnessSaveBotMemory(author, messageId, approval.memory.note);
+        const output = result.duplicate ? `Already in ${result.path}; nothing was added.` : `Saved to ${result.path}.`;
+        patchMessage(threadId, messageId, (message) =>
+          message.approval ? { ...message, approval: { ...message.approval, output, exitCode: 0 } } : message,
+        );
+        addActivity(threadId, messageId, `Remembered in ${result.path}`, performance.now() - started);
+        await answerFromResult(threadId, author, approval.command, output, 0, false, unattended, signal);
         return;
       }
       if (approval.file) {
@@ -2205,6 +2217,7 @@ export function App({ user }: { user: User }) {
             chosen?.kind === "command" ? `You will ask the user to approve running \`${chosen.command}\` on their computer. Say so briefly.` : "",
             chosen?.kind === "tool" ? `You will ask the user to approve calling ${chosen.label}. ${chosen.why} Say so briefly.` : "",
             chosen?.kind === "pointer" ? `You will ask the user to approve ${chosen.label}. Say so briefly.` : "",
+            chosen?.kind === "memory" ? "You will ask the user to approve saving a note to your memory. Say so briefly." : "",
             cleaned,
           ]
             .filter(Boolean)
@@ -2227,7 +2240,7 @@ export function App({ user }: { user: User }) {
       }
       if (genRef.current === generation) {
         chosen = inFolder(chosen, roomFolder(room));
-        const approval = chosen ? makeApproval(chosen, Boolean(options.unattended), bot) : undefined;
+        const approval = chosen ? holdForPerson(chosen, makeApproval(chosen, Boolean(options.unattended), bot), !runnerMode) : undefined;
         const triggerDraft = options.unattended ? undefined : modelTrigger ?? plan.trigger;
         const trigger = triggerDraft ? createTrigger(triggerDraft, botId) : undefined;
         patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", approval, ...(trigger ? { trigger } : {}) }));

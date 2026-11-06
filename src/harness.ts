@@ -162,6 +162,14 @@ export function harnessWriteBotMemory(botId: string, pathName: string, content: 
   });
 }
 
+/** Append one approved note to this bot's memory log. `saveId` makes a retry a no-op. */
+export function harnessSaveBotMemory(botId: string, saveId: string, note: string) {
+  return call<{ ok: boolean; path: string; duplicate: boolean; bytes: number }>(`/bots/${encodeURIComponent(botId)}/memory/save`, {
+    method: "POST",
+    body: JSON.stringify({ saveId, note, approved: true }),
+  });
+}
+
 export function harnessWriteFile(file: { path: string; op: "write" | "delete"; content?: string }): Promise<{ ok: boolean; path: string; bytes: number }> {
   return call("/workspace/write", { method: "POST", body: JSON.stringify({ ...file, approved: true }) });
 }

@@ -328,6 +328,7 @@ const en = {
   fileDeletePreview: "Current contents, which will be deleted",
   fileReplacePreview: "Changes to the existing file",
   fileNewPreview: "New file contents",
+  memorySavePreview: "Adds one line to this bot's {path}. Nothing already there changes",
   activity: "Activity",
   screenAfter: "Screen after this step",
   triggers: "Triggers",
