@@ -823,6 +823,8 @@ const server = createServer(async (req, res) => {
         title: cleanText(body.title, 240),
         status: body.status,
         ms: Number.isFinite(body.ms) ? Math.round(body.ms) : undefined,
+        // Why the run failed, when the page knows (UX P2: "Couldn't start · …").
+        ...(typeof body.detail === "string" && body.detail.trim() ? { detail: cleanText(body.detail, 240) } : {}),
       });
       return send(res, 200, { ok: true });
     }

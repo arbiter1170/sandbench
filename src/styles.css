@@ -902,6 +902,39 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
   .ctx-row { grid-template-columns: 1fr; gap: 0.15rem; }
 }
 
+/* Turn status line (UX P2, src/turnStatus.ts): an icon shape and a word on every assistant
+   message; colour only repeats what the word says. The S9 card reuses the approval card's frame. */
+.turn-status { margin-top: 0.55rem; display: grid; gap: 0.4rem; font-size: 0.85rem; color: var(--muted); }
+.turn-line { margin: 0; display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.4rem; min-width: 0; }
+.turn-live { display: inline-flex; align-items: baseline; gap: 0.4rem; min-width: 0; }
+.turn-icon { flex: none; width: 1.1em; text-align: center; font-weight: 700; }
+.turn-text { min-width: 0; }
+.turn-step { color: var(--muted); min-width: 0; }
+.turn-status.tone-live .turn-icon { color: #4ea1ff; }
+.turn-status.tone-wait .turn-icon, .turn-status.tone-wait .turn-text { color: #f3d48a; }
+.turn-status.tone-ok .turn-icon { color: #4fbf7f; }
+.turn-status.tone-bad .turn-icon, .turn-status.tone-bad .turn-text { color: var(--danger); }
+.turn-status.tone-warn .turn-icon, .turn-status.tone-warn .turn-text { color: #e8a25a; }
+.turn-card { margin-top: 0.6rem; border: 1px solid var(--line-strong); border-radius: 0.8rem; padding: 0.7rem 0.8rem; background: #1b1b1b; display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.45rem; max-width: 36rem; font-size: 0.88rem; }
+.turn-card.tone-bad { border-color: var(--danger); }
+.turn-card .turn-line { font-weight: 650; color: var(--ink); }
+.turn-card .turn-icon { color: var(--danger); }
+.turn-reason, .turn-note, .turn-chosen { margin: 0; color: var(--muted); }
+.turn-chosen { color: var(--ink); }
+.turn-chosen a { color: inherit; }
+.turn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; }
+.turn-actions button { min-height: 44px; }
+.turn-result { color: var(--muted); }
+.turn-details summary { cursor: pointer; }
+.turn-details pre { margin: 0.35rem 0 0; max-height: 12rem; overflow: auto; background: var(--code); padding: 0.55rem; border-radius: 0.45rem; font-size: 0.78rem; white-space: pre-wrap; }
+/* Coarse pointers: the error-details toggle and the chosen-answer link are 44 px targets too. */
+@media (pointer: coarse) {
+  .turn-details summary, .turn-chosen a { display: inline-flex; align-items: center; min-height: 44px; }
+}
+/* S11: always in the page (a live region), and takes no room while it is empty. */
+.busy-note { margin: 0; color: var(--muted); font-size: 0.85rem; }
+.busy-note:empty { margin-top: -0.55rem; }
+
 /* "Effective setup" at the top of a bot's Model tab (UX P5): value, where it comes from, where to change it. */
 .effective-setup { margin: 0 0 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
 .effective-setup h3 { margin: 0 0 0.4rem; font-size: 0.95rem; }

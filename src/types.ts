@@ -16,6 +16,36 @@ export type Message = {
   status: "done" | "streaming" | "error";
   /** Why a reply stopped reaching the page before it finished (local harness turns). */
   interrupted?: string;
+  // UX P2 turn status (src/turnStatus.ts). All optional, so older saves load unchanged.
+  /** The agent this reply was handed to; `id` once POST /turns returned a turn id (S1 → S2). */
+  driverTurn?: { agent: string; id?: string };
+  /** S9: the chosen agent couldn't start and no turn exists (I-4). Nothing was sent to it. */
+  startFailure?: {
+    /** unreachable: no harness or runner answered; unavailable: the driver is listed not ok or missing; refused: POST /turns was refused before a turn id existed. */
+    kind: "unreachable" | "unavailable" | "refused";
+    agent: string;
+    detail?: string;
+    /** Runner mode, where the one-time planner answer is withheld (W-3). */
+    runner?: boolean;
+    /** The one-time planner turn was claimed but did not start (I-3): nothing is retried. */
+    plannerError?: string;
+    /** A scheduled or webhook run: the one-time planner answer is not offered for it. */
+    unattended?: boolean;
+  };
+  /** S10: POST /turns failed without proof that no turn exists. */
+  startUnknown?: { agent: string; reason: string };
+  /** I-3: the one-time planner answer chosen from this S9 message, written before that turn starts. */
+  plannerAnswer?: { messageId: string; at: number };
+  /** S12: this reply is the one-time planner answer for `sourceId`, standing in for `agent` once. */
+  answeredBy?: { kind: "planner-once"; agent: string; sourceId: string };
+  /** S6: the error the turn ended with, in full (the status line shows its first sentence). */
+  failure?: string;
+  /** S7: the Claude driver used all its approval rounds with approved steps still waiting. */
+  roundsExhausted?: number;
+  /** A built-in planner reply stopped in this page; a command already sent may still finish. */
+  stoppedInPage?: boolean;
+  /** Stop was pressed before anything was sent to an agent or run by the planner. */
+  stoppedBeforeStart?: boolean;
   localStandIn: boolean;
   fresh: boolean;
   thinking?: string[];
@@ -255,6 +285,8 @@ export type Routine = {
   schedule: string;
   enabled: boolean;
   lastRunAt?: number;
+  /** UX P2: why the last run did nothing, e.g. "Couldn't start · the local harness isn't reachable". */
+  lastNote?: string;
 };
 
 export type WebhookTrigger = {
@@ -276,6 +308,8 @@ export type TriggerRun = {
   at: number;
   status: "ok" | "failed" | "skipped";
   ms?: number;
+  /** Why a run failed, when the page knows (UX P2: "Couldn't start · …"). */
+  detail?: string;
 };
 
 export type ComputerEvent = {
