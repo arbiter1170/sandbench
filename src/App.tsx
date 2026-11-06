@@ -47,9 +47,11 @@ import {
   type HarnessHealth,
   runnerFetch,
   runnerMode,
+  TurnLostError,
 } from "./harness";
 import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
+import { settleLoadedThreads, settleMessage } from "./turnRecovery";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -270,7 +272,8 @@ export function App({ user }: { user: User }) {
         skills: bot.skills ?? [],
       }));
       const nextBots = loaded.some((bot) => bot.id === REA_BOT_ID) ? loaded : [...loaded, createReaBot()];
-      setThreads(snapshot.threads);
+      // A local turn cannot outlive the page that drove it; a runner turn can, so runner data is left alone.
+      setThreads(runnerMode ? snapshot.threads : settleLoadedThreads(snapshot.threads));
       setReminders(snapshot.reminders);
       setEvents(snapshot.events);
       setContacts(snapshot.contacts);
@@ -1656,6 +1659,8 @@ export function App({ user }: { user: User }) {
     const stop = () => void harnessInterrupt(turnId).catch(() => undefined);
     args.signal.addEventListener("abort", stop, { once: true });
     let current: string | null = args.assistantId;
+    const created = [args.assistantId];
+    let lost: string | undefined;
     let reply = "";
     let failure: string | undefined;
     const cards = new Map<string, { id: string; command: string }>();
@@ -1663,6 +1668,7 @@ export function App({ user }: { user: User }) {
       if (current) return current;
       const id = beginAssistant(threadId, bot.id);
       patchMessage(threadId, id, (message) => ({ ...message, localStandIn: false }));
+      created.push(id);
       current = id;
       return id;
     };
@@ -1719,13 +1725,24 @@ export function App({ user }: { user: User }) {
         if (event.type === "error") failure = event.message || "The agent stopped with an error.";
         return event.type === "done" || event.type === "error";
       });
+    } catch (error) {
+      if (!(error instanceof TurnLostError)) throw error;
+      lost = error.message;
     } finally {
       args.signal.removeEventListener("abort", stop);
-      for (const { id } of cards.values()) {
-        patchMessage(threadId, id, (message) => (message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: "denied" } } : message));
+      const stopped = args.signal.aborted;
+      for (const id of created) {
+        patchMessage(threadId, id, (message) => {
+          // Lost: nothing reaches this page any more, so nothing is answered or re-run from here.
+          if (lost) return settleMessage(message, lost);
+          // Ended or Stop: the harness has resolved (or, on Stop, denies) whatever was waiting.
+          const approval = message.approval?.status === "pending" && message.approval.permissionId ? { ...message.approval, status: "denied" as const } : message.approval;
+          const status = message.status === "streaming" ? (failure && !stopped ? "error" : "done") : message.status;
+          return approval === message.approval && status === message.status ? message : { ...message, status, ...(approval ? { approval } : {}) };
+        });
       }
     }
-    if (current) patchMessage(threadId, current, (message) => ({ ...message, status: "done" }));
+    if (lost) throw new Error(lost);
     if (failure) throw new Error(failure);
     return reply;
   }

@@ -152,6 +152,14 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
     return true;
   }
 
+  // "running" while the driver works, "finished" while the turn's done or error event is still
+  // in the replay buffer, "unknown" otherwise (a restarted harness, or a turn too old to replay).
+  // The page uses it to tell a dropped event stream it can resume from a turn that is gone.
+  function state(id) {
+    if (turns.has(id)) return "running";
+    return events.some((entry) => entry.turnId === id && (entry.type === "done" || entry.type === "error")) ? "finished" : "unknown";
+  }
+
   function permit(permissionId, allow) {
     const pending = permissions.get(permissionId);
     if (!pending) return false;
@@ -175,5 +183,5 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
     });
   }
 
-  return { start, interrupt, permit, subscribe };
+  return { start, interrupt, permit, subscribe, state };
 }

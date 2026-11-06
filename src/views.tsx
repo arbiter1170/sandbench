@@ -384,7 +384,9 @@ export function MessageBody({
         <span>{message.role === "user" ? youLabel : author || t("assistant")}</span>
         {message.localStandIn ? <span className="meta">{t("local")}</span> : null}
         {message.status === "streaming" ? <span className="meta">{t("receiving")}</span> : null}
+        {message.interrupted ? <span className="meta">{t("interrupted")}</span> : null}
       </header>
+      {message.interrupted ? <p className="hint">{message.interrupted}</p> : null}
       {message.attachments.length > 0 ? (
         <div className="attachments">
           {message.attachments.map((item) => (
