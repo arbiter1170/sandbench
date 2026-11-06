@@ -428,3 +428,158 @@ describe("approval cards (UX P3)", () => {
     }
   });
 });
+
+// UX P2: the turn status line on every assistant message, the Couldn't start card with its
+// one-time planner choice, and the busy note under the composer (fixture ?scenario=turns: a turn
+// is running, so the planner choice is disabled).
+describe("turn status line", () => {
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name}: every reply has an icon and a word, cards and actions fit, nothing scrolls sideways`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+      await page.waitForSelector(".turn-card", { timeout: 10_000 });
+      await page.evaluate(() => document.fonts.ready);
+      const facts = await page.evaluate(() => {
+        const rect = (el) => el.getBoundingClientRect();
+        const shown = (el) => el.getClientRects().length > 0;
+        const scroll = document.querySelector(".scroll");
+        return {
+          pageScrollWidth: document.documentElement.scrollWidth,
+          scroll: { clientWidth: scroll.clientWidth, scrollWidth: scroll.scrollWidth },
+          receiving: document.body.textContent.includes("Receiving"),
+          replies: [...document.querySelectorAll(".msg:not(.user)")].map((msg) => {
+            const live = msg.querySelector(".turn-live");
+            return {
+              icon: live?.querySelector(".turn-icon")?.textContent ?? "",
+              iconHidden: live?.querySelector(".turn-icon")?.getAttribute("aria-hidden") ?? "",
+              text: live?.querySelector(".turn-text")?.textContent ?? "",
+              role: live?.getAttribute("role") ?? "",
+              // The line or card spans the bubble (a class clash once squeezed it to a dot's width).
+              widthShare: (() => {
+                const box = msg.querySelector(".turn-status, .turn-card");
+                return box ? rect(box).width / msg.clientWidth : 0;
+              })(),
+              clientWidth: msg.clientWidth,
+              scrollWidth: msg.scrollWidth,
+              spill: [...msg.querySelectorAll("*")].filter((el) => shown(el) && !el.closest("pre") && rect(el).right > rect(msg).right + 0.5).map((el) => el.className || el.tagName),
+            };
+          }),
+          buttons: [...document.querySelectorAll(".turn-actions button")].map((button) => ({ text: button.textContent, right: rect(button).right, height: rect(button).height, shown: shown(button), disabled: button.disabled, bubbleRight: rect(button.closest(".msg")).right })),
+          chosen: document.querySelector(".turn-chosen a")?.textContent ?? "",
+          busy: (() => {
+            const note = document.querySelector(".busy-note");
+            return { text: note?.textContent ?? "", role: note?.getAttribute("role"), live: note?.getAttribute("aria-live"), shown: note ? shown(note) && rect(note).height > 0 : false, right: note ? rect(note).right : 0 };
+          })(),
+        };
+      });
+      assert.deepEqual(errors, [], "the fixture page threw");
+      assert.ok(facts.pageScrollWidth <= viewport.width, `page scrollWidth ${facts.pageScrollWidth}`);
+      assert.ok(facts.scroll.scrollWidth <= facts.scroll.clientWidth, "the message list scrolls sideways");
+      assert.equal(facts.receiving, false, "'Receiving' is still shown");
+      assert.equal(facts.replies.length, 8);
+      for (const [index, reply] of facts.replies.entries()) {
+        assert.ok(reply.icon.trim().length > 0, `reply ${index} has no icon`);
+        assert.equal(reply.iconHidden, "true", `reply ${index}'s icon is read out`);
+        assert.ok(reply.text.trim().length > 0, `reply ${index} has no status word`);
+        assert.equal(reply.role, "status", `reply ${index}'s status line is not a live region`);
+        assert.ok(reply.widthShare >= 0.7, `reply ${index}'s status is ${Math.round(reply.widthShare * 100)}% of its bubble`);
+        assert.ok(reply.scrollWidth <= reply.clientWidth, `reply ${index} is wider than its bubble`);
+        assert.deepEqual(reply.spill, [], `reply ${index} has elements past its right edge`);
+      }
+      assert.deepEqual(
+        facts.replies.map((reply) => reply.text.split(/ · |\. /)[0]),
+        ["Couldn't start", "Couldn't start", "Finished", "Stop requested", "Failed", "Interrupted", "Start status unknown", "Working"],
+      );
+      const planner = facts.buttons.filter((button) => button.text === "Answer with the built-in planner this time");
+      assert.equal(planner.length, 1, "the planner choice shows once, on the unclaimed Couldn't start card");
+      assert.equal(planner[0].disabled, true, "the planner choice is enabled while a turn runs");
+      assert.match(facts.chosen, /^Planner answer chosen at .+ ↓$/);
+      for (const button of facts.buttons) {
+        assert.ok(button.shown, `${button.text} is hidden`);
+        assert.ok(button.right <= Math.min(button.bubbleRight, viewport.width) + 0.5, `${button.text} runs past its bubble`);
+        assert.ok(button.height >= 44, `${button.text} is ${button.height}px tall`);
+      }
+      assert.equal(facts.busy.role, "status");
+      assert.equal(facts.busy.live, "polite");
+      assert.match(facts.busy.text, /North is still replying\. Your message is kept/);
+      assert.ok(facts.busy.shown, "the busy note is not on screen");
+      assert.ok(facts.busy.right <= viewport.width + 0.5, "the busy note runs past the window");
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${viewport.name}-turns.png`), fullPage: false });
+      await context.close();
+    });
+  }
+
+  test("Check connection keeps focus on its button and announces the result politely", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+    const button = page.locator(".turn-card").first().getByRole("button", { name: "Check connection" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await page.locator(".turn-card").first().locator(".turn-result").getByText("Still not reachable").waitFor({ timeout: 5_000 });
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check connection", "focus moved");
+    assert.equal(await page.locator(".turn-card").first().locator(".turn-result").getAttribute("aria-live"), "polite");
+    // Ask again… only calls back; the fixture records it and nothing else happens on the page.
+    await page.getByRole("button", { name: "Ask again…" }).first().click();
+    assert.equal((await page.evaluate(() => window.asked ?? [])).length, 1);
+    await context.close();
+  });
+});
+
+// UX P2 review fixes, through the fixture's wiring of the app's own helpers (startPlannerAnswer,
+// askAgainDraft, focusComposer). ?idle=1: no turn running, so the planner choice is enabled.
+describe("turn status interactions", () => {
+  test("two taps in one tick start one planner turn, and focus moves to 'Planner answer chosen'", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns&idle=1`, { waitUntil: "load", timeout: 20_000 });
+    const button = page.getByRole("button", { name: "Answer with the built-in planner this time" });
+    await button.focus();
+    await page.evaluate(() => {
+      const target = [...document.querySelectorAll("button")].find((node) => node.textContent === "Answer with the built-in planner this time");
+      target.click();
+      target.click();
+    });
+    await page.locator(".turn-card").first().locator(".turn-chosen a").waitFor({ timeout: 5_000 });
+    assert.deepEqual(await page.evaluate(() => window.plannerAsks), ["List the files in the walklings-team folder"]);
+    assert.equal(await button.count(), 0, "the planner choice is still offered");
+    assert.match(await page.evaluate(() => document.activeElement?.textContent ?? ""), /^Planner answer chosen at /, "focus did not move to the chosen link");
+    await context.close();
+  });
+
+  test("Ask again… fills an empty composer and focuses it; a draft being typed is kept and the note says so", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns&idle=1`, { waitUntil: "load", timeout: 20_000 });
+    const askAgain = page.getByRole("button", { name: "Ask again…" }).first();
+    await askAgain.click();
+    const composer = page.locator("#composer");
+    assert.equal(await composer.inputValue(), "Run the build");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "composer");
+    await composer.fill("a new question");
+    await askAgain.click();
+    assert.equal(await composer.inputValue(), "a new question", "the draft was overwritten");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "composer");
+    assert.match(await page.locator(".busy-note").textContent(), /^Your draft is kept\./);
+    await context.close();
+  });
+
+  test("on a touch screen the error-details toggle and the chosen link are 44 px targets", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector(".turn-details summary");
+    const heights = await page.evaluate(() => ({
+      coarse: matchMedia("(pointer: coarse)").matches,
+      summary: document.querySelector(".turn-details summary").getBoundingClientRect().height,
+      chosen: document.querySelector(".turn-chosen a").getBoundingClientRect().height,
+    }));
+    assert.equal(heights.coarse, true);
+    assert.ok(heights.summary >= 44, `the error-details toggle is ${heights.summary}px tall`);
+    assert.ok(heights.chosen >= 44, `the chosen link is ${heights.chosen}px tall`);
+    await context.close();
+  });
+});

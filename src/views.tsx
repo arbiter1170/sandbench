@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { approvalView, deniedAt, recordDeny, type CardIcon } from "./approvalView";
 import { CAPABILITIES, needsLabel, type CapabilityState } from "./capabilities";
 import { getBlob } from "./db";
@@ -12,6 +12,7 @@ import { parseMarkdown, type Inline } from "./markdown";
 import { profileLabelKey, profileReadiness, TEST_PROFILE_IDS, type TestProfileId } from "./testProfiles";
 import type { Approval, CalEvent, Contact, Locale, LogItem, Message, Reminder, Settings, Thread } from "./types";
 import { LOCALE_OPTIONS } from "./types";
+import { turnStatus, type TurnStatus } from "./turnStatus";
 import { lineDiff, parseSchedule } from "./work";
 
 type Copy = (key: Key) => string;
@@ -413,6 +414,139 @@ function TriggerCard({ info, t, onPatch, onUndo }: { info: TriggerInfo | null; t
   );
 }
 
+/** Focus the chat composer ("Ask again…": a user activation, so moving focus is expected). */
+export function focusComposer() {
+  document.getElementById("composer")?.focus();
+}
+
+/** What a chat message's status line can do (UX P2). Without it the line shows no actions. */
+export type TurnControls = {
+  runner: boolean;
+  /** A turn is running on this page: the one-time planner answer waits (I-1). */
+  busy: boolean;
+  /** A later message carries on this message's agent turn. */
+  continued: boolean;
+  /** This is the newest reply of the turn running now: it reads Working, not Finished (M1). */
+  running?: boolean;
+  /** Re-reads /health and /drivers only; true when reachable. */
+  onCheckConnection: () => Promise<boolean>;
+  /** Puts the original message back in the composer and focuses it. Never sends. */
+  onAskAgain: () => void;
+  onPlannerAnswer: () => void;
+};
+
+const fillCopy = (text: string, values: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? ""));
+const clock = (at: number) => new Date(at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+/** "Check connection": its result is announced politely next to it; focus stays on the button. */
+function CheckConnection({ t, runner, onCheck }: { t: Copy; runner: boolean; onCheck: () => Promise<boolean> }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState("");
+  const word = (ok: boolean) => t(runner ? (ok ? "ctxRecheckRunnerOk" : "ctxRecheckRunnerFail") : ok ? "ctxRecheckOk" : "ctxRecheckFail");
+  return (
+    <>
+      <button
+        type="button"
+        aria-busy={busy}
+        onClick={() => {
+          if (busy) return;
+          setBusy(true);
+          setResult("");
+          void onCheck()
+            .then((ok) => setResult(word(ok)), () => setResult(word(false)))
+            .finally(() => setBusy(false));
+        }}
+      >
+        {t("tsCheckConnection")}
+      </button>
+      <span className="turn-result" role="status" aria-live="polite">{result}</span>
+    </>
+  );
+}
+
+function TurnStatusView({ message, status, t, turn }: { message: Message; status: TurnStatus; t: Copy; turn?: TurnControls }) {
+  const actions = turn ? status.actions : [];
+  const labelId = `turn-${message.id}`;
+  const line = (
+    <p className="turn-line" id={labelId}>
+      <span className="turn-live" role="status" aria-live="polite" aria-atomic="true">
+        <span className="turn-icon" aria-hidden="true">{status.icon}</span>
+        <span className="turn-text">{status.text}</span>
+      </span>
+      {status.step ? <span className="turn-step">· {status.step}</span> : null}
+    </p>
+  );
+  const failure = message.startFailure;
+  const withheld = failure && !failure.unattended && !message.plannerAnswer && (failure.runner || turn?.runner);
+  // The planner button goes away once it is used; focus moves to what replaced it (L3), only
+  // when the tap came from that button.
+  const tapped = useRef(false);
+  const chosenRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (!tapped.current || !message.plannerAnswer) return;
+    tapped.current = false;
+    chosenRef.current?.focus();
+  }, [message.plannerAnswer]);
+  const controls =
+    actions.length > 0 ? (
+      <div className="turn-actions">
+        {actions.includes("checkConnection") && turn ? <CheckConnection t={t} runner={turn.runner} onCheck={turn.onCheckConnection} /> : null}
+        {actions.includes("plannerAnswer") && turn ? (
+          <button
+            type="button"
+            className="turn-planner"
+            disabled={turn.busy}
+            onClick={() => {
+              tapped.current = true;
+              turn.onPlannerAnswer();
+            }}
+          >
+            {t("tsPlannerOnce")}
+          </button>
+        ) : null}
+        {actions.includes("askAgain") && turn ? <button type="button" onClick={turn.onAskAgain}>{t("tsAskAgain")}</button> : null}
+      </div>
+    ) : null;
+  const notes = (
+    <>
+      {actions.includes("plannerAnswer") && turn ? <p className="turn-note">{turn.busy ? t("tsPlannerBusy") : t("tsPlannerOnceNote")}</p> : null}
+      {actions.includes("askAgain") ? <p className="turn-note">{t("tsAskAgainNote")}</p> : null}
+      {actions.includes("errorDetails") && message.failure ? (
+        <details className="turn-details">
+          <summary>{t("tsErrorDetails")}</summary>
+          <pre className="wrap">{message.failure}</pre>
+        </details>
+      ) : null}
+    </>
+  );
+  if (status.state === "couldntStart") {
+    return (
+      <div className={`turn-card tone-${status.tone}`} role="group" aria-labelledby={labelId}>
+        {line}
+        {status.reason ? <p className="turn-reason">{status.reason}</p> : null}
+        {status.note ? <p className="turn-reason">{status.note}</p> : null}
+        {controls}
+        {notes}
+        {message.plannerAnswer ? (
+          <p className="turn-chosen">
+            <a ref={chosenRef} href={`#msg-${message.plannerAnswer.messageId}`}>{fillCopy(t("tsPlannerChosen"), { time: clock(message.plannerAnswer.at) })}</a>
+          </p>
+        ) : null}
+        {failure?.plannerError ? <p className="turn-chosen">{fillCopy(t("tsPlannerFailed"), { reason: failure.plannerError })}</p> : null}
+        {withheld ? <p className="turn-note">{t("tsPlannerWithheld")}</p> : null}
+        {failure?.unattended ? <p className="turn-note">{t("tsUnattendedNote")}</p> : null}
+      </div>
+    );
+  }
+  return (
+    <div className={`turn-status tone-${status.tone}`}>
+      {line}
+      {controls}
+      {notes}
+    </div>
+  );
+}
+
 export function MessageBody({
   message,
   t,
@@ -422,6 +556,7 @@ export function MessageBody({
   trigger,
   onTriggerPatch,
   onTriggerUndo,
+  turn,
 }: {
   message: Message;
   t: Copy;
@@ -431,17 +566,20 @@ export function MessageBody({
   trigger?: TriggerInfo | null;
   onTriggerPatch?: (patch: TriggerPatch) => void;
   onTriggerUndo?: () => void;
+  turn?: TurnControls;
 }) {
+  // One status line per assistant message; only its state changes are announced, not each token.
+  const status = turnStatus(message, { t, bot: author, continued: turn?.continued, runner: turn?.runner, running: turn?.running });
+  const word = status && status.state !== "finished" && status.state !== "continued" ? status.word : "";
   return (
-    <article className={message.role === "user" ? "msg user" : message.fresh ? "msg fresh" : "msg"} aria-live={message.status === "streaming" ? "polite" : undefined}>
+    <article id={`msg-${message.id}`} className={message.role === "user" ? "msg user" : message.fresh ? "msg fresh" : "msg"}>
       {message.role === "assistant" && message.fresh ? <div className="draw" /> : null}
       <header className="who">
         <span>{message.role === "user" ? youLabel : author || t("assistant")}</span>
+        {message.answeredBy?.kind === "planner-once" ? <span className="meta">{t("tsOneTimeLabel")}</span> : null}
         {message.localStandIn ? <span className="meta">{t("local")}</span> : null}
-        {message.status === "streaming" ? <span className="meta">{t("receiving")}</span> : null}
-        {message.interrupted ? <span className="meta">{t("interrupted")}</span> : null}
+        {word ? <span className="meta">{word}</span> : null}
       </header>
-      {message.interrupted ? <p className="hint">{message.interrupted}</p> : null}
       {message.attachments.length > 0 ? (
         <div className="attachments">
           {message.attachments.map((item) => (
@@ -480,6 +618,7 @@ export function MessageBody({
           <figcaption>{t("screenAfter")}</figcaption>
         </figure>
       ) : null}
+      {status ? <TurnStatusView message={message} status={status} t={t} turn={turn} /> : null}
     </article>
   );
 }

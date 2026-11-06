@@ -194,8 +194,13 @@ export async function available() {
 function denialCommand(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return String(input.command ?? "").trim();
-  // Another tool that runs a command (Monitor) shows the command on its card; an MCP tool its arguments.
+  // Another tool that runs a command (Monitor) shows the command on its card. A connector (MCP)
+  // tool always shows all of its arguments, since one approval covers exactly those (gateKey).
   const name = String(denial?.tool_name ?? "Tool");
+  if (/^mcp__/.test(name)) {
+    const args = Object.keys(input).length ? JSON.stringify(input) : "";
+    return `${name}${args ? ` ${args.length > 300 ? `${args.slice(0, 299)}…` : args}` : ""}`;
+  }
   const target =
     (typeof input.command === "string" ? input.command : "") ||
     input.file_path ||
@@ -203,7 +208,7 @@ function denialCommand(denial) {
     input.path ||
     input.url ||
     input.query ||
-    (/^mcp__/.test(name) && Object.keys(input).length ? JSON.stringify(input).slice(0, 300) : "");
+    "";
   return `${name}${target ? ` ${target}` : ""}`;
 }
 
@@ -381,6 +386,18 @@ async function converse(bin, settingsFile, listFile, turn, io) {
       }
     }
     if (approved.length === 0 || !sessionId) return;
+    // The last round: the approved steps would need another round, so the turn ends here and
+    // says so (the page shows "Ended after N approval rounds without a final answer").
+    if (round === MAX_ROUNDS - 1) {
+      // Each step approved in this last round gets its own end, so the harness's "The agent ran
+      // this step itself" line (turns.mjs, for a granted step with no result) is not added to it.
+      for (const denial of approved) {
+        const permissionId = approvedIds.get(denialCommand(denial));
+        if (permissionId) io.emit({ type: "tool_end", permissionId, undelivered: true, output: "Approved, but the turn ended before Claude Code was given this step." });
+      }
+      io.emit({ type: "thinking", text: `Stopped after ${MAX_ROUNDS} approval rounds; the steps approved last were not handed back to Claude Code.`, roundsExhausted: MAX_ROUNDS });
+      return;
+    }
     for (const rule of approved.map(allowRule)) if (!allow.includes(rule)) allow.push(rule);
     approvedKeys.push(...approved.map((denial) => gateKey(denial.tool_name, denial.tool_input)).filter((key) => key !== null));
     io.emit({ type: "thinking", text: "Resume the session with the approved tools." });

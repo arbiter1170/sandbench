@@ -24,7 +24,9 @@ export function effectiveDriver(input: { bot: Pick<Bot, "driver" | "skills">; de
   const pick = (id: string) => list.find((item) => item.id === id && item.ok);
   if (input.defaultDriver) {
     const chosen = pick(input.defaultDriver);
-    if (chosen) return chosen;
+    // A chosen default that can't run now is never replaced by a provider's driver (UX P2, I-2):
+    // the reply shows Couldn't start instead. The provider rules are for bots with no agent chosen.
+    return chosen;
   }
   if (input.route.provider === "anthropic" && input.route.ready) return pick("anthropic");
   if (input.route.provider === "openai_compat" && input.route.ready && input.bot.skills.includes("computer")) return pick("http");
@@ -95,7 +97,8 @@ export type ContextKey =
   | "ctxRunsOnHarness" | "ctxRunsOnPlanner" | "ctxRunsOnOffline" | "ctxRunsOnPlannerOffline" | "ctxRunsOnRunner" | "ctxChecked" | "ctxLastConnected" | "ctxNeverConnected"
   | "ctxReachable" | "ctxUnreachable" | "ctxRunnerOffline" | "ctxAgentUnavailableRunner" | "ctxToolsCli" | "ctxConnectorsRunner"
   | "ctxBadgeBot" | "ctxBadgeSettings" | "ctxBadgeProvider"
-  | "ctxAgentClaude" | "ctxAgentOther" | "ctxAgentUnavailable" | "ctxAgentUnavailableOffline" | "ctxAgentPlanner"
+  | "ctxAgentClaude" | "ctxAgentOther" | "ctxAgentUnavailable" | "ctxAgentUnavailableOffline" | "ctxAgentUnavailableOnRunner" | "ctxAgentPlanner"
+  | "ctxModelCouldntStart" | "ctxModelCouldntStartStandIn" | "ctxCouldntStartRunner" | "ctxToolsCouldntStart" | "ctxMemoryCouldntStart"
   | "ctxUnknownOffline" | "ctxModelAfterReply" | "ctxModelSent" | "ctxModelLast" | "ctxModelPlanner" | "ctxModelStandIn"
   | "ctxFolderBot" | "ctxFolderChannel" | "ctxFolderLast"
   | "ctxToolsClaude" | "ctxToolsDriver" | "ctxToolsPlanner"
@@ -217,14 +220,22 @@ export function sheetRows(input: {
       : agent.kind === "unavailable" && checking
         ? `${agent.name} · ${t("ctxChecking")}`
         : agent.kind === "unavailable"
-        ? fill(t(offline ? (connection.runner ? "ctxAgentUnavailableRunner" : "ctxAgentUnavailableOffline") : "ctxAgentUnavailable"), { name: agent.name, detail: agent.detail ? `: ${agent.detail}` : "" })
+        ? fill(t(offline ? (connection.runner ? "ctxAgentUnavailableRunner" : "ctxAgentUnavailableOffline") : connection.runner ? "ctxAgentUnavailableOnRunner" : "ctxAgentUnavailable"), { name: agent.name, detail: agent.detail ? `: ${agent.detail}` : "" })
         : fill(t(agent.id === "claude" ? "ctxAgentClaude" : "ctxAgentOther"), { name: agent.name });
 
   // Offline, nothing is known (the stored keys are read through the harness too). A chosen driver
-  // that can't run now: the planner answers, with the planner's model.
+  // that can't run now: nothing answers (Couldn't start, UX P2); a one-time planner answer, which
+  // the person can choose on that message (not with the runner), uses the planner's model.
+  const couldntStart = agent.kind === "unavailable" && !checking;
   const model = offline
     ? unknown
-    : agent.kind === "planner" || (agent.kind === "unavailable" && !checking)
+    : couldntStart
+      ? connection.runner
+        ? fill(t("ctxCouldntStartRunner"), { name })
+        : route.ready
+          ? fill(t("ctxModelCouldntStart"), { model: route.model })
+          : t("ctxModelCouldntStartStandIn")
+    : agent.kind === "planner"
       ? route.ready
         ? fill(t("ctxModelPlanner"), { model: route.model })
         : t("ctxModelStandIn")
@@ -242,7 +253,11 @@ export function sheetRows(input: {
 
   // Codex and Grok run their own commands; what they send to Sandbench always asks (autoReview.mjs).
   const tools =
-    agent.kind === "planner" || agent.kind === "unavailable"
+    couldntStart
+      ? connection.runner
+        ? fill(t("ctxCouldntStartRunner"), { name })
+        : fill(t("ctxToolsCouldntStart"), { name })
+      : agent.kind === "planner" || agent.kind === "unavailable"
       ? t("ctxToolsPlanner")
       : agent.id === "claude"
         ? t("ctxToolsClaude")
@@ -273,6 +288,8 @@ export function sheetRows(input: {
       ? unknown
       : isDriver
         ? t("ctxMemoryDriver")
+        : couldntStart
+          ? fill(t("ctxMemoryCouldntStart"), { name })
         : route.ready
           ? t("ctxMemoryPlanner")
           : t("ctxMemoryStandIn");

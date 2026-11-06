@@ -38,6 +38,29 @@ ENTRIES START BELOW
 - **Open questions for Vincent or the Supervisor:** none.
 - **Next step:** merge after #38 and #39; the connector scope can become exact-call wording once #38 lands.
 
+### Session 10 · 2026-11-06 10:30 ET · UX P2: turn status line, Couldn't start, one-time planner answer · done
+- **Branch / PR / head sha:** `claude/ux-p2-turn-status` · PR opened right after this commit. Cut from `deploy/vercel` `70bf68b`, merged with `a648f9e` (after #37).
+- **Release:** Vincent released P2 in chat on 2026-11-06.
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** built by a Claude Code subagent, reviewed by another, fixed, and checked here. Every assistant message gets one status line (icon shape, state word, next action) for S1-S12 from the #26 table; "Receiving" and the per-token live region are gone. The silent planner fallback is replaced by Couldn't start (I-2) with a one-time, idempotent "Answer with the built-in planner this time" (I-3, I-6); other start failures are Start status unknown; "Ask again…" only refills the composer; "Check connection" only reads health and drivers; a send during a turn keeps the draft and says so. The Claude driver reports when approval rounds run out (S7) and ends the last round's approved steps honestly. A chosen Settings default that can't run is no longer replaced by a provider driver (changes P1's line and P5's block for that case). Unattended runs that can't start record why.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 152 passed; `npm run test:node` 265 pass, 0 fail, 32 skipped (Playwright linked locally); `npm run build` ok.
+- **Not run / could not run:** a real harness that drops mid-start; real devices and screen readers.
+- **Decisions made and why:** spec wording changed where the code makes it untrue (listed in the PR). Two tabs can still both claim a planner answer (U-4, last-writer-wins storage).
+- **Deviations from the plan:** besides the §8 files, `src/shell.tsx` (busy note, controls), `src/chatContext.ts` (one rule in `effectiveDriver`), `harness/drivers/claude.mjs` (S7 signal and honest last-round steps) and `harness/server.mjs` (run `detail`).
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** CI and review; then P3 (after #38) and P4.
+
+### Session 10 · 2026-11-06 10:20 ET · Claude Code gate: MCP keys before the command branch · review fix
+- **Branch / PR / head sha:** `claude/gate-mcp-keys` · PR opened right after this commit · code head see PR. Cut from `deploy/vercel` `a648f9e`.
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** the UX P3 review found that `gateKey` (`harness/drivers/claudeGate.mjs`, from #34) keyed a connector tool with a `command` argument as `Bash(<command>)`: approving it let the same tool run with other arguments, let a Bash call with that command through, and a Bash approval let the connector through. The `mcp__` branch now comes first. `denialCommand` labels connector cards with all their arguments.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 119 passed; `npm run test:node` 255 pass, 0 fail, 32 skipped (Playwright linked locally); `npm run build` ok. The two new gate tests fail with the old `claudeGate.mjs` and `claude.mjs`.
+- **Not run / could not run:** a live Claude Code turn with a real MCP server.
+- **Decisions made and why:** a separate PR from P3, because it changes approval behaviour in merged code and P3 is display only.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge before the P3 PR (its connector-card copy assumes this keying).
+
 ### Session 10 · 2026-11-06 09:05 ET · UX P5: effective setup in the Model tab · done
 - **Branch / PR / head sha:** `claude/ux-p5-effective-setup` · PR opened right after this commit · code head `09e9733`. Cut from `deploy/vercel` `70bf68b` (after #36, UX P1).
 - **Release:** Vincent released P5 in chat on 2026-11-06 ("yes it is", after merging #36), and P2 after it. #36 was merged by Claude at Vincent's request (merge commit `70bf68b`, head `9c166a5`, four checks green).
