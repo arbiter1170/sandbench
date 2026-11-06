@@ -1,5 +1,6 @@
 import { getFirebaseAuth } from "./firebase";
 import type { Connector, PointerAction, TriggerRun, WebhookTrigger } from "./types";
+import { DROPPED, followTurn, GAP, HARNESS_RESTARTED } from "./turnRecovery";
 
 const HEADERS = { "x-sandbench-client": "1" };
 // Runner mode (SB-01): VITE_RUNNER_URL (e.g. "/api") points at the hosted runner, and each
@@ -260,11 +261,40 @@ export function harnessInterrupt(turnId: string): Promise<{ ok: boolean }> {
   return call(`/turns/${turnId}/interrupt`, { method: "POST", body: "{}" });
 }
 
+export type TurnState = "running" | "finished" | "unknown";
+
+export function harnessTurnState(turnId: string): Promise<{ state: TurnState }> {
+  return call(`/turns/${turnId}`);
+}
+
 export function harnessPermit(permissionId: string, allow: boolean): Promise<{ ok: boolean }> {
   return call(`/permissions/${permissionId}`, { method: "POST", body: JSON.stringify({ allow }) });
 }
 
+/** A local turn whose events stopped reaching the page for good; the message says why. */
+export class TurnLostError extends Error {}
+
+/**
+ * Follow a turn's events until `onEvent` returns true (done or error). A dropped stream is
+ * resumed from the last event seen; throws TurnLostError when the harness restarted or stays
+ * unreachable (src/turnRecovery.ts).
+ */
 export async function harnessEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
+  // The runner keeps a turn going without the tab and has no GET /turns/<id>: one stream, as before.
+  if (runnerMode) return streamEvents(turnId, after, signal, onEvent);
+  const result = await followTurn<AgentEvent>({
+    after,
+    signal,
+    subscribe: (from, handle) => streamEvents(turnId, from, signal, handle),
+    state: async () => (await harnessTurnState(turnId)).state,
+    onEvent,
+  });
+  if (result === "gone") throw new TurnLostError(HARNESS_RESTARTED);
+  if (result === "dropped") throw new TurnLostError(DROPPED);
+  if (result === "gap") throw new TurnLostError(GAP);
+}
+
+async function streamEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
   const response = await fetch(`${BASE}/events?turn=${turnId}&after=${after}`, { headers: await authHeaders(), signal });
   if (!response.ok || !response.body) throw new Error(`The event stream returned ${response.status}.`);
   const reader = response.body.getReader();
