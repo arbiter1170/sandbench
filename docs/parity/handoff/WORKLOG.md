@@ -26,6 +26,18 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 09:05 ET · UX P5: effective setup in the Model tab · done
+- **Branch / PR / head sha:** `claude/ux-p5-effective-setup` · PR opened right after this commit · code head `09e9733`. Cut from `deploy/vercel` `70bf68b` (after #36, UX P1).
+- **Release:** Vincent released P5 in chat on 2026-11-06 ("yes it is", after merging #36), and P2 after it. #36 was merged by Claude at Vincent's request (merge commit `70bf68b`, head `9c166a5`, four checks green).
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** `a4d7e44` adds an "Effective setup" block at the top of the bot's Model tab: Agent, Model, Working folder, Permission mode, Auto-review list, Shared instructions, Skills, Memory, Connectors, each with where the value comes from and one link to where it is changed today (this tab, Customize, Work, Team, Settings); no new tab, no new controls. The bot's Agent select now reads "Use default · Claude Code (CLI)" (or "· Built-in planner") for the empty value, which is unchanged. Library skills the harness doesn't list are counted ("1 not found on disk"); memory that can't be read says so; both display only. `09e9733` fixes an independent review's 2 MEDIUM and the LOW findings: the page sends the route's model with every driver turn, so "Chosen by Claude Code" was false (now "claude-opus-5 · sent to Claude Code" or "Claude Code picks its own model (grok-3 is not one it takes)", via `driverModel`, checked against `mapCliModel`); a group chat's folder now goes through `safeWorkspacePath` like `roomFolder` (an unsafe "../outside" reads "workspace root"); both fixed in P1's line and sheet too. Also: connector, memory (up to 8 files, none without a model key) and permission-mode ("ask" is the default) wording; no "offline" before the first health answer; runner and failed skills lists; results tagged with their bot; links described by their row.
+- **Tests run (real results):** `npm run typecheck` clean. `npm run test:web` → 119 passed (`src/effectiveSetup.test.ts` 12: fixtures F-P5-a..d, AC2-AC4, group chat, driver model vs `mapCliModel`, review fixes). `npm run test:node` → 285 tests, 253 pass, 0 fail, 32 skipped (Playwright linked locally from the container's global install, not committed; `ui-layout` 14 pass with the block on the desktop fixture). `npm run build` ok.
+- **Not run / could not run:** real phones, screen readers, Windows keyboard/IME/zoom (spec §9); DB tests, compose, gitleaks (CI).
+- **Decisions made and why:** where the spec's Model wording ("Chosen by") did not match the code, the code wins: the model is sent and the driver keeps or drops it. The Team link opens the Team panel on its first tab; auto-review rules and connectors are in its other tabs (a direct tab link would need a change to `studio.tsx`, outside P5).
+- **Deviations from the plan:** `src/chatContext.ts` (P1's file) gained `driverModel` and `channelFolder` and its model and folder rows changed with the review fix; `src/chatContext.test.ts` updated.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** CI and review of this PR; then P2 (released).
+
 ### Session 10 · 2026-11-06 08:05 ET · UX P1: context line and "How this chat runs" sheet · done
 - **Branch / PR / head sha:** `claude/ux-p1-context-line` · PR opened right after this commit · code head `a4c2a9a`. Cut from `deploy/vercel` `dd741af`.
 - **Release:** the #26 handoff gates every packet on Vincent's written acceptance naming it. Vincent released P1 in chat on 2026-11-06 ("Yes, P1 is released"); the spec PR #26 itself is still open.
