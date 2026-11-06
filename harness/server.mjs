@@ -81,7 +81,6 @@ $k = [byte]$env:SB_VK
 Write-Output "Pressed key $k"`;
 
 mkdirSync(WORKSPACE, { recursive: true });
-writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
 
 function workspacePath(relative) {
   if (typeof relative !== "string" || !relative.trim() || relative.length > 240) return null;
@@ -896,7 +895,15 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// A harness that can't get the port must not touch the token: another one is using it.
+server.on("error", (error) => {
+  if (error.code !== "EADDRINUSE") throw error;
+  console.error(`Port ${PORT} is in use, so a harness is probably already running. Stop it first; its token was left alone.`);
+  process.exit(1);
+});
+
 server.listen(PORT, "127.0.0.1", () => {
+  writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
   console.log(`Sandbench harness on http://127.0.0.1:${PORT}`);
   console.log(`Commands run in ${WORKSPACE}`);
 });
