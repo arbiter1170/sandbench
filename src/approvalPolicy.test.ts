@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { autoApproved, initialApprovalStatus } from "./approvalPolicy";
+import { readFileSync } from "node:fs";
+import { addAutoReviewRule, autoApproved, initialApprovalStatus } from "./approvalPolicy";
 import { CAPABILITIES } from "./capabilities";
 import type { ApprovalMode } from "./types";
 import type { StepAction } from "./work";
@@ -75,5 +76,30 @@ describe("capability map approval rows", () => {
     expect(autoApproved("Get-ChildItem src", ["Get-ChildItem"]) && !autoApproved("git status", ["git"])).toBe(true);
     expect(row("Computer use (local exec daemon, window capture)")).toMatch(/always wait, whatever the bot's permission mode/);
     for (const action of [click, typing, write, tool, question]) expect(status(action, "full")).toBe("pending");
+  });
+});
+
+describe("page wiring", () => {
+  const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
+
+  it("Studio > Auto-review adds a rule only through the shared normalizer", () => {
+    expect(addAutoReviewRule([], "  cat   notes.txt ")).toEqual(["cat notes.txt"]);
+    expect(addAutoReviewRule(["cat"], "cat")).toBeNull();
+    expect(addAutoReviewRule(["cat"], "Get-ChildItem")).toEqual(["cat", "Get-ChildItem"]);
+    for (const text of ["", "   ", "cat notes.txt | rm x", "./run.sh", "cat.exe x", "echo $HOME", 'cat "x"']) {
+      expect(addAutoReviewRule([], text)).toBeNull();
+    }
+    const studio = read("./studio.tsx");
+    expect(studio).toMatch(/const next = addAutoReviewRule\(studio\.autoApprove, rule\);\s*if \(!next\) return;\s*onStudio\(\{ autoApprove: next \}\);/);
+  });
+
+  it("every planner card starts from the shared policy with the Studio rules", () => {
+    const app = read("./App.tsx");
+    const body = app.slice(app.indexOf("function makeApproval("), app.indexOf("function makeApproval(") + 700);
+    expect(body).toMatch(/status: initialApprovalStatus\(\{/);
+    expect(body).toMatch(/rules: studioRef\.current\.autoApprove,/);
+    expect(body).toMatch(/mode: bot\?\.approvalMode,/);
+    expect(body).toMatch(/harness: Boolean\(harnessRef\.current\),/);
+    expect(body).toMatch(/unattendedPolicy: studioRef\.current\.unattended,/);
   });
 });

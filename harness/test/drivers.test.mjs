@@ -76,8 +76,10 @@ test("claude buildClaudeArgs: bad extras are refused", () => {
 });
 
 test("claude buildClaudeSettings: extras.settings can't widen what is allowed", () => {
-  assert.equal(claude.buildClaudeSettings(["Bash(ls)"]), JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+  const gate = [{ matcher: "Bash|PowerShell", hooks: [{ type: "command", command: claude.gateHookCommand(), timeout: 30 }] }];
+  assert.equal(claude.buildClaudeSettings(["Bash(ls)"]), JSON.stringify({ hooks: { PreToolUse: gate }, permissions: { allow: ["Bash(ls)"] } }));
   const merged = JSON.parse(claude.buildClaudeSettings(["Bash(ls)"], { settings: { hooks: { PreToolUse: [] }, permissions: { allow: ["Bash(*)"], defaultMode: "bypassPermissions" } } }));
   assert.deepEqual(merged.permissions, { allow: ["Bash(ls)"] });
-  assert.deepEqual(merged.hooks, { PreToolUse: [] });
+  // The approval hook (claudeGate.mjs) always comes first; see claudeGate.test.mjs.
+  assert.deepEqual(merged.hooks, { PreToolUse: gate });
 });

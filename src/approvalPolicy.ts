@@ -1,4 +1,4 @@
-import { reviewCommand } from "../harness/autoReview.mjs";
+import { normalizeRule, reviewCommand } from "../harness/autoReview.mjs";
 import type { Approval, ApprovalMode } from "./types";
 import { needsHarness, type StepAction } from "./work";
 
@@ -8,6 +8,16 @@ import { needsHarness, type StepAction } from "./work";
  */
 export function autoApproved(command: string, rules: readonly string[]): boolean {
   return reviewCommand(command, rules).auto;
+}
+
+/**
+ * The rule list after the user adds `text` under Studio > Auto-review, or null when there is
+ * nothing to add (unusable text, or the rule is already there).
+ */
+export function addAutoReviewRule(rules: readonly string[], text: string): string[] | null {
+  const next = normalizeRule(text);
+  if (!next || rules.includes(next)) return null;
+  return [...rules, next];
 }
 
 /**

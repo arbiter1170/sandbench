@@ -4,6 +4,8 @@
 //
 // A rule is a command prefix the user saved under Studio > Auto-review. The default is to ask:
 // a command skips the card only when it is positively validated. All of these must hold:
+//   0. A listed program that would read standard input (`cat` with no file) asks, whatever
+//      the rules say, because nothing ever types into it.
 //   1. It is one simple command, using only letters, digits, spaces and `_ - . / : = +`. These
 //      mean the same thing in PowerShell, bash and sh. Anything else always asks, including a
 //      backslash, which is a path separator in PowerShell but an escape in a POSIX shell. The
@@ -13,7 +15,8 @@
 //   4. A rule matches it word for word, either the whole command or a leading part of it. Only
 //      the program name ignores case: `-d` and `-D` are different commands.
 //   5. A rule that matches only a leading part counts only when the whole command fits that
-//      program's entry below, flag by flag and argument by argument. A flag or an argument
+//      program's entry below, flag by flag and argument by argument, and, when the rule names
+//      a file or folder, adds no other one. A flag or an argument
 //      shape that is not listed asks, so abbreviations and new options ask too. Paths must be
 //      relative and canonical. git is not listed: a repository's own config or attributes can
 //      make any git command run a program (core.fsmonitor, diff.external, a textconv driver),
@@ -29,7 +32,10 @@
 //   - An exact rule is taken literally apart from checks 1 to 3: it can use absolute paths, run
 //     project code (`npm test` runs what `package.json` says at that moment), or run a git
 //     command, with the repository-config risk above.
-//   - It sees only what reaches it: a driver CLI's own read tools produce no request.
+//   - It sees only what reaches it. Claude Code runs its own read-only shell commands (`cat`,
+//     `ls`, read-only `git`) without asking, so the driver adds a hook (drivers/claudeGate.mjs)
+//     that sends every Bash and PowerShell call here first. Claude Code's file tools (Read,
+//     Grep, Glob) read inside the turn folder without a request and never reach this gate.
 
 const SAFE = /^[A-Za-z0-9 _\-./:=+]+$/;
 const PROGRAM = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -41,7 +47,13 @@ const SENSITIVE = [
   /(^|[\\/])(proc|etc)([\\/]|$)/i,
   /^[\\/]dev([\\/]|$)/i,
   /^[\\/]{2}/,
-  /secrets\.json|harness-token|credential|[._]npmrc|[._]netrc|pgpass|\.pypirc|\.vault-token|\.gitconfig|\.claude\.json|\.envrc|_history|id_(rsa|dsa|ecdsa|ed25519)|\.(pem|key|p12|pfx|keystore)$|(^|[\\/])appdata([\\/]|$)|(^|[\\/])\.(git|ssh|aws|gnupg|docker|kube|azure|sandbench|claude|grok|codex|config)\.*([\\/]|$)|\.env([-_.]|$)/i,
+  /secrets\.json|harness-token|credential|[._]npmrc|[._]netrc|pgpass|\.pypirc|\.vault-token|\.gitconfig|\.claude\.json|\.envrc|_history|id_(rsa|dsa|ecdsa|ed25519)|(^|[\\/])appdata([\\/]|$)|(^|[\\/])\.(git|ssh|aws|gnupg|docker|kube|azure|sandbench|claude|grok|codex|config)\.*([\\/]|$)|\.env([-_.]|$)/i,
+  // Key and keystore files, Terraform state and variables (they hold provider secrets).
+  /\.(pem|key|p12|pfx|p8|ppk|jks|keystore|kdbx|gpg|tfstate|tfvars)(\.[A-Za-z0-9]+)?$/i,
+  // A bare repository (`repo.git/config`), any `.env...` file or folder (`.env2`, `.envs/prod`).
+  /\.git\.*([\\/]|$)|(^|[\\/])\.env[^\\/]*/i,
+  // Tool config files that hold passwords or tokens.
+  /(^|[\\/])(\.s3cfg|\.my\.cnf|my\.cnf|\.boto|\.htpasswd|\.terraformrc|terraform\.rc|\.dockercfg|kubeconfig|\.passwd-s3fs|\.rclone\.conf|rclone\.conf|\.git-credentials)([\\/]|$)/i,
 ];
 
 // A path can be attached to a parameter name, a revision or a short flag (`-Path:.env`,
@@ -76,14 +88,24 @@ const isRelative = (arg) => {
 /**
  * One program's validated form.
  *   flags: bare flags. values: flags that take the next word.
- *   counts: allows `-5`. positional: the shape of other words. max: how many of them.
+ *   counts: allows `-5`. positional: the shape of other words. min: how many are needed.
  *   anyCase: PowerShell parameters ignore case; other programs' flags do not.
+ * `check(args)` says whether the whole command fits. `positionals(args)` counts the words that
+ * are not flags or flag values, for a rule that may end before a flag's value.
  */
-function form({ flags = [], values = {}, counts = false, positional = null, min = 0, max = Infinity, anyCase = false }) {
+function form({ flags = [], values = {}, counts = false, positional = null, min = 0, anyCase = false }) {
   const key = (name) => (anyCase ? name.toLowerCase() : name);
   const flagSet = new Set(flags.map(key));
   const valueMap = new Map(Object.entries(values).map(([name, check]) => [key(name), check]));
-  return (args) => {
+  const positionals = (args) => {
+    let used = 0;
+    for (let index = 0; index < args.length; index += 1) {
+      if (valueMap.has(key(args[index]))) index += 1;
+      else if (!args[index].startsWith("-")) used += 1;
+    }
+    return used;
+  };
+  const check = (args) => {
     let used = 0;
     for (let index = 0; index < args.length; index += 1) {
       const arg = args[index];
@@ -99,16 +121,25 @@ function form({ flags = [], values = {}, counts = false, positional = null, min 
       }
       if (!positional || !positional(arg)) return false;
       used += 1;
-      if (used > max) return false;
     }
     return used >= min;
   };
+  // With no file, `cat`, `head`, `tail` and `wc` read standard input.
+  const readsInput = (args) => min > 0 && positionals(args) === 0;
+  return { check, positionals, readsInput };
 }
 
 const paths = { positional: isRelative };
+// Select-String with no -Path reads standard input.
+const hasPath = (args) => args.some((arg) => arg.toLowerCase() === "-path");
+const withPath = (inner) => ({ ...inner, check: (args) => hasPath(args) && inner.check(args), readsInput: (args) => !hasPath(args) });
 // With no file these read standard input, which nothing closes, so the turn would stall.
 const files = { positional: isRelative, min: 1 };
 
+// Only forms that mean the same thing in PowerShell and a POSIX shell. `ls -la` and `cat -n`
+// fail in PowerShell (its `ls` and `cat` are Get-ChildItem and Get-Content), and `type` is
+// Get-Content there but describes commands in sh, so those ask: a card is better than skipping
+// it for a command that then fails.
 const PROGRAMS = new Map(
   Object.entries({
     "get-childitem": form({ flags: ["-Recurse", "-File", "-Directory", "-Name"], values: { "-Path": isRelative, "-Filter": isPlain, "-Depth": isNumber }, ...paths, anyCase: true }),
@@ -120,14 +151,13 @@ const PROGRAMS = new Map(
     "get-psdrive": form({}),
     "test-path": form({ values: { "-Path": isRelative }, ...paths, anyCase: true }),
     "resolve-path": form({ values: { "-Path": isRelative }, ...paths, anyCase: true }),
-    "select-string": (args) => args.some((arg) => arg.toLowerCase() === "-path") && form({ values: { "-Pattern": isPlain, "-Path": isRelative }, anyCase: true })(args),
+    "select-string": withPath(form({ values: { "-Pattern": isPlain, "-Path": isRelative }, anyCase: true })),
     dir: form(paths),
-    ls: form({ flags: ["-l", "-a", "-A", "-h", "-R", "-1", "-la", "-al", "-lh", "-lah", "-alh"], ...paths }),
+    ls: form(paths),
     pwd: form({}),
     whoami: form({}),
     hostname: form({}),
-    cat: form({ flags: ["-n"], ...files }),
-    type: form(files),
+    cat: form(files),
     head: form({ values: { "-n": isNumber }, counts: true, ...files }),
     tail: form({ values: { "-n": isNumber }, counts: true, ...files }),
     wc: form({ flags: ["-l", "-w", "-c"], ...files }),
@@ -139,8 +169,8 @@ const PROGRAMS = new Map(
 export function readOnlyCommand(words) {
   const [head, ...args] = words;
   const name = String(head ?? "").toLowerCase();
-  const check = PROGRAMS.get(name);
-  return Boolean(check) && check(args);
+  const entry = PROGRAMS.get(name);
+  return Boolean(entry) && entry.check(args);
 }
 
 function words(text) {
@@ -166,10 +196,14 @@ export function reviewCommand(command, rules) {
     if (!ruleWords.length || ruleWords.length > parts.length) continue;
     if (ruleWords[0].toLowerCase() !== program) continue;
     if (!ruleWords.every((part, index) => index === 0 || part === parts[index])) continue;
-    // The bare name of a listed program is a shorter rule's job: bare `cat` would stall reading
-    // standard input, so a `cat` rule does not make it exact.
-    const bareListed = parts.length === 1 && PROGRAMS.has(program);
-    if (ruleWords.length === parts.length && !bareListed) return { auto: true, why: "matches a rule exactly", rule };
+    // A listed program given no file would read standard input (`cat`, `cat -n`, `head -n 1`),
+    // which waits for the turn's timeout, so even a rule for exactly that does not run it.
+    const entry = PROGRAMS.get(program);
+    if (entry?.readsInput(parts.slice(1))) return { auto: false, why: "would read standard input" };
+    if (ruleWords.length === parts.length) return { auto: true, why: "matches a rule exactly", rule };
+    // A rule that names an argument (`cat notes.txt`, `Get-ChildItem src`) covers more flags for
+    // it, not more files: `cat notes.txt other.txt` asks.
+    if (entry && entry.positionals(ruleWords.slice(1)) > 0 && entry.positionals(parts.slice(1)) !== entry.positionals(ruleWords.slice(1))) continue;
     prefix = true;
   }
   if (!prefix) return { auto: false, why: "no rule matches" };

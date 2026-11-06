@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { normalizeRule, reviewCommand, reviewPermission } from "../autoReview.mjs";
+import { normalizeRule, readOnlyCommand, reviewCommand, reviewPermission } from "../autoReview.mjs";
 
 const DEFAULTS = ["Get-ChildItem", "Get-Date", "Get-Process", "Get-Location", "dir", "ls", "pwd"];
 const auto = (command, rules = DEFAULTS) => reviewCommand(command, rules).auto;
@@ -14,7 +14,7 @@ test("the default rules still cover the harmless commands they were meant for", 
     "Get-Process",
     "Get-Location",
     "dir src",
-    "ls -la src",
+    "ls src",
     "pwd",
   ]) {
     assert.equal(auto(command), true, command);
@@ -271,8 +271,53 @@ test("slash forms of dir ask: no shell here is cmd.exe, so they are root-level p
 });
 
 test("a program that would read standard input with no file asks, because it stalls the turn", () => {
-  for (const command of ["cat", "cat -n", "type", "head", "head -n 1", "tail", "tail -1", "wc", "wc -l", "Select-String -Pattern x"]) {
+  for (const command of ["cat", "cat -n", "head", "head -n 1", "tail", "tail -1", "wc", "wc -l", "Select-String -Pattern x"]) {
     assert.equal(auto(command, [command.split(" ")[0]]), false, command);
+    // Not even under a rule for exactly that command.
+    assert.deepEqual(reviewCommand(command, [command]), { auto: false, why: "would read standard input" }, command);
+  }
+  // With a file they read the file.
+  for (const command of ["cat notes.txt", "head -n 1 notes.txt", "tail -1 notes.txt", "wc -l notes.txt", "Select-String -Pattern x -Path notes.txt"]) {
+    assert.equal(auto(command, [command]), true, command);
+  }
+});
+
+test("forms that fail in PowerShell ask instead of skipping the card and then erroring", () => {
+  // `ls` and `cat` are Get-ChildItem and Get-Content there, and `type` describes a command in sh.
+  for (const [rule, command] of [
+    ["ls", "ls -la src"],
+    ["ls", "ls -l"],
+    ["ls", "ls -lah src"],
+    ["ls", "ls -1"],
+    ["cat", "cat -n notes.txt"],
+    ["type", "type notes.txt"],
+  ]) {
+    assert.equal(reviewCommand(command, [rule]).auto, false, command);
+  }
+  // A rule for exactly that command is still taken literally.
+  assert.equal(auto("ls -la src", ["ls -la src"]), true);
+  assert.equal(auto("type notes.txt", ["type notes.txt"]), true);
+});
+
+test("a rule that names a file covers more flags for it, not more files", () => {
+  for (const [rule, command] of [
+    ["cat notes.txt", "cat notes.txt other.txt"],
+    ["cat notes.txt", "cat other.txt notes.txt"],
+    ["Get-ChildItem src", "Get-ChildItem src lib"],
+    ["head -n 5 notes.txt", "head -n 5 notes.txt other.txt"],
+    ["Get-Content notes.txt", "Get-Content notes.txt other.txt"],
+  ]) {
+    assert.equal(auto(command, [rule]), false, `${rule} -> ${command}`);
+  }
+  for (const [rule, command] of [
+    ["Get-ChildItem src", "Get-ChildItem src -Recurse"],
+    ["Get-Content notes.txt", "Get-Content notes.txt -TotalCount 5"],
+    ["head notes.txt", "head notes.txt -n 5"],
+    ["head -n", "head -n 5 notes.txt"],
+    ["Get-ChildItem -Path", "Get-ChildItem -Path src -File"],
+    ["cat", "cat notes.txt other.txt"],
+  ]) {
+    assert.equal(auto(command, [rule]), true, `${rule} -> ${command}`);
   }
 });
 
@@ -326,11 +371,10 @@ test("a read-only command in the validated form auto-runs under a shorter rule",
     ["pwd", "pwd"],
     ["whoami", "whoami"],
     ["hostname", "hostname"],
-    ["type", "type notes.txt"],
     ["Get-Location", "Get-Location"],
     ["Get-Date", "Get-Date"],
-    ["cat", "cat -n notes.txt"],
-    ["ls", "ls -lah src"],
+    ["cat", "cat notes.txt"],
+    ["ls", "ls src"],
     ["dir", "dir src"],
     ["head", "head -n 5 notes.txt"],
     ["tail", "tail -20 notes.txt"],
@@ -599,4 +643,167 @@ test("rules typed in Studio keep every word so they can be specific", () => {
   assert.equal(normalizeRule("git status; rm -rf /"), "");
   assert.equal(normalizeRule("./script"), "");
   assert.equal(normalizeRule(""), "");
+});
+
+// Gaps found by the fourth review: each of these mutations of autoReview.mjs survived before.
+
+test("every character outside the alphabet asks, even under a rule for exactly that command", () => {
+  const allowed = new Set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 _-./:=+");
+  for (let code = 0; code < 128; code += 1) {
+    const char = String.fromCharCode(code);
+    if (allowed.has(char)) continue;
+    const command = `echo a${char}b`;
+    assert.equal(reviewCommand(command, [command]).auto, false, `char ${code}`);
+    assert.equal(normalizeRule(command), "", `char ${code}`);
+  }
+  for (const char of ["é", "ä", " ", " ", "；", ";"]) {
+    assert.equal(reviewCommand(`echo a${char}b`, [`echo a${char}b`]).auto, false, char);
+  }
+  for (const char of allowed) {
+    if (char === " ") continue;
+    assert.equal(reviewCommand(`echo a${char}b`, [`echo a${char}b`]).auto, true, `allowed ${char}`);
+  }
+});
+
+test("every PowerShell provider drive asks, even under a rule for exactly that command", () => {
+  for (const drive of ["env", "Env", "variable", "function", "alias", "cert", "HKLM", "hkcu", "HKEY_LOCAL_MACHINE", "hkey_users", "WSMan", "Registry"]) {
+    for (const command of [`Get-ChildItem ${drive}:`, `Get-Content ${drive}:x`, `Get-ChildItem -Path:${drive}:`, `Get-Item -LiteralPath:${drive}:x`, `Test-Path ${drive}:/x`]) {
+      assert.equal(reviewCommand(command, [command]).auto, false, command);
+    }
+  }
+  // A drive letter is not a provider drive.
+  assert.equal(reviewCommand("Get-ChildItem src", ["Get-ChildItem src"]).auto, true);
+});
+
+test("each flag value is checked against its shape", () => {
+  for (const [rule, command] of [
+    ["Get-ChildItem", "Get-ChildItem -Filter a/b"],
+    ["Get-ChildItem", "Get-ChildItem -Filter .hidden"],
+    ["Get-ChildItem", "Get-ChildItem -Depth 2a"],
+    ["Get-ChildItem", "Get-ChildItem -Depth -1"],
+    ["Get-ChildItem", "Get-ChildItem -Path ../x"],
+    ["Get-Date", "Get-Date -Format a/b"],
+    ["Get-Date", "Get-Date -Format -x"],
+    ["Get-Process", "Get-Process -Name a/b"],
+    ["Get-Process", "Get-Process -Id x"],
+    ["Get-Process", "Get-Process a/b"],
+    ["Get-Content", "Get-Content notes.txt -TotalCount x"],
+    ["Get-Content", "Get-Content notes.txt -Tail 1.5"],
+    ["Get-Content", "Get-Content -Path /x"],
+    ["Get-Item", "Get-Item -Path ./x"],
+    ["Test-Path", "Test-Path -Path a//b"],
+    ["Resolve-Path", "Resolve-Path -Path ../x"],
+    ["Select-String", "Select-String -Pattern a/b -Path notes.txt"],
+    ["Select-String", "Select-String -Pattern x -Path ../x"],
+    ["head", "head -n x notes.txt"],
+    ["head", "head -n -1 notes.txt"],
+    ["tail", "tail -n 1.5 notes.txt"],
+    ["tail", "tail -x notes.txt"],
+    ["echo", "echo a/b"],
+    ["echo", "echo .x"],
+  ]) {
+    assert.equal(auto(command, [rule]), false, command);
+  }
+  for (const [rule, command] of [
+    ["Get-ChildItem", "Get-ChildItem -Filter package.json -Depth 2"],
+    ["Get-Date", "Get-Date -Format HH:mm"],
+    ["Get-Process", "Get-Process -Name node -Id 42"],
+    ["Get-Content", "Get-Content notes.txt -Tail 3"],
+    ["head", "head -n 3 notes.txt"],
+    ["tail", "tail -n 3 notes.txt"],
+    ["echo", "echo v1.2+3"],
+  ]) {
+    assert.equal(auto(command, [rule]), true, command);
+  }
+});
+
+test("a flag with its value missing asks", () => {
+  for (const [rule, command] of [
+    ["Get-ChildItem", "Get-ChildItem -Path"],
+    ["Get-ChildItem", "Get-ChildItem src -Filter"],
+    ["Get-ChildItem", "Get-ChildItem src -Depth"],
+    ["Get-Date", "Get-Date -Format"],
+    ["Get-Process", "Get-Process -Name"],
+    ["Get-Process", "Get-Process -Id"],
+    ["Get-Content", "Get-Content notes.txt -TotalCount"],
+    ["Get-Content", "Get-Content notes.txt -Tail"],
+    ["Get-Item", "Get-Item -Path"],
+    ["Test-Path", "Test-Path -Path"],
+    ["Resolve-Path", "Resolve-Path -Path"],
+    ["Select-String", "Select-String -Path notes.txt -Pattern"],
+    ["head", "head notes.txt -n"],
+    ["tail", "tail notes.txt -n"],
+  ]) {
+    assert.equal(auto(command, [rule]), false, command);
+  }
+});
+
+test("a path argument must be relative and canonical for every program that takes one", () => {
+  const programs = ["Get-ChildItem", "Get-Content", "Get-Item", "Test-Path", "Resolve-Path", "dir", "ls", "cat", "head", "tail", "wc"];
+  for (const program of programs) {
+    for (const bad of ["../x", "..", "x/..", "./x", "a//b", "a/", "/x", "x.", "a/./b", "CON", "nul.txt", "Lpt1", "com3.log", "-x"]) {
+      assert.equal(auto(`${program} ${bad}`, [program]), false, `${program} ${bad}`);
+    }
+    for (const good of ["notes.txt", "src/a.ts", "a-b_c.d", "connect.txt", "nullish.md"]) {
+      const command = `${program} ${good}`;
+      assert.equal(auto(command, [program]), true, command);
+    }
+  }
+  for (const program of ["Get-ChildItem", "Get-Content", "Get-Item", "Test-Path", "Resolve-Path"]) {
+    assert.equal(auto(`${program} -Path ../x`, [program]), false, program);
+    assert.equal(auto(`${program} -path notes.txt`, [program]), true, `${program} lower-case -path`);
+  }
+  assert.equal(auto("Get-ChildItem .", ["Get-ChildItem"]), true);
+});
+
+test("the program name must be a plain name, under every kind of rule", () => {
+  for (const command of ["./cat notes.txt", "bin/cat notes.txt", "cat.exe notes.txt", "1cat notes.txt", "-cat notes.txt", "C:cat notes.txt"]) {
+    assert.equal(reviewCommand(command, [command, "cat"]).auto, false, command);
+    assert.equal(normalizeRule(command), "", command);
+  }
+  assert.equal(normalizeRule("  cat   notes.txt "), "cat notes.txt");
+  assert.equal(normalizeRule("Get-ChildItem"), "Get-ChildItem");
+  assert.equal(normalizeRule(""), "");
+});
+
+test("more credential files ask, under a shorter rule and as an exact rule", () => {
+  for (const file of ["repo.git/config", "repo.git", ".envs/prod", ".env2", ".environment", "key.ppk", "store.jks", "terraform.tfstate", "x.tfstate.backup", "prod.tfvars", "vars.tfvars.json", "db.kdbx", "k.p8", "s.gpg", ".s3cfg", ".my.cnf", "my.cnf", ".boto", "a/.htpasswd", ".terraformrc", ".dockercfg", "kubeconfig", ".rclone.conf", ".passwd-s3fs", "KEY.PPK"]) {
+    assert.equal(auto(`cat ${file}`, ["cat"]), false, file);
+    assert.equal(auto(`cat ${file}`, [`cat ${file}`]), false, `exact ${file}`);
+    assert.equal(auto(`Get-Content -Path ${file}`, ["Get-Content"]), false, `Get-Content ${file}`);
+  }
+  for (const file of ["notes.txt", "src/env.ts", "environment.md", "docs/git.md", "my.git.notes", "envoy.yaml", "docs/keys.md", "boto.md", "tfvars.md", "kubeconfig.md", "src/digit.ts"]) {
+    assert.equal(auto(`cat ${file}`, ["cat"]), true, file);
+  }
+});
+
+test("a path joined with = or : is still checked, even as an exact rule", () => {
+  for (const command of ["echo a=.env", "echo x=id_rsa", "echo HEAD:.env", "echo a=b=.ssh/x", "Get-ChildItem -Filter=.env"]) {
+    assert.equal(reviewCommand(command, [command]).auto, false, command);
+  }
+});
+
+test("flags outside PowerShell keep their case, and unlisted flags ask", () => {
+  for (const command of ["head -N 5 notes.txt", "wc -L notes.txt", "wc -W notes.txt", "wc --files0-from notes.txt", "Get-ChildItem -Force", "Get-ChildItem -Hidden", "Get-ChildItem -Attributes Hidden", "Get-Content -Raw notes.txt", "Get-Content -Stream x notes.txt"]) {
+    assert.equal(auto(command, [command.split(" ")[0]]), false, command);
+  }
+  for (const command of ["head -5 notes.txt", "tail -5 notes.txt", "get-childitem -recurse", "GET-CONTENT -TOTALCOUNT 2 notes.txt"]) {
+    assert.equal(auto(command, [command.split(" ")[0]]), true, command);
+  }
+});
+
+test("a rule that is not a string is ignored", () => {
+  for (const rule of [["cat"], 5, null, undefined, { 0: "cat" }, true]) {
+    assert.equal(reviewCommand("cat notes.txt", [rule]).auto, false, JSON.stringify(rule));
+  }
+  assert.equal(reviewCommand("cat notes.txt", "cat").auto, false);
+});
+
+test("readOnlyCommand alone refuses forms that would read standard input", () => {
+  for (const words of [["cat"], ["head", "-n", "1"], ["wc", "-l"], ["Select-String", "-Pattern", "x"], ["rm", "x"], [], ["type", "notes.txt"]]) {
+    assert.equal(readOnlyCommand(words), false, words.join(" "));
+  }
+  for (const words of [["cat", "notes.txt"], ["Select-String", "-Pattern", "x", "-Path", "notes.txt"], ["pwd"], ["ls"]]) {
+    assert.equal(readOnlyCommand(words), true, words.join(" "));
+  }
 });
