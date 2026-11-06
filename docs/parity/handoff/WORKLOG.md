@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 11 · 2026-11-06 14:40 ET · Fix blank page under `npm run dev` · done
+- **Branch / PR / head sha:** `claude/dev-harness-import` · PR opened right after this commit · cut from `deploy/vercel` `e4f3fff`
+- **Checks on the head:** pending on push
+- **What was done:** Vincent reported localhost as a white screen. Since #29, `src/approvalPolicy.ts` imports `../harness/autoReview.mjs`. In dev the browser fetches that by URL, and the `/harness` proxy in `vite.config.ts` answered 403 because the request has no client header, so `#root` stayed empty. Builds bundle the import, so production and the build-based layout tests never saw it. The proxy now lets Vite serve a GET for a `.mjs` path with no client header; such a request was never a valid harness call, and it does not reach the harness or get the token. New `harness/test/devProxy.test.mjs` starts the real dev config.
+- **Tests run (real results, Windows, Node 24):** new test without the fix: 1 fail (expected 200, actual 403); with it: 3 pass. Headless Edge against the fixed dev server: `#root` renders (it shows the Firebase setup message, since that worktree has no `.env.local`); before the fix `#root` had 0 children. `npm run typecheck` clean. CI is the Linux result.
+- **Not run / could not run:** on this Windows checkout (CRLF), `test:web` has 2 `src/turnStatus.test.ts` failures, also on untouched `e4f3fff`; 4 harness tests also fail here (memory day log, teammates row, gate hook list, secrets `.bak`). Not fixed in this PR; next on the list. The harness tests are not a clean Windows baseline.
+- **Decisions made and why:** a narrow bypass rather than moving the shared module, which the harness must keep importing without `src/`.
+- **Open questions for Vincent or the Supervisor:** STOP point 10 report: merges made through GitHub put Vincent's personal Gmail in the merge commit's author field on this public repo (43 author and 7 committer entries on `deploy/vercel`, including Claude's merges of #38–#43 and #26). No tracked file contains it. History is not rewritten. Vincent then said in chat: "you can merge using my email". His GitHub "Keep my email addresses private" setting would change future web merges if he wants that.
+- **Merges recorded late:** with Vincent's approval, #43 (head `498e92a`, merge `aabdad0`) and #26 (head `5b2bff4`, merge `e4f3fff`), four checks green on each. #26's branch had the base merged in first (`5b2bff4`); its diff stayed 8 spec files.
+- **Next step:** merge this once its checks are green; restart the local harness (it was started Nov 5, before #38 and #42); look at the Windows test failures.
+
 ### Session 10 · 2026-11-06 12:15 ET · CI: Playwright install can't hang the job; close #23–#28 replacements; hand-off to the local CLI · done
 - **Branch / PR / head sha:** `claude/ci-playwright-timeout` · PR opened right after this commit · cut from `deploy/vercel` `4b5c016`
 - **Checks on the head:** pending on push (this PR's own run is the test of the new step)
