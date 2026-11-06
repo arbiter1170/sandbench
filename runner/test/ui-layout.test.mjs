@@ -191,3 +191,29 @@ describe("chat layout stays inside the viewport", () => {
     });
   }
 });
+
+// UX P1: the context line under the chat header. In the fixture the harness is offline, which
+// gives the longest connection word ("Local harness not reachable").
+describe("chat context line", () => {
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name}: the connection word is never cut and the line is a full-width 44 px target`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      await page.goto(base, { waitUntil: "load", timeout: 20_000 });
+      await page.waitForSelector(".chat-context", { timeout: 10_000 });
+      await page.evaluate(() => document.fonts.ready);
+      const line = await page.evaluate(() => {
+        const button = document.querySelector(".chat-context");
+        const word = button.querySelector(".ctx-conn");
+        const box = button.getBoundingClientRect();
+        return { height: box.height, right: box.right, text: word.textContent, cut: word.scrollWidth > word.clientWidth + 1, wordRight: word.getBoundingClientRect().right };
+      });
+      await context.close();
+      assert.match(line.text, /Local harness not reachable/);
+      assert.equal(line.cut, false, "the connection word is truncated");
+      assert.ok(line.wordRight <= line.right + 0.5, "the connection word runs past the line");
+      assert.ok(line.height >= 44, `the line is ${line.height}px tall`);
+      assert.ok(line.right <= viewport.width + 0.5, "the line runs past the window");
+    });
+  }
+});

@@ -123,6 +123,9 @@ function Fixture() {
       workingBotId={null}
       studio={studio}
       harness={null}
+      healthLog={{ checkedAt: at }}
+      onRecheckHarness={async () => false}
+      runner={false}
       callActive={false}
       messages={messages}
       onApproval={noop}

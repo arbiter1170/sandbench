@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { routeFor } from "./assistant";
 import { BotMark } from "./bots";
+import { chatAgent } from "./chatContext";
+import { ChatContext, type ContextMember } from "./chatContextView";
 import { harnessBotMemory, harnessSkills, harnessWriteBotMemory, harnessWriteBotSoul, type AgentDriver, type HarnessHealth } from "./harness";
 import type { Key } from "./i18n";
 import { AvatarEditor, ComputerPanel, LibraryPanel } from "./studio";
@@ -35,6 +38,11 @@ export function Workspace(props: {
   workingBotId: string | null;
   studio: Studio;
   harness: HarnessHealth | null;
+  /** When the health poll last answered, and when the harness was last reachable (context line). */
+  healthLog: { checkedAt?: number; lastOkAt?: number };
+  /** "Check again" in the context sheet: re-reads /health and /drivers; true when reachable. */
+  onRecheckHarness: () => Promise<boolean>;
+  runner: boolean;
   callActive: boolean;
   hub: ReactNode;
   onApproval: (messageId: string, approve: boolean, answer?: string) => void;
@@ -117,6 +125,23 @@ export function Workspace(props: {
   const [channelMembers, setChannelMembers] = useState<string[]>([]);
   const channels = props.threads.filter((thread) => thread.memberIds);
   const names = useMemo(() => new Map(bots.map((item) => [item.id, item.name])), [bots]);
+  // Who answers each bot in this chat, and the inputs of its sheet rows (src/chatContext.ts).
+  const contextMember = (member: Bot, own: Message[]): ContextMember => {
+    const route = routeFor(member, settings, props.keys);
+    return {
+      name: member.name,
+      agent: chatAgent({ bot: member, defaultDriver: settings.defaultAgentDriver, route, drivers: props.drivers, harnessUp: Boolean(props.harness) }),
+      sheet: { bot: member, route, messages: own },
+    };
+  };
+  const connection = {
+    state: props.healthLog.checkedAt === undefined ? ("checking" as const) : props.harness ? ("connected" as const) : ("offline" as const),
+    runner: props.runner,
+    checkedAt: props.healthLog.checkedAt,
+    lastOkAt: props.healthLog.lastOkAt,
+    platform: props.harness?.platform,
+    workspace: props.harness?.workspace,
+  };
   const send = (text: string) => {
     if (!text.trim() && !props.hasPending) return;
     if (channel) props.onSendChannel(channel.id, text);
@@ -453,6 +478,15 @@ export function Workspace(props: {
                 </div>
                 <button type="button" className="text-btn" onClick={() => { if (window.confirm(t("remove"))) props.onRemoveChannel(channel.id); }}>{t("remove")}</button>
               </header>
+            ) : null}
+            {channel ? (
+              <ChatContext
+                t={t}
+                channel={channel}
+                connection={connection}
+                members={bots.filter((member) => channel.memberIds?.includes(member.id)).map((member) => contextMember(member, messages.filter((message) => message.authorBotId === member.id)))}
+                onRecheck={props.onRecheckHarness}
+              />
             ) : bot ? (
               <header className="chat-head">
                 <BotMark bot={bot} size="1.7rem" />
@@ -465,6 +499,18 @@ export function Workspace(props: {
                   {props.callActive ? t("endCall") : t("call")}
                 </button>
               </header>
+            ) : null}
+            {!channel && bot ? (
+              <ChatContext
+                t={t}
+                connection={connection}
+                members={[contextMember(bot, messages)]}
+                onOpenSettings={() => {
+                  setPanel("model");
+                  props.onFocus("side");
+                }}
+                onRecheck={props.onRecheckHarness}
+              />
             ) : null}
             <div className="scroll">
               {messages.length === 0 ? (
