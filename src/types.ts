@@ -68,6 +68,12 @@ export type Approval = {
   file?: ApprovalFile;
   memory?: ApprovalMemory;
   permissionId?: string;
+  /** Driver cards: the `tool` the harness put on the permission_request (Claude Code's tool name, "codex", "grok"; none for http/anthropic). */
+  agentTool?: string;
+  /** Denied when it was made, with nobody asked: an unattended run under the "skip" setting. */
+  autoDenied?: boolean;
+  /** A failed card that later got a result: what the card said before (for example the error from sending this page's answer). */
+  answerError?: string;
 };
 
 export type ActivityChip = { label: string; ms?: number; shotId?: string };

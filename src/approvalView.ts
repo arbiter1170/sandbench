@@ -32,12 +32,14 @@ export type CardEnding =
   | "approved-no-result-at-stop"
   | "approved-failed"
   | "denied-by-you"
+  | "denied-unattended"
   | "denied-source-unknown"
   | "stopped"
   | "stop-requested"
   | "no-decision"
   | "connection-lost"
   | "answer-unconfirmed"
+  | "already-closed"
   | "unavailable"
   | "unknown";
 /** An icon shape per ending, so state is never told by colour alone (the label is the word). */
@@ -83,8 +85,10 @@ export function deniedAt(cardId: string): number | undefined {
 
 // ---- What kind of request this is. ----
 
-// The Claude Code driver's own reason text (claude.mjs `converse`). Model text cannot set it on a
-// Claude card; another driver's reason can be model-written, so the command must also match.
+// A card is Claude Code's only when the harness's own `tool` field on the permission_request
+// (Approval.agentTool) names the tool, and the driver's reason text (claude.mjs `converse`) and
+// card text agree with it. Another driver's reason and command can be model-written, so they alone
+// prove nothing; a card saved before agentTool existed counts as not Claude Code's.
 const CLAUDE_REASON = /^Claude Code asked to use ([\w.:-]+)\.$/;
 const SHELL_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
 const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
@@ -94,16 +98,36 @@ const MCP_ARGS_SHOWN = 300;
 export type ClaudeRequest = { tool: string; target: string };
 
 /** The Claude Code tool and its target as the card shows them, or null for any other card. */
-export function claudeRequest(approval: Pick<Approval, "command" | "reason" | "permissionId">): ClaudeRequest | null {
-  if (!approval.permissionId) return null;
+export function claudeRequest(approval: Pick<Approval, "command" | "reason" | "permissionId" | "agentTool">): ClaudeRequest | null {
+  if (!approval.permissionId || !approval.agentTool) return null;
   const match = CLAUDE_REASON.exec(approval.reason ?? "");
-  if (!match) return null;
+  if (!match || match[1] !== approval.agentTool) return null;
   const tool = match[1];
   const command = approval.command ?? "";
   // denialCommand: Bash and PowerShell show the command alone; every other tool "<Tool> <target>".
   if (tool === "Bash" || tool === "PowerShell") return { tool, target: command };
   if (command !== tool && !command.startsWith(`${tool} `)) return null;
   return { tool, target: command.slice(tool.length).trim() };
+}
+
+// claude.mjs denialCommand shows an MCP call as one argument (command, file_path, notebook_path,
+// path, url or query, whichever comes first) or, when it has none of those, as all its arguments
+// in JSON cut at 300 characters. A JSON object that still has one of those keys is that one value.
+const SINGLE_TARGET_KEYS = ["command", "file_path", "notebook_path", "path", "url", "query"];
+
+/** What an MCP card's target text is: all the arguments, all of them cut short, one value, or nothing. */
+export function mcpArguments(target: string): "full" | "cut" | "single" | "none" {
+  if (!target) return "none";
+  try {
+    const parsed: unknown = JSON.parse(target);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      return SINGLE_TARGET_KEYS.some((key) => typeof record[key] === "string" && record[key] !== "") ? "single" : "full";
+    }
+    return "single";
+  } catch {
+    return target.length === MCP_ARGS_SHOWN && target.startsWith('{"') ? "cut" : "single";
+  }
 }
 
 function claudeKind(tool: string): CardKind {
@@ -133,6 +157,8 @@ const LOST_IN_FLIGHT_END = " It may have run; check before running it again.";
 const NO_RESULT_AT_STOP = "No result came back before the turn stopped.";
 // harness/turns.mjs: the tool_end it publishes at turn end for a granted step with no result.
 export const SYNTHETIC_RESULT = "The agent ran this step itself; its result is in the reply.";
+// harness/server.mjs: POST /permissions/<id> for a request that is no longer waiting (404).
+export const NOT_WAITING = "That request is no longer waiting.";
 
 const between = (text: string, start: string, end: string) => text.slice(start.length, text.endsWith(end) ? text.length - end.length : undefined).trim();
 
@@ -140,15 +166,16 @@ type Ending = { ending: CardEnding; label: string; icon: CardIcon; detail?: stri
 
 function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Translate, local: { deniedAt?: number; time: (ms: number) => string }): Ending {
   const output = approval.output;
-  const who = approval.auto ? t("acWhoAuto") : t("acWhoApproved");
-  const approved = (key: Key, icon: CardIcon, extra: Partial<Ending> = {}, values: Record<string, string | number> = {}): Ending => ({
-    ending: "approved-recorded",
-    label: `${who} · ${fill(t(key), values)}`,
-    icon,
-    showOutput: false,
-    ...(approval.auto ? { detail: t("acAutoBody") } : {}),
-    ...extra,
-  });
+  // A failed card that later got a tool_end (App.tsx keeps the earlier text in answerError): the
+  // harness granted the request. After a 404 from this page's own answer, it was granted elsewhere.
+  const late = approval.answerError !== undefined;
+  const elsewhere = late && approval.answerError?.trim() === NOT_WAITING;
+  const who = approval.auto ? t("acWhoAuto") : elsewhere ? t("acWhoElsewhere") : t("acWhoApproved");
+  const lateNote = late ? (elsewhere ? t("acApprovedElsewhereBody") : t("acLateResultBody")) : "";
+  const approved = (key: Key, icon: CardIcon, extra: Partial<Ending> = {}, values: Record<string, string | number> = {}): Ending => {
+    const detail = [lateNote, approval.auto ? t("acAutoBody") : "", extra.detail ?? ""].filter(Boolean).join(" ");
+    return { ending: "approved-recorded", icon, showOutput: false, ...extra, label: `${who} · ${fill(t(key), values)}`, ...(detail ? { detail } : { detail: undefined }) };
+  };
   switch (approval.status) {
     case "pending":
       return { ending: "waiting", label: t("approvalPending"), icon: "clock", showOutput: false };
@@ -160,7 +187,7 @@ function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Tran
         return approved("acResultExit", "cross", { ending: "approved-exit", showOutput: true }, { code: approval.exitCode });
       }
       if (output.startsWith(NO_RESULT_AT_STOP)) {
-        return approved("acResultNoneAtStop", "stop", { ending: "approved-no-result-at-stop", detail: [approval.auto ? t("acAutoBody") : "", t("acNoResultAtStopBody")].filter(Boolean).join(" ") });
+        return approved("acResultNoneAtStop", "stop", { ending: "approved-no-result-at-stop", detail: t("acNoResultAtStopBody") });
       }
       if (output.startsWith(LOST_IN_FLIGHT)) {
         return {
@@ -174,11 +201,12 @@ function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Tran
       // No exit code: the harness's own end-of-turn record, or a result without one. Never "recorded".
       return approved("acResultNoneSeparate", "question", {
         ending: "approved-no-separate-result",
-        detail: [approval.auto ? t("acAutoBody") : "", t("acNoSeparateBody")].filter(Boolean).join(" "),
+        detail: t("acNoSeparateBody"),
         showOutput: output !== SYNTHETIC_RESULT && output.trim() !== "",
       });
     }
     case "denied":
+      if (approval.autoDenied) return { ending: "denied-unattended", label: t("acDeniedUnattended"), icon: "slash", detail: t("acDeniedUnattendedBody"), showOutput: false };
       return local.deniedAt !== undefined
         ? { ending: "denied-by-you", label: t("acDeniedByYou"), icon: "slash", detail: fill(t("acDeniedByYouBody"), { time: local.time(local.deniedAt) }), showOutput: false }
         : { ending: "denied-source-unknown", label: t("acDeniedUnknown"), icon: "slash", detail: t("acDeniedUnknownBody"), showOutput: false };
@@ -199,6 +227,8 @@ function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Tran
           showOutput: false,
         };
       }
+      // decideApproval: the harness said the request had already closed (404), so this answer did nothing.
+      if (output?.trim() === NOT_WAITING) return { ending: "already-closed", label: t("acAlreadyClosed"), icon: "minus", detail: t("acAlreadyClosedBody"), showOutput: false };
       // decideApproval: the answer could not be sent to the harness (the request may still be open).
       if (output) return { ending: "answer-unconfirmed", label: t("acAnswerUnconfirmed"), icon: "question", detail: fill(t("acAnswerUnconfirmedBody"), { error: output.trim() }), showOutput: false };
       return { ending: "unknown", label: t("acUnknown"), icon: "question", showOutput: false };
@@ -262,9 +292,13 @@ export function approvalView(
       approveLabel = t("acApproveChange");
     } else if (kind === "connector") {
       title = t("acTitleConnector");
-      if (target) field("target", "acFieldArguments", target, { code: true, ...(target.length >= MCP_ARGS_SHOWN ? { note: t("acArgsCut") } : {}) });
+      const args = mcpArguments(target);
+      if (args === "full") field("target", "acFieldArguments", target, { code: true });
+      else if (args === "cut") field("target", "acFieldArguments", target, { code: true, note: t("acArgsCut") });
+      else if (args === "single") field("target", "acFieldTarget", target, { code: true, note: t("acArgsOthersHidden") });
       effect = t("acEffectConnector");
-      scope = t("acScopeClaudeConnector");
+      // Only a card that shows every argument can say the approval is for exactly this call.
+      scope = args === "full" || args === "none" ? t("acScopeClaudeConnector") : t("acScopeClaudeConnectorPartial");
       approveLabel = t("acApproveCall");
     } else {
       title = fill(t("acTitleTool"), { tool });
@@ -275,7 +309,7 @@ export function approvalView(
     }
   } else if (agent === "driver") {
     title = t("acTitleAgent");
-    field("tool", "acFieldTool", t("acToolNotRecorded"));
+    field("tool", "acFieldTool", approval.agentTool || t("acToolNotRecorded"));
     field("target", "acFieldRequest", approval.command, { code: true });
     effect = t("acEffectCommand");
     scope = t("acScopeDriver");

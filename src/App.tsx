@@ -1382,7 +1382,7 @@ export function App({ user }: { user: User }) {
   }
 
   function makeApproval(action: StepAction, unattended: boolean, bot?: Bot): Approval {
-    return {
+    const approval: Approval = {
       ...approvalFields(action),
       status: initialApprovalStatus({
         action,
@@ -1393,6 +1393,8 @@ export function App({ user }: { user: User }) {
         unattendedPolicy: studioRef.current.unattended,
       }),
     };
+    // A card that starts denied was denied by the unattended "skip" setting (approvalPolicy.ts).
+    return approval.status === "denied" ? { ...approval, autoDenied: true } : approval;
   }
 
   function attachPrevious(threadId: string, messageId: string, approval: Approval | undefined) {
@@ -1759,6 +1761,9 @@ export function App({ user }: { user: User }) {
             status,
             permissionId: event.permissionId,
             ...(event.auto ? { auto: true, output: "…" } : {}),
+            ...(event.denied ? { autoDenied: true } : {}),
+            // The harness's own tool name for the request: the card trusts it over the reason text.
+            ...(typeof (event as { tool?: unknown }).tool === "string" ? { agentTool: (event as { tool?: string }).tool } : {}),
           };
           patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
           current = null;
@@ -1788,7 +1793,13 @@ export function App({ user }: { user: User }) {
               message.approval
                 ? {
                     ...message,
-                    approval: { ...message.approval, output: event.output ?? "", ...(event.code !== undefined ? { exitCode: event.code } : {}) },
+                    // A card that had failed (its answer could not be confirmed) keeps that text apart from the result.
+                    approval: {
+                      ...message.approval,
+                      ...(message.approval.status === "failed" ? { status: "approved" as const, answerError: message.approval.output ?? "" } : {}),
+                      output: event.output ?? "",
+                      ...(event.code !== undefined ? { exitCode: event.code } : {}),
+                    },
                     ...(thumb && thumb.length < 200_000 ? { screenThumb: thumb } : {}),
                   }
                 : message,

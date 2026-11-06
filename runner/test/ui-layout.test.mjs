@@ -356,7 +356,7 @@ describe("approval cards (UX P3)", () => {
       await context.close();
       assert.deepEqual(errors, [], "the fixture page threw");
       assert.equal(facts.focusInCard, false, "a card took focus");
-      assert.equal(facts.cards.length, 11);
+      assert.equal(facts.cards.length, 13);
       const endings = facts.cards.map((card) => card.ending);
       assert.equal(new Set(endings).size, endings.length, `two cards share an ending: ${endings.join(", ")}`);
       const labels = facts.cards.map((card) => card.label);
@@ -388,6 +388,23 @@ describe("approval cards (UX P3)", () => {
       for (const card of facts.cards.filter((item) => item.ending !== "waiting")) assert.equal(card.buttons.length, 0, `${card.ending} card has buttons`);
     });
   }
+
+  test("a click on Deny ends the waiting card as \"Denied by you\", without moving focus elsewhere", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=cards`, { waitUntil: "load", timeout: 20_000 });
+    const card = page.locator(".approval.pending");
+    await card.waitFor();
+    const id = await card.evaluate((node) => node.getAttribute("aria-labelledby"));
+    await card.getByRole("button", { name: "Deny" }).click();
+    const after = page.locator(`.approval:has([id="${id}"])`);
+    await after.locator(".approval-state", { hasText: "Denied by you" }).waitFor({ timeout: 5_000 });
+    const facts = await after.evaluate((node) => ({ ending: node.dataset.ending, buttons: node.querySelectorAll("button").length, detail: node.querySelector(".approval-detail")?.textContent ?? "" }));
+    await context.close();
+    assert.equal(facts.ending, "denied-by-you");
+    assert.equal(facts.buttons, 0, "the denied card still has buttons");
+    assert.match(facts.detail, /^You chose Deny at /);
+  });
 
   test("keyboard: Tab reaches Approve and then Deny, with a visible focus ring", async () => {
     const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
