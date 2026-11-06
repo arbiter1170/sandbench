@@ -24,7 +24,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Computer use (local exec daemon, window capture)",
-    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply",
+    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. Only commands covered by an auto-review rule skip the card; clicks, keystrokes, file changes, tool calls and questions always wait, whatever the bot's permission mode. File changes show the new text or a line diff first. Clicks use primary-screen pixels and attach a small screenshot to the reply",
     state: "partial",
   },
   {
@@ -34,7 +34,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Auto-review rules and approvals",
-    web: "Allow-list of read-only commands, plus a setting for unattended routines",
+    web: "Rules are exact commands, or a command name that then covers only built-in read-only forms, checked flag by flag; git commands only skip a card under a rule for exactly that command. Any other flag or argument asks, as do chained, piped, redirected, quoted, backslashed or expanded commands. Credential files and other sensitive locations ask even under a rule for exactly that command. The same check gates planner turns, Claude Code's shell commands (through a hook, since Claude Code runs read-only commands on its own) and the API drivers' commands; Claude Code's own Read, Grep and Glob tools still read inside the turn folder without a card, and Codex and Grok requests always ask. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
     state: "working",
   },
   {

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { addAutoReviewRule } from "./approvalPolicy";
 import { BotMark } from "./bots";
 import { getBlob } from "./db";
 import { connectorHeaders, harnessProbe, harnessProcesses, harnessScreen, type HarnessHealth, type ProcessReport } from "./harness";
@@ -1003,9 +1004,9 @@ function ReviewTab({ t, studio, onStudio }: { t: Copy; studio: Studio; onStudio:
         className="row-form"
         onSubmit={(event) => {
           event.preventDefault();
-          const next = rule.trim().split(/\s+/)[0];
-          if (!next || studio.autoApprove.includes(next)) return;
-          onStudio({ autoApprove: [...studio.autoApprove, next] });
+          const next = addAutoReviewRule(studio.autoApprove, rule);
+          if (!next) return;
+          onStudio({ autoApprove: next });
           setRule("");
         }}
       >

@@ -19,6 +19,8 @@ export function createShell(defaultCwd) {
     return new Promise((resolve) => {
       const started = Date.now();
       const child = spawn("/bin/bash", ["-c", command], { cwd, env: env ? { ...process.env, ...env } : process.env });
+      // Nothing types into a command: a program reading standard input sees its end at once.
+      child.stdin.end();
       let stdout = "";
       let stderr = "";
       let truncated = false;

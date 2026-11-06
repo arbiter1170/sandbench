@@ -2,10 +2,11 @@
 // `--output-format stream-json`. Tools Claude has not been allowed to use come back as
 // permission denials in the result event. Each denial becomes an approval card; approved
 // ones are allowed through a settings file and the session resumes.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { ALLOW_ENV, ASK, GATE_FILE, GATED_TOOLS, HOOK_FLAG } from "./claudeGate.mjs";
 
 export const id = "claude";
 export const label = "Claude Code (local CLI)";
@@ -71,12 +72,55 @@ export function buildClaudeArgs({ settingsFile, model, sessionId, extras = {} })
 }
 
 /**
- * The settings file's JSON. `extras.settings` is merged in, but `permissions` is always the
- * driver's own approved list: extras can never widen what Claude Code may run.
+ * The hook command that runs claudeGate.mjs. Claude Code passes it to a shell, so each path is
+ * quoted, and a path with a character that a shell would still expand inside quotes is refused.
  */
-export function buildClaudeSettings(allow, extras = {}) {
+export function gateHookCommand(node = process.execPath, gate = GATE_FILE) {
+  for (const part of [node, gate]) {
+    if (typeof part !== "string" || !path.isAbsolute(part) || /["$`%!\r\n]/.test(part)) throw new Error("The Claude Code approval hook cannot be set up from this install folder.");
+  }
+  return `"${node}" "${gate}" ${HOOK_FLAG}`;
+}
+
+/**
+ * The settings file's JSON. `extras.settings` is merged in, but `permissions` is always the
+ * driver's own approved list and the approval hook always runs first: extras can never widen
+ * what Claude Code may run or turn the hook off. Another PreToolUse hook can only add a "deny"
+ * or "ask", because Claude Code takes the strictest answer.
+ */
+export function buildClaudeSettings(allow, extras = {}, hookCommand = gateHookCommand()) {
   checkExtras(extras);
-  return JSON.stringify({ ...(extras.settings ?? {}), permissions: { allow } });
+  const { disableAllHooks: _off, ...settings } = extras.settings ?? {};
+  const hooks = settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks) ? settings.hooks : {};
+  const gate = { matcher: GATED_TOOLS.join("|"), hooks: [{ type: "command", command: hookCommand, timeout: 30 }] };
+  const preToolUse = [gate, ...(Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [])];
+  return JSON.stringify({ ...settings, hooks: { ...hooks, PreToolUse: preToolUse }, permissions: { allow } });
+}
+
+/**
+ * Run the hook the way Claude Code will, once for a command nobody approved and once for one
+ * that was, before a turn starts. Claude Code runs the call when a hook fails, so a hook that
+ * cannot start or answers wrongly stops the turn here instead.
+ */
+export function checkGate(node = process.execPath, gate = GATE_FILE) {
+  const ask = (allow, command) =>
+    spawnSync(node, [gate, HOOK_FLAG], {
+      input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
+      env: { ...process.env, [ALLOW_ENV]: JSON.stringify(allow) },
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    });
+  const refused = ask([], "cat sandbench-gate-check.txt");
+  const passed = ask(["Bash(cat sandbench-gate-check.txt)"], "cat sandbench-gate-check.txt");
+  let answer = null;
+  try {
+    answer = JSON.parse(refused.stdout);
+  } catch {
+    // Checked below.
+  }
+  const ok = refused.status === 0 && JSON.stringify(answer) === JSON.stringify(ASK) && passed.status === 0 && passed.stdout === "";
+  if (!ok) throw new Error("The Claude Code approval hook did not answer as expected, so the turn was not started.");
 }
 
 function isDesktopGui(full) {
@@ -150,7 +194,7 @@ export function normalizeEvent(raw) {
       if (part.type === "tool_use") {
         return [
           { type: "thinking", text: `Claude wants ${part.name}${part.input?.command ? `: ${part.input.command}` : ""}.` },
-          { type: "tool_use", toolUseId: part.id, label: denialCommand({ tool_name: part.name, tool_input: part.input }) },
+          { type: "tool_use", toolUseId: part.id, tool: part.name, label: denialCommand({ tool_name: part.name, tool_input: part.input }), rule: allowRule({ tool_name: part.name, tool_input: part.input }) },
         ];
       }
       return [];
@@ -172,24 +216,34 @@ export function normalizeEvent(raw) {
   return [];
 }
 
-function runOnce(bin, args, stdin, cwd, io, onEvent) {
+// `onEvent` returns false to stop the CLI at once.
+function runOnce(bin, args, stdin, cwd, io, onEvent, env) {
   return new Promise((resolve, reject) => {
     const windowsScript = process.platform === "win32" && bin.toLowerCase().endsWith(".cmd");
-    const child = spawn(bin, args, { cwd, windowsHide: true, shell: windowsScript, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(bin, args, { cwd, env, windowsHide: true, shell: windowsScript, stdio: ["pipe", "pipe", "pipe"] });
     const stop = () => child.kill();
     io.signal.addEventListener("abort", stop, { once: true });
     let buffer = "";
     let stderr = "";
+    let stopped = false;
     child.stdout.on("data", (chunk) => {
       buffer += chunk.toString("utf8");
       const lines = buffer.split("\n");
       buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (!line.trim()) continue;
+        let events = [];
         try {
-          normalizeEvent(JSON.parse(line)).forEach(onEvent);
+          events = normalizeEvent(JSON.parse(line));
         } catch {
           // Non-JSON lines are progress noise.
+        }
+        for (const event of events) {
+          if (!stopped && onEvent(event) === false) {
+            stopped = true;
+            child.kill();
+            return;
+          }
         }
       }
     });
@@ -198,6 +252,7 @@ function runOnce(bin, args, stdin, cwd, io, onEvent) {
     child.on("close", (code) => {
       io.signal.removeEventListener("abort", stop);
       if (io.signal.aborted) return reject(new DOMException("Stopped.", "AbortError"));
+      if (stopped) return resolve();
       if (code !== 0 && code !== null) return reject(new Error(stderr.trim() || `claude exited with ${code}.`));
       resolve();
     });
@@ -205,13 +260,15 @@ function runOnce(bin, args, stdin, cwd, io, onEvent) {
   });
 }
 
-export function startTurn(turn, io) {
+// `checks` lets the tests swap the hook check; the harness never passes it.
+export function startTurn(turn, io, checks = { checkGate }) {
   const bin = findBinary();
   mkdirSync(SETTINGS_DIR, { recursive: true });
   const settingsFile = path.join(SETTINGS_DIR, `${turn.id}.json`);
   const done = (async () => {
     if (!bin) throw new Error("Claude Code is not installed on this computer.");
     if (!SAFE_ARG.test(settingsFile)) throw new Error("The settings path has characters the CLI cannot take.");
+    checks.checkGate();
     await converse(bin, settingsFile, turn, io);
   })().finally(() => rmSync(settingsFile, { force: true }));
   return { done, interrupt: () => undefined };
@@ -221,6 +278,7 @@ async function converse(bin, settingsFile, turn, io) {
   const allow = [];
   const approvedIds = new Map();
   const toolLabels = new Map();
+  const toolRules = new Map();
   // A resumed session (extras.resume) starts the first round; later rounds resume the live one.
   const { resume, ...extras } = turn.extras ?? {};
   let sessionId = resume ?? "";
@@ -235,18 +293,31 @@ async function converse(bin, settingsFile, turn, io) {
     }
     const args = buildClaudeArgs({ settingsFile, model: cliModel, sessionId, extras });
     let result = null;
+    let unapproved = "";
+    const env = { ...process.env, [ALLOW_ENV]: JSON.stringify(allow) };
     await runOnce(bin, args, prompt, turn.cwd, io, (event) => {
       if (event.type === "session" && /^[\w-]{8,80}$/.test(event.sessionId || "")) sessionId = event.sessionId;
       else if (event.type === "result") result = event;
-      else if (event.type === "tool_use") toolLabels.set(event.toolUseId, event.label);
-      else if (event.type === "tool_result") {
+      else if (event.type === "tool_use") {
+        toolLabels.set(event.toolUseId, event.label);
+        if (GATED_TOOLS.includes(event.tool)) toolRules.set(event.toolUseId, event.rule);
+      } else if (event.type === "tool_result") {
+        // A shell command that ran without the user's approval means the hook did not run
+        // (for example, hooks are turned off in Claude Code's own settings): stop the turn.
+        const rule = toolRules.get(event.toolUseId);
+        if (rule !== undefined && !event.isError && !allow.includes(rule)) {
+          unapproved = toolLabels.get(event.toolUseId) ?? rule;
+          return false;
+        }
         const permissionId = approvedIds.get(toolLabels.get(event.toolUseId));
         if (permissionId && !event.isError) {
           approvedIds.delete(toolLabels.get(event.toolUseId));
           io.emit({ type: "tool_end", permissionId, code: 0, output: event.output.slice(0, 16_000) });
         }
       } else io.emit(event);
-    });
+      return true;
+    }, env);
+    if (unapproved) throw new Error(`Claude Code ran a shell command nobody approved (${unapproved.slice(0, 120)}), so the turn was stopped. Check that hooks are not turned off in Claude Code's own settings.`);
     if (!result) throw new Error("Claude Code ended without a result.");
     if (result.isError) throw new Error(result.text || "Claude Code reported an error.");
     const denials = result.denials.filter((item) => !allow.includes(allowRule(item)));
