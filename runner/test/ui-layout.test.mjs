@@ -380,3 +380,58 @@ describe("turn status line", () => {
     await context.close();
   });
 });
+
+// UX P2 review fixes, through the fixture's wiring of the app's own helpers (startPlannerAnswer,
+// askAgainDraft, focusComposer). ?idle=1: no turn running, so the planner choice is enabled.
+describe("turn status interactions", () => {
+  test("two taps in one tick start one planner turn, and focus moves to 'Planner answer chosen'", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns&idle=1`, { waitUntil: "load", timeout: 20_000 });
+    const button = page.getByRole("button", { name: "Answer with the built-in planner this time" });
+    await button.focus();
+    await page.evaluate(() => {
+      const target = [...document.querySelectorAll("button")].find((node) => node.textContent === "Answer with the built-in planner this time");
+      target.click();
+      target.click();
+    });
+    await page.locator(".turn-card").first().locator(".turn-chosen a").waitFor({ timeout: 5_000 });
+    assert.deepEqual(await page.evaluate(() => window.plannerAsks), ["List the files in the walklings-team folder"]);
+    assert.equal(await button.count(), 0, "the planner choice is still offered");
+    assert.match(await page.evaluate(() => document.activeElement?.textContent ?? ""), /^Planner answer chosen at /, "focus did not move to the chosen link");
+    await context.close();
+  });
+
+  test("Ask again… fills an empty composer and focuses it; a draft being typed is kept and the note says so", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns&idle=1`, { waitUntil: "load", timeout: 20_000 });
+    const askAgain = page.getByRole("button", { name: "Ask again…" }).first();
+    await askAgain.click();
+    const composer = page.locator("#composer");
+    assert.equal(await composer.inputValue(), "Run the build");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "composer");
+    await composer.fill("a new question");
+    await askAgain.click();
+    assert.equal(await composer.inputValue(), "a new question", "the draft was overwritten");
+    assert.equal(await page.evaluate(() => document.activeElement?.id), "composer");
+    assert.match(await page.locator(".busy-note").textContent(), /^Your draft is kept\./);
+    await context.close();
+  });
+
+  test("on a touch screen the error-details toggle and the chosen link are 44 px targets", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, hasTouch: true, isMobile: true });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+    await page.waitForSelector(".turn-details summary");
+    const heights = await page.evaluate(() => ({
+      coarse: matchMedia("(pointer: coarse)").matches,
+      summary: document.querySelector(".turn-details summary").getBoundingClientRect().height,
+      chosen: document.querySelector(".turn-chosen a").getBoundingClientRect().height,
+    }));
+    assert.equal(heights.coarse, true);
+    assert.ok(heights.summary >= 44, `the error-details toggle is ${heights.summary}px tall`);
+    assert.ok(heights.chosen >= 44, `the chosen link is ${heights.chosen}px tall`);
+    await context.close();
+  });
+});

@@ -927,6 +927,10 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
 .turn-result { color: var(--muted); }
 .turn-details summary { cursor: pointer; }
 .turn-details pre { margin: 0.35rem 0 0; max-height: 12rem; overflow: auto; background: var(--code); padding: 0.55rem; border-radius: 0.45rem; font-size: 0.78rem; white-space: pre-wrap; }
+/* Coarse pointers: the error-details toggle and the chosen-answer link are 44 px targets too. */
+@media (pointer: coarse) {
+  .turn-details summary, .turn-chosen a { display: inline-flex; align-items: center; min-height: 44px; }
+}
 /* S11: always in the page (a live region), and takes no room while it is empty. */
 .busy-note { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .busy-note:empty { margin-top: -0.55rem; }

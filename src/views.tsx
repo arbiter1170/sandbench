@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { CAPABILITIES, needsLabel, type CapabilityState } from "./capabilities";
 import { getBlob } from "./db";
 import { fromDateTimeLocal, toDateTimeLocal } from "./device";
@@ -365,6 +365,11 @@ function TriggerCard({ info, t, onPatch, onUndo }: { info: TriggerInfo | null; t
   );
 }
 
+/** Focus the chat composer ("Ask again…": a user activation, so moving focus is expected). */
+export function focusComposer() {
+  document.getElementById("composer")?.focus();
+}
+
 /** What a chat message's status line can do (UX P2). Without it the line shows no actions. */
 export type TurnControls = {
   runner: boolean;
@@ -372,6 +377,8 @@ export type TurnControls = {
   busy: boolean;
   /** A later message carries on this message's agent turn. */
   continued: boolean;
+  /** This is the newest reply of the turn running now: it reads Working, not Finished (M1). */
+  running?: boolean;
   /** Re-reads /health and /drivers only; true when reachable. */
   onCheckConnection: () => Promise<boolean>;
   /** Puts the original message back in the composer and focuses it. Never sends. */
@@ -421,13 +428,32 @@ function TurnStatusView({ message, status, t, turn }: { message: Message; status
     </p>
   );
   const failure = message.startFailure;
-  const withheld = failure && !message.plannerAnswer && (failure.runner || turn?.runner);
+  const withheld = failure && !failure.unattended && !message.plannerAnswer && (failure.runner || turn?.runner);
+  // The planner button goes away once it is used; focus moves to what replaced it (L3), only
+  // when the tap came from that button.
+  const tapped = useRef(false);
+  const chosenRef = useRef<HTMLAnchorElement>(null);
+  useEffect(() => {
+    if (!tapped.current || !message.plannerAnswer) return;
+    tapped.current = false;
+    chosenRef.current?.focus();
+  }, [message.plannerAnswer]);
   const controls =
     actions.length > 0 ? (
       <div className="turn-actions">
         {actions.includes("checkConnection") && turn ? <CheckConnection t={t} runner={turn.runner} onCheck={turn.onCheckConnection} /> : null}
         {actions.includes("plannerAnswer") && turn ? (
-          <button type="button" className="turn-planner" disabled={turn.busy} onClick={turn.onPlannerAnswer}>{t("tsPlannerOnce")}</button>
+          <button
+            type="button"
+            className="turn-planner"
+            disabled={turn.busy}
+            onClick={() => {
+              tapped.current = true;
+              turn.onPlannerAnswer();
+            }}
+          >
+            {t("tsPlannerOnce")}
+          </button>
         ) : null}
         {actions.includes("askAgain") && turn ? <button type="button" onClick={turn.onAskAgain}>{t("tsAskAgain")}</button> : null}
       </div>
@@ -454,11 +480,12 @@ function TurnStatusView({ message, status, t, turn }: { message: Message; status
         {notes}
         {message.plannerAnswer ? (
           <p className="turn-chosen">
-            <a href={`#msg-${message.plannerAnswer.messageId}`}>{fillCopy(t("tsPlannerChosen"), { time: clock(message.plannerAnswer.at) })}</a>
+            <a ref={chosenRef} href={`#msg-${message.plannerAnswer.messageId}`}>{fillCopy(t("tsPlannerChosen"), { time: clock(message.plannerAnswer.at) })}</a>
           </p>
         ) : null}
         {failure?.plannerError ? <p className="turn-chosen">{fillCopy(t("tsPlannerFailed"), { reason: failure.plannerError })}</p> : null}
         {withheld ? <p className="turn-note">{t("tsPlannerWithheld")}</p> : null}
+        {failure?.unattended ? <p className="turn-note">{t("tsUnattendedNote")}</p> : null}
       </div>
     );
   }
@@ -493,7 +520,7 @@ export function MessageBody({
   turn?: TurnControls;
 }) {
   // One status line per assistant message; only its state changes are announced, not each token.
-  const status = turnStatus(message, { t, bot: author, continued: turn?.continued, runner: turn?.runner });
+  const status = turnStatus(message, { t, bot: author, continued: turn?.continued, runner: turn?.runner, running: turn?.running });
   const word = status && status.state !== "finished" && status.state !== "continued" ? status.word : "";
   return (
     <article id={`msg-${message.id}`} className={message.role === "user" ? "msg user" : message.fresh ? "msg fresh" : "msg"}>

@@ -254,6 +254,8 @@ export type AgentEvent = {
   cwd?: string;
   /** On a Claude driver `thinking` event: every approval round was used with approved steps still waiting (UX P2 S7). */
   roundsExhausted?: number;
+  /** On a Claude driver `tool_end`: the step was approved but never handed to the agent (rounds ran out), so it did not run. */
+  undelivered?: boolean;
 };
 export type TurnRequest = {
   driver: string;

@@ -55,7 +55,7 @@ import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
 import { agentName, chatAgent, effectiveDriver } from "./chatContext";
 import { REFUSED_ELSEWHERE, settleEndedMessage, settleLoadedThreads, STOP_GRACE_MS, stoppedCard } from "./turnRecovery";
-import { claimPlannerAnswer, classifyStartError, promptFor, startFailureFor, TurnStartError } from "./turnStatus";
+import { askAgainDraft, claimPlannerAnswer, classifyStartError, decideStart, promptFor, startFailureFor, startFailureSummary, startPlannerAnswer, TurnStartError } from "./turnStatus";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -101,7 +101,7 @@ import {
   type TriggerRun,
   type WebhookTrigger,
 } from "./types";
-import { LockScreen, SettingsPanel, ToolsPanel } from "./views";
+import { focusComposer, LockScreen, SettingsPanel, ToolsPanel } from "./views";
 import {
   actionLabel,
   approvalFields,
@@ -150,6 +150,8 @@ type AskOptions = {
   routed?: string;
   /** UX P2 S12: the one-time planner answer claimed on a Couldn't start message (I-3). */
   plannerOnce?: { replyId: string; sourceId: string; agent: string };
+  /** A routine's own run: its row says why when the run couldn't start (M4). */
+  routineId?: string;
 };
 
 
@@ -218,7 +220,10 @@ export function App({ user }: { user: User }) {
   const sendingRef = useRef(false);
   // The bot whose turn holds sendingRef, for the busy note (UX P2 S11).
   const workingRef = useRef<string | null>(null);
-  const [busyNote, setBusyNote] = useState("");
+  // The note under the composer: a send refused while a turn runs (S11), or a draft "Ask again…" kept.
+  const [composerNote, setComposerNote] = useState<{ kind: "busy" | "kept"; text: string } | null>(null);
+  // The chat the running turn writes to, so only its newest reply reads "Working" (M1).
+  const [workingThreadId, setWorkingThreadId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -598,7 +603,7 @@ export function App({ user }: { user: User }) {
       if (!due) return;
       setRoutines((prev) => prev.map((item) => (item.id === due.id ? { ...item, lastRunAt: now.getTime() } : item)));
       routinesRef.current = routinesRef.current.map((item) => (item.id === due.id ? { ...item, lastRunAt: now.getTime() } : item));
-      void askBot(due.botId, due.title, { unattended: true });
+      void askBot(due.botId, due.title, { unattended: true, routineId: due.id });
     }, 20_000);
     return () => window.clearInterval(handle);
   }, [hydrated]);
@@ -652,7 +657,7 @@ export function App({ user }: { user: User }) {
           if (sendingRef.current) return;
           const thread = latestBotThread(threadsRef.current, item.botId);
           const prompt = item.webhookId ? `${item.title}\n\nWebhook delivery:\n${item.payload?.trim() || "(empty body)"}` : item.title;
-          await askBot(item.botId, prompt, { unattended: true, threadId: thread?.id, receipt: { kind, triggerId, title: item.title } });
+          await askBot(item.botId, prompt, { unattended: true, threadId: thread?.id, receipt: { kind, triggerId, title: item.title }, ...(item.routineId ? { routineId: item.routineId } : {}) });
           await harnessAck([item.id]);
           if (item.routineId) setRoutines((prev) => prev.map((routine) => (routine.id === item.routineId ? { ...routine, lastRunAt: item.at } : routine)));
         }
@@ -1828,8 +1833,11 @@ export function App({ user }: { user: User }) {
                   }
                 : message,
             );
-            addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
-            bumpUsage({ commands: 1 });
+            // A step the driver never handed to the agent did not run: no "ran" chip, no count.
+            if (!event.undelivered) {
+              addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
+              bumpUsage({ commands: 1 });
+            }
           }
         }
         if (event.type === "error") failure = event.message || "The agent stopped with an error.";
@@ -1995,9 +2003,9 @@ export function App({ user }: { user: User }) {
     }
   }
 
-  function receiptDone(receipt: Receipt | undefined, botId: string, started: number, status: "ok" | "failed") {
+  function receiptDone(receipt: Receipt | undefined, botId: string, started: number, status: "ok" | "failed", detail?: string) {
     if (!receipt || !harnessRef.current) return;
-    void harnessRecordRun({ ...receipt, botId, status, ms: Date.now() - started })
+    void harnessRecordRun({ ...receipt, botId, status, ms: Date.now() - started, ...(detail ? { detail } : {}) })
       .then(() => refreshTriggers())
       .catch(() => undefined);
   }
@@ -2088,7 +2096,7 @@ export function App({ user }: { user: User }) {
   function noteBusy() {
     const locale = settingsRef.current.locale;
     const name = botsRef.current.find((item) => item.id === workingRef.current)?.name || translate(locale, "assistant");
-    setBusyNote(translate(locale, "tsBusy").replace("{bot}", name));
+    setComposerNote({ kind: "busy", text: translate(locale, "tsBusy").replace("{bot}", name) });
   }
 
   async function askBot(botId: string, text: string, options: AskOptions = {}): Promise<string[]> {
@@ -2151,6 +2159,7 @@ export function App({ user }: { user: User }) {
     const threadId = existing?.id ?? options.threadId ?? crypto.randomUUID();
     const isChannel = Boolean(existing?.memberIds);
     const assistantId = options.plannerOnce?.replyId ?? crypto.randomUUID();
+    setWorkingThreadId(threadId);
     // Who should answer, as the context line says. A chosen agent starts at S1 ("Starting …").
     const intended = options.plannerOnce ? undefined : agentFor(bot);
     let replyText = "";
@@ -2223,24 +2232,45 @@ export function App({ user }: { user: User }) {
     // The agent a start was asked of, for S9/S10 if POST /turns fails.
     let startingAgent = "";
     try {
-      // UX P2 (I-2, I-4a): a chosen agent that can't run now is never answered for by the planner
-      // or anyone else. /health and /drivers are read once more first, so a stale or not yet
-      // loaded reading doesn't show Couldn't start. Then nothing is sent: no POST /turns.
-      let agent = intended;
-      if (agent?.kind === "unavailable") {
-        await recheckHarness();
-        agent = agentFor(bot);
-      }
-      if (agent?.kind === "unavailable") {
-        if (genRef.current !== generation) return shown;
-        appendThinking(translate(settingsRef.current.locale, "tsTraceCouldntStart").replace("{agent}", agent.name));
-        const startFailure = startFailureFor(agent, { harnessUp: Boolean(harnessRef.current), runner: runnerMode });
-        patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", localStandIn: false, startFailure }));
+      // UX P2 (I-2, I-4a): decided once, now, after the reads above: a chosen agent (the bot's or
+      // the Settings default) that can't be resolved is read again once (/health, /drivers) and
+      // is then Couldn't start, with nothing sent. The planner never answers in its place. A Stop
+      // pressed before this point ends the reply here (M3).
+      const decision = await decideStart({
+        plannerOnce: Boolean(options.plannerOnce),
+        chosen: Boolean(bot.driver || settingsRef.current.defaultAgentDriver),
+        resolve: () => resolveAgentDriver(bot),
+        recheck: recheckHarness,
+        aborted: () => controller.signal.aborted,
+      });
+      if (genRef.current !== generation) return shown;
+      if (decision.kind === "stopped") {
+        patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", localStandIn: false, stoppedBeforeStart: true }));
         receiptDone(options.receipt, botId, started, "failed");
+        return shown;
+      }
+      if (decision.kind === "couldntStart") {
+        const now = agentFor(bot);
+        const chosenId = bot.driver || settingsRef.current.defaultAgentDriver || "";
+        const agent = now.kind === "unavailable" ? now : { kind: "unavailable" as const, id: chosenId, name: agentName(chosenId, driversRef.current), source: bot.driver ? ("bot" as const) : ("settings" as const), detail: "" };
+        appendThinking(translate(settingsRef.current.locale, "tsTraceCouldntStart").replace("{agent}", agent.name));
+        const startFailure = {
+          ...startFailureFor(agent, { harnessUp: Boolean(harnessRef.current), runner: runnerMode }),
+          // A scheduled or webhook run: the request wasn't typed here, so no planner choice (M4).
+          ...(options.unattended ? { unattended: true } : {}),
+        };
+        patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", localStandIn: false, driverTurn: { agent: agent.name }, startFailure }));
+        const summary = startFailureSummary(startFailure, (key) => translate(settingsRef.current.locale, key));
+        receiptDone(options.receipt, botId, started, "failed", summary);
+        if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId ? { ...item, lastNote: summary } : item)));
         if (callRef.current) scheduleListenForCall();
         return shown;
       }
-      const driver = agent?.kind === "driver" ? resolveAgentDriver(bot) : undefined;
+      if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId && item.lastNote ? { ...item, lastNote: undefined } : item)));
+      const driver = decision.kind === "driver" ? decision.driver : undefined;
+      // A bot with no agent chosen whose provider's driver went away: the planner answers, as
+      // before P2, and the reply no longer says it is starting that driver.
+      if (!driver && intended?.kind === "driver") patchMessage(threadId, assistantId, ({ driverTurn: _gone, ...message }) => message);
       if (driver) {
         startingAgent = agentName(driver.id, driversRef.current);
         if (options.routed) appendThinking(options.routed);
@@ -2436,15 +2466,20 @@ export function App({ user }: { user: User }) {
       receiptDone(options.receipt, botId, started, "ok");
       return shown;
     } catch (error) {
-      receiptDone(options.receipt, botId, started, "failed");
+      if (!(error instanceof TurnStartError)) receiptDone(options.receipt, botId, started, "failed");
       if (genRef.current !== generation) return shown;
       if (error instanceof TurnStartError) {
         // S9 when the harness refused before a turn id existed (I-4b); otherwise S10. No retry.
+        const startFailure = { kind: "refused" as const, agent: startingAgent, detail: error.reason, ...(runnerMode ? { runner: true } : {}), ...(options.unattended ? { unattended: true } : {}) };
         patchMessage(threadId, assistantId, (message) =>
           error.kind === "refused"
-            ? { ...message, status: "done", startFailure: { kind: "refused", agent: startingAgent, detail: error.reason, ...(runnerMode ? { runner: true } : {}) } }
+            ? { ...message, status: "done", startFailure }
             : { ...message, status: "error", startUnknown: { agent: startingAgent, reason: error.reason } },
         );
+        const locale = settingsRef.current.locale;
+        const summary = error.kind === "refused" ? startFailureSummary(startFailure, (key) => translate(locale, key)) : translate(locale, "tsStartUnknown");
+        receiptDone(options.receipt, botId, started, "failed", summary);
+        if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId ? { ...item, lastNote: summary } : item)));
         if (callRef.current) scheduleListenForCall();
         return shown;
       }
@@ -2472,59 +2507,61 @@ export function App({ user }: { user: User }) {
       sendingRef.current = false;
       workingRef.current = null;
       setWorkingBotId(null);
-      setBusyNote("");
+      setWorkingThreadId(null);
+      setComposerNote((note) => (note?.kind === "busy" ? null : note));
     }
   }
 
-  /** "Ask again…": the original message goes back in the composer, focused. It never sends (P2-AC8). */
+  /**
+   * "Ask again…": the original message goes back in the composer, focused. It never sends
+   * (P2-AC8). A draft the person is typing is kept, and the note under the composer says so.
+   */
   function askAgain(messageId: string) {
     const thread = threadsRef.current.find((item) => item.messages.some((message) => message.id === messageId));
     if (!thread) return;
-    setDraft(promptFor(thread.messages, messageId));
-    document.getElementById("composer")?.focus();
+    const next = askAgainDraft(draftRef.current, promptFor(thread.messages, messageId));
+    if (next.kept) setComposerNote({ kind: "kept", text: t("tsAskAgainKept") });
+    else setDraft(next.draft);
+    focusComposer();
   }
 
   /**
    * "Answer with the built-in planner this time" on a Couldn't start message (S9 → S12). One new
-   * planner turn at most (I-3), only when no turn is running (I-1), never in runner mode (W-3). It
-   * changes no bot or Settings value and carries nothing from the failed start (I-6).
+   * planner turn at most (I-3), only when no turn is running (I-1), never in runner mode (W-3) or
+   * for a scheduled run (M4). It changes no bot or Settings value and carries nothing from the
+   * failed start (I-6). The claim is saved at once, not after the usual save delay.
    */
   function answerWithPlanner(messageId: string) {
-    if (runnerMode) return;
-    if (sendingRef.current) {
-      noteBusy();
-      return;
-    }
-    const thread = threadsRef.current.find((item) => item.messages.some((message) => message.id === messageId));
-    const source = thread?.messages.find((message) => message.id === messageId);
-    if (!thread || !source?.startFailure || source.startFailure.runner || source.plannerAnswer || !source.authorBotId) return;
-    const claim = { messageId: crypto.randomUUID(), at: Date.now() };
-    // The claim is written before the planner turn is asked for, in this same synchronous step,
-    // so a second tap, a queued click or a stale render finds it and starts nothing.
-    const claimed = claimPlannerAnswer(threadsRef.current, thread.id, messageId, claim);
-    if (!claimed) return;
-    threadsRef.current = claimed;
-    setThreads((prev) => claimPlannerAnswer(prev, thread.id, messageId, claim) ?? prev);
-    // If the planner turn doesn't start, the claim stays and says why; nothing is retried.
-    const refused = (reason: string) =>
-      setThreads((prev) => {
-        const current = prev.find((item) => item.id === thread.id);
-        if (!current || current.messages.some((message) => message.id === claim.messageId)) return prev;
-        const messages = current.messages.map((message) =>
-          message.id === messageId && message.startFailure ? { ...message, startFailure: { ...message.startFailure, plannerError: reason } } : message,
-        );
-        return prev.map((item) => (item.id === thread.id ? { ...current, messages } : item));
-      });
-    const prompt = promptFor(thread.messages, messageId).trim();
-    if (!prompt) {
-      refused(t("tsPlannerNoPrompt"));
-      return;
-    }
-    void askBot(source.authorBotId, prompt, {
-      threadId: thread.id,
-      skipUser: true,
-      plannerOnce: { replyId: claim.messageId, sourceId: messageId, agent: source.startFailure.agent },
-    }).then(() => refused(t("tsPlannerNotCreated")));
+    startPlannerAnswer({
+      messageId,
+      runner: runnerMode,
+      busy: () => sendingRef.current,
+      onBusy: noteBusy,
+      threads: () => threadsRef.current,
+      write: (claimed, claim) => {
+        threadsRef.current = claimed;
+        setThreads((prev) => claimPlannerAnswer(prev, claim.threadId, claim.sourceId, { messageId: claim.replyId, at: claim.at }) ?? prev);
+        if (hydrated && persist && workspaceRef.current) void saveSnapshot({ ...workspaceRef.current, threads: claimed }).catch(() => undefined);
+      },
+      newId: () => crypto.randomUUID(),
+      now: () => Date.now(),
+      ask: (request) =>
+        askBot(request.botId, request.prompt, {
+          threadId: request.threadId,
+          skipUser: true,
+          plannerOnce: { replyId: request.replyId, sourceId: request.sourceId, agent: request.agent },
+        }),
+      refuse: ({ threadId, sourceId, replyId, reason }) =>
+        setThreads((prev) => {
+          const current = prev.find((item) => item.id === threadId);
+          if (!current || current.messages.some((message) => message.id === replyId)) return prev;
+          const plannerError = t(reason === "noPrompt" ? "tsPlannerNoPrompt" : "tsPlannerNotCreated");
+          const messages = current.messages.map((message) =>
+            message.id === sourceId && message.startFailure ? { ...message, startFailure: { ...message.startFailure, plannerError } } : message,
+          );
+          return prev.map((item) => (item.id === threadId ? { ...current, messages } : item));
+        }),
+    });
   }
 
   async function startTask(taskId: string) {
@@ -2750,7 +2787,8 @@ export function App({ user }: { user: User }) {
         onRecheckHarness={recheckHarness}
         onAskAgain={askAgain}
         onPlannerAnswer={answerWithPlanner}
-        busyNote={busyNote}
+        busyNote={composerNote?.text ?? ""}
+        workingThreadId={workingThreadId}
         runner={runnerMode}
         callActive={callActive}
         messages={activeThread?.messages ?? []}
@@ -2896,7 +2934,11 @@ export function App({ user }: { user: User }) {
         onApplyTestProfile={applyTestProfileToBot}
         onDelete={deleteBot}
         onDuplicate={duplicateBot}
-        onDraft={setDraft}
+        onDraft={(value) => {
+          setDraft(value);
+          // The "draft kept" note is about the draft as it was; typing moves on from it.
+          setComposerNote((note) => (note?.kind === "kept" ? null : note));
+        }}
         onSend={(botId, text) => {
           void askBot(botId, text);
         }}

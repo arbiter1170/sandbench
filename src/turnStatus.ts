@@ -5,7 +5,7 @@
 // state that the page can't prove (a start it didn't see answered, a Stop the harness didn't
 // confirm) says so instead of picking the likelier story.
 import type { ChatAgent } from "./chatContext";
-import { IN_FLIGHT, STOPPED_REPLY, STOP_REQUESTED_REPLY } from "./turnRecovery";
+import { IN_FLIGHT, STOP_GRACE_MS, STOPPED_REPLY, STOP_REQUESTED_REPLY } from "./turnRecovery";
 import type { Message, Thread } from "./types";
 
 export type TurnStateId =
@@ -21,6 +21,7 @@ export type TurnStateId =
   | "couldntStart" // S9 (S12 once the planner answer is chosen)
   | "startUnknown" // S10
   | "stoppedInPage" // a built-in planner reply stopped in this page (no harness turn to confirm)
+  | "stoppedBeforeStart" // Stop pressed before anything was sent or run
   | "continued"; // an earlier message of an agent turn that went on in a later message
 
 export type TurnAction = "checkConnection" | "askAgain" | "plannerAnswer" | "errorDetails";
@@ -32,7 +33,8 @@ export type TurnKey =
   | "tsRounds" | "tsRoundsLine" | "tsInterrupted" | "tsInterruptedLine" | "tsCouldntStart" | "tsCouldntStartLine"
   | "tsCouldntStartRefusedLine" | "tsStartUnknown" | "tsStartUnknownLine" | "tsStoppedInPage" | "tsStoppedInPageLine"
   | "tsContinued" | "tsReasonUnreachable" | "tsReasonRunnerUnreachable" | "tsReasonUnavailable" | "tsReasonUnavailableRunner"
-  | "tsReasonRefused" | "tsNothingSent" | "tsThisReply";
+  | "tsReasonRefused" | "tsNothingSent" | "tsThisReply" | "tsReasonLine"
+  | "tsStoppedBeforeStart" | "tsStoppedBeforeStartPlanner";
 
 export type TurnStatus = {
   state: TurnStateId;
@@ -59,6 +61,8 @@ export type TurnContext = {
   continued?: boolean;
   /** Runner mode: the one-time planner answer is withheld there (W-3). */
   runner?: boolean;
+  /** This message is the newest reply of the turn that is running now (its result may be in, the turn isn't done). */
+  running?: boolean;
 };
 
 const fill = (text: string, values: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? ""));
@@ -82,16 +86,14 @@ export function turnStatus(message: Message, ctx: TurnContext): TurnStatus | nul
   if (message.startFailure) {
     const failure = message.startFailure;
     const agent = failure.agent;
-    const reason =
-      failure.kind === "unreachable"
-        ? t(failure.runner ? "tsReasonRunnerUnreachable" : "tsReasonUnreachable")
-        : failure.kind === "unavailable"
-          ? fill(t(failure.runner ? "tsReasonUnavailableRunner" : "tsReasonUnavailable"), { agent, detail: failure.detail ? `: ${failure.detail.replace(/[.\s]+$/, "")}` : "" })
-          : fill(t("tsReasonRefused"), { detail: (failure.detail ?? "").replace(/[.\s]+$/, "") });
     const line = fill(t(failure.kind === "refused" ? "tsCouldntStartRefusedLine" : "tsCouldntStartLine"), { agent });
-    // The planner choice is offered only here, only once, and never in runner mode (W-3).
-    const actions: TurnAction[] = ["checkConnection", ...(!failure.runner && !ctx.runner && !message.plannerAnswer ? (["plannerAnswer"] as const) : [])];
-    return make("couldntStart", "⊘", t("tsCouldntStart"), `${t("tsCouldntStart")} · ${line}`, "bad", actions, { reason: `${reason}.`, note: fill(t("tsNothingSent"), { agent }) });
+    // The planner choice is offered only here, only once, never in runner mode (W-3), and never
+    // for a scheduled or webhook run, whose request the person didn't type (M4).
+    const actions: TurnAction[] = ["checkConnection", ...(!failure.runner && !failure.unattended && !ctx.runner && !message.plannerAnswer ? (["plannerAnswer"] as const) : [])];
+    return make("couldntStart", "⊘", t("tsCouldntStart"), `${t("tsCouldntStart")} · ${line}`, "bad", actions, {
+      reason: fill(t("tsReasonLine"), { reason: startFailureReason(failure, t) }),
+      note: fill(t("tsNothingSent"), { agent }),
+    });
   }
   // S10: POST /turns failed in a way that doesn't prove no turn exists.
   if (message.startUnknown) {
@@ -109,12 +111,18 @@ export function turnStatus(message: Message, ctx: TurnContext): TurnStatus | nul
   if (message.interrupted === STOPPED_REPLY) {
     return make("stopped", "■", t("tsStopped"), t("tsStoppedLine"), "warn", ["askAgain"]);
   }
+  // #31 keeps reading for STOP_GRACE_MS after Stop; a done{stopped:true} in that window makes
+  // this S5a. After it, the stream is closed, so this stays S5b for good.
   if (message.interrupted === STOP_REQUESTED_REPLY) {
-    return make("stopRequested", "□", t("tsStopRequested"), t("tsStopRequestedLine"), "warn", ["checkConnection", "askAgain"]);
+    return make("stopRequested", "□", t("tsStopRequested"), fill(t("tsStopRequestedLine"), { seconds: Math.round(STOP_GRACE_MS / 1000) }), "warn", ["checkConnection", "askAgain"]);
   }
   // S8: a lost stream, a dropped resume, a harness restart or a reload (turnRecovery.ts).
   if (message.interrupted) {
     return make("interrupted", "▲", t("tsInterrupted"), fill(t("tsInterruptedLine"), { reason: message.interrupted.trim() }), "warn", ["checkConnection", "askAgain"]);
+  }
+  if (message.stoppedBeforeStart) {
+    const text = message.driverTurn ? fill(t("tsStoppedBeforeStart"), { agent: message.driverTurn.agent }) : t("tsStoppedBeforeStartPlanner");
+    return make("stoppedBeforeStart", "■", t("tsStopped"), text, "warn", ["askAgain"]);
   }
   if (message.stoppedInPage) return make("stoppedInPage", "■", t("tsStoppedInPage"), t("tsStoppedInPageLine"), "warn", ["askAgain"]);
   if (message.status === "error") {
@@ -127,8 +135,9 @@ export function turnStatus(message: Message, ctx: TurnContext): TurnStatus | nul
   if (message.roundsExhausted) {
     return make("rounds", "⋯", t("tsRounds"), fill(t("tsRoundsLine"), { n: message.roundsExhausted }), "warn", ["askAgain"]);
   }
-  // An approved step whose result hasn't come back yet: the turn is still working on it.
-  if (message.approval?.status === "approved" && message.approval.output === IN_FLIGHT) {
+  // An approved step whose result hasn't come back yet, or the newest reply of a turn that is
+  // still running (a step's result is in, but the agent isn't done): still working.
+  if (ctx.running || (message.approval?.status === "approved" && message.approval.output === IN_FLIGHT)) {
     return make("working", "◐", t("tsWorking"), t("tsWorking"), "live");
   }
   const approval = message.approval?.status === "approved"
@@ -144,6 +153,31 @@ export function turnStatus(message: Message, ctx: TurnContext): TurnStatus | nul
 function waiting(ctx: TurnContext): TurnStatus {
   const text = fill(ctx.t("tsWaitingLine"), { bot: ctx.bot || ctx.t("tsThisReply") });
   return { state: "waiting", icon: "‖", word: ctx.t("tsWaiting"), text, tone: "wait", actions: [] };
+}
+
+/** Why S9 couldn't start, without the "Reason:" frame: also the run record's detail. */
+export function startFailureReason(failure: NonNullable<Message["startFailure"]>, t: (key: TurnKey) => string): string {
+  const agent = failure.agent;
+  return failure.kind === "unreachable"
+    ? t(failure.runner ? "tsReasonRunnerUnreachable" : "tsReasonUnreachable")
+    : failure.kind === "unavailable"
+      ? fill(t(failure.runner ? "tsReasonUnavailableRunner" : "tsReasonUnavailable"), { agent, detail: failure.detail ? `: ${failure.detail.replace(/[.\s]+$/, "")}` : "" })
+      : fill(t("tsReasonRefused"), { detail: (failure.detail ?? "").replace(/[.\s]+$/, "") });
+}
+
+/** "Couldn't start · the local harness isn't reachable": what a routine or webhook run records (M4). */
+export function startFailureSummary(failure: NonNullable<Message["startFailure"]>, t: (key: TurnKey) => string): string {
+  return `${t("tsCouldntStart")} · ${startFailureReason(failure, t)}`;
+}
+
+/** The newest assistant message of `botId` in this chat: the one a running turn is writing to. */
+export function runningMessageId(messages: Message[], botId: string | null | undefined): string | undefined {
+  if (!botId) return undefined;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message.role === "assistant" && message.authorBotId === botId) return message.id;
+  }
+  return undefined;
 }
 
 /** Messages that an agent turn went on from (a card, then more text in a new message). */
@@ -192,9 +226,12 @@ export function startFailureFor(agent: Extract<ChatAgent, { kind: "unavailable" 
   };
 }
 
-/** Whether the one-time planner answer can start from this message now (I-1, I-3, W-3). */
-export function canChoosePlanner(message: Message | undefined, input: { runner: boolean; busy: boolean }): boolean {
-  return Boolean(message?.startFailure) && !message?.startFailure?.runner && !message?.plannerAnswer && !input.runner && !input.busy;
+/** Whether the one-time planner answer can start from this message now (I-1, I-3, W-3, M4). */
+export function canChoosePlanner(message: Message | undefined, input: { runner: boolean; busy: boolean; messages?: Message[] }): boolean {
+  const failure = message?.startFailure;
+  if (!message || !failure || failure.runner || failure.unattended || message.plannerAnswer || input.runner || input.busy) return false;
+  // A reply that already answered for this message (a claim lost before it was saved) counts too.
+  return !(input.messages ?? []).some((item) => item.answeredBy?.sourceId === message.id);
 }
 
 /**
@@ -206,6 +243,7 @@ export function claimPlannerAnswer(threads: Thread[], threadId: string, messageI
   const thread = threads.find((item) => item.id === threadId);
   const message = thread?.messages.find((item) => item.id === messageId);
   if (!thread || !message?.startFailure || message.plannerAnswer) return null;
+  if (thread.messages.some((item) => item.answeredBy?.sourceId === messageId)) return null;
   const messages = thread.messages.map((item) => (item.id === messageId ? { ...item, plannerAnswer: { ...claim } } : item));
   return threads.map((item) => (item.id === threadId ? { ...thread, messages } : item));
 }
@@ -217,4 +255,78 @@ export function promptFor(messages: Message[], messageId: string): string {
     if (messages[at].role === "user") return messages[at].text;
   }
   return "";
+}
+
+export type StartDecision<D> = { kind: "driver"; driver: D } | { kind: "planner" } | { kind: "couldntStart" } | { kind: "stopped" };
+
+/**
+ * Who answers, decided once, right before anything is sent or run (I-2). A chosen agent (the
+ * bot's, or the Settings default) that can't be resolved now is read again once (/health and
+ * /drivers) and is then Couldn't start: the planner never answers in its place, however late the
+ * harness dropped. A Stop pressed before this point ends it here, with nothing sent (M3).
+ */
+export async function decideStart<D>(input: {
+  plannerOnce: boolean;
+  chosen: boolean;
+  resolve: () => D | undefined;
+  recheck: () => Promise<unknown>;
+  aborted: () => boolean;
+}): Promise<StartDecision<D>> {
+  if (input.aborted()) return { kind: "stopped" };
+  if (input.plannerOnce) return { kind: "planner" };
+  let driver = input.resolve();
+  if (!driver && input.chosen) {
+    await input.recheck();
+    if (input.aborted()) return { kind: "stopped" };
+    driver = input.resolve();
+    if (!driver) return { kind: "couldntStart" };
+  }
+  return driver ? { kind: "driver", driver } : { kind: "planner" };
+}
+
+/**
+ * "Answer with the built-in planner this time" (S9 → S12). The claim is written through `write`
+ * before `ask` is called, in the same synchronous step, so a second tap, a queued click or a
+ * stale render finds it and starts nothing (I-3). Returns whether a planner turn was asked for.
+ */
+export function startPlannerAnswer(input: {
+  messageId: string;
+  runner: boolean;
+  busy: () => boolean;
+  onBusy: () => void;
+  threads: () => Thread[];
+  write: (threads: Thread[], claim: { threadId: string; sourceId: string; replyId: string; at: number }) => void;
+  newId: () => string;
+  now: () => number;
+  ask: (request: { botId: string; threadId: string; prompt: string; replyId: string; sourceId: string; agent: string }) => Promise<unknown>;
+  refuse: (request: { threadId: string; sourceId: string; replyId: string; reason: "noPrompt" | "notCreated" }) => void;
+}): boolean {
+  if (input.runner) return false;
+  if (input.busy()) {
+    input.onBusy();
+    return false;
+  }
+  const threads = input.threads();
+  const thread = threads.find((item) => item.messages.some((message) => message.id === input.messageId));
+  const source = thread?.messages.find((message) => message.id === input.messageId);
+  if (!thread || !source?.authorBotId || !canChoosePlanner(source, { runner: input.runner, busy: false, messages: thread.messages })) return false;
+  const claim = { messageId: input.newId(), at: input.now() };
+  const claimed = claimPlannerAnswer(threads, thread.id, input.messageId, claim);
+  if (!claimed) return false;
+  input.write(claimed, { threadId: thread.id, sourceId: input.messageId, replyId: claim.messageId, at: claim.at });
+  const request = { threadId: thread.id, sourceId: input.messageId, replyId: claim.messageId };
+  const prompt = promptFor(thread.messages, input.messageId).trim();
+  if (!prompt) {
+    input.refuse({ ...request, reason: "noPrompt" });
+    return false;
+  }
+  // If the planner turn doesn't start, the claim stays and says why; nothing is retried.
+  void input.ask({ ...request, botId: source.authorBotId, prompt, agent: source.startFailure!.agent }).then(() => input.refuse({ ...request, reason: "notCreated" }));
+  return true;
+}
+
+/** "Ask again…" puts the original message in an empty composer; a draft being typed is kept. */
+export function askAgainDraft(draft: string, prompt: string): { draft: string; kept: boolean } {
+  if (draft.trim() && draft.trim() !== prompt.trim()) return { draft, kept: true };
+  return { draft: prompt, kept: false };
 }

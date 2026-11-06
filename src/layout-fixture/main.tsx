@@ -4,11 +4,13 @@
 // preformatted tool output, and a pending approval. Nothing here is live data: no harness, no
 // sign-in, no real machine path. Not part of the app bundle (only this folder's index.html
 // imports it).
-import { StrictMode } from "react";
+import { StrictMode, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { translate, type Key } from "../i18n";
 import { Workspace } from "../shell";
 import { DROPPED, STOP_REQUESTED_REPLY } from "../turnRecovery";
+import { askAgainDraft, claimPlannerAnswer, promptFor, startPlannerAnswer } from "../turnStatus";
+import { focusComposer } from "../views";
 import { defaultSettings, defaultStudio, type Bot, type Message, type Thread } from "../types";
 import { blankBot } from "../work";
 import "../styles.css";
@@ -21,6 +23,10 @@ const channelScenario = new URLSearchParams(location.search).get("scenario") ===
 // ?scenario=turns: one message per turn state of the status line (UX P2), with a turn running
 // (so the planner choice is disabled) and the busy note under the composer. Synthetic data only.
 const turnsScenario = new URLSearchParams(location.search).get("scenario") === "turns";
+// &idle=1: no turn running, so the planner choice is enabled. The fixture's Ask again… and planner
+// tap use the app's own helpers (askAgainDraft, focusComposer, startPlannerAnswer); its "planner
+// turn" only records that it was asked for (window.plannerAsks).
+const idle = new URLSearchParams(location.search).get("idle") === "1";
 const members: Bot[] = [
   { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
   { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
@@ -123,7 +129,14 @@ const turnMessages: Message[] = [
   message({ role: "user", text: "One more time" }),
   message({ role: "assistant", text: "", status: "error", startUnknown: { agent: "Claude Code", reason: "Failed to fetch" }, driverTurn: { agent: "Claude Code" } }),
   message({ role: "user", text: "Now" }),
-  message({ role: "assistant", text: "Working on it", status: "streaming", thinking: ["Hand the turn to Claude Code (local CLI).", `Working folder: ${WIN_PATH}`], driverTurn: { agent: "Claude Code", id: "t4" } }),
+  // M1: the running turn's newest reply has its step's real result, but the agent isn't done.
+  message({
+    role: "assistant",
+    text: "Listing the folder.",
+    thinking: ["Hand the turn to Claude Code (local CLI).", `Working folder: ${WIN_PATH}`],
+    driverTurn: { agent: "Claude Code", id: "t4" },
+    approval: { command: "ls", reason: "Claude Code asked to use Bash.", status: "approved", permissionId: "p4", output: "notes.txt", exitCode: 0 },
+  }),
 ];
 
 const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages: turnsScenario ? turnMessages : messages, botId: bot.id };
@@ -137,6 +150,18 @@ const noop = () => undefined;
 function Fixture() {
   // The app's own breakpoint (App.tsx) decides rail + stage + inspector versus one pane.
   const wide = window.matchMedia("(min-width: 861px)").matches;
+  const [threads, setThreads] = useState<Thread[]>([thread]);
+  const threadsRef = useRef(threads);
+  threadsRef.current = threads;
+  const [draft, setDraft] = useState("");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const [note, setNote] = useState(turnsScenario && !idle ? "North is still replying. Your message is kept; send it when this turn ends." : "");
+  const busy = turnsScenario && !idle;
+  const record = (key: "asked" | "plannerAsks", value: string) => {
+    const store = window as unknown as Record<string, string[] | undefined>;
+    store[key] = [...(store[key] ?? []), value];
+  };
   return (
     <Workspace
       t={t}
@@ -154,21 +179,41 @@ function Fixture() {
       selectedId={bot.id}
       openThreadId={thread.id}
       channel={channelScenario ? channel : null}
-      workingBotId={turnsScenario ? bot.id : null}
+      workingBotId={busy ? bot.id : null}
+      workingThreadId={busy ? thread.id : null}
       studio={studio}
       harness={channelScenario ? health : null}
       healthLog={{ checkedAt: at }}
       healthChecked
       onRecheckHarness={() => new Promise((resolve) => setTimeout(() => resolve(false), 300))}
       onAskAgain={(id) => {
-        // The app puts the original message back in the composer; the fixture only records the call.
-        (window as unknown as { asked?: string[] }).asked = [...((window as unknown as { asked?: string[] }).asked ?? []), id];
+        record("asked", id);
+        const next = askAgainDraft(draftRef.current, promptFor(threadsRef.current[0].messages, id));
+        if (next.kept) setNote(t("tsAskAgainKept"));
+        else setDraft(next.draft);
+        focusComposer();
       }}
-      onPlannerAnswer={noop}
-      busyNote={turnsScenario ? "North is still replying. Your message is kept; send it when this turn ends." : ""}
+      onPlannerAnswer={(id) => {
+        startPlannerAnswer({
+          messageId: id,
+          runner: false,
+          busy: () => busy,
+          onBusy: noop,
+          threads: () => threadsRef.current,
+          write: (claimed, claim) => {
+            threadsRef.current = claimed;
+            setThreads((prev) => claimPlannerAnswer(prev, claim.threadId, claim.sourceId, { messageId: claim.replyId, at: claim.at }) ?? prev);
+          },
+          newId: () => `reply-${Date.now()}`,
+          now: () => 1_700_000_200_000,
+          ask: async (request) => record("plannerAsks", request.prompt),
+          refuse: noop,
+        });
+      }}
+      busyNote={note}
       runner={false}
       callActive={false}
-      messages={channelScenario ? [] : thread.messages}
+      messages={channelScenario ? [] : threads[0].messages}
       onApproval={noop}
       onCreateChannel={noop}
       onSendChannel={noop}
@@ -179,7 +224,7 @@ function Fixture() {
       onAddFiles={noop}
       onRemoveFile={noop}
       hub={null}
-      draft=""
+      draft={draft}
       hasPending={false}
       recording={false}
       listening={false}
@@ -203,7 +248,10 @@ function Fixture() {
       onApplyTestProfile={noop}
       onDelete={noop}
       onDuplicate={noop}
-      onDraft={noop}
+      onDraft={(value) => {
+        setDraft(value);
+        if (note === t("tsAskAgainKept")) setNote("");
+      }}
       onSend={noop}
       onStop={noop}
       onAddSection={noop}

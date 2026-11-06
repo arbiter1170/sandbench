@@ -29,6 +29,8 @@ export type Message = {
     runner?: boolean;
     /** The one-time planner turn was claimed but did not start (I-3): nothing is retried. */
     plannerError?: string;
+    /** A scheduled or webhook run: the one-time planner answer is not offered for it. */
+    unattended?: boolean;
   };
   /** S10: POST /turns failed without proof that no turn exists. */
   startUnknown?: { agent: string; reason: string };
@@ -42,6 +44,8 @@ export type Message = {
   roundsExhausted?: number;
   /** A built-in planner reply stopped in this page; a command already sent may still finish. */
   stoppedInPage?: boolean;
+  /** Stop was pressed before anything was sent to an agent or run by the planner. */
+  stoppedBeforeStart?: boolean;
   localStandIn: boolean;
   fresh: boolean;
   thinking?: string[];
@@ -281,6 +285,8 @@ export type Routine = {
   schedule: string;
   enabled: boolean;
   lastRunAt?: number;
+  /** UX P2: why the last run did nothing, e.g. "Couldn't start · the local harness isn't reachable". */
+  lastNote?: string;
 };
 
 export type WebhookTrigger = {
@@ -302,6 +308,8 @@ export type TriggerRun = {
   at: number;
   status: "ok" | "failed" | "skipped";
   ms?: number;
+  /** Why a run failed, when the page knows (UX P2: "Couldn't start · …"). */
+  detail?: string;
 };
 
 export type ComputerEvent = {

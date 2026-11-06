@@ -8,16 +8,21 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { chatAgent } from "./chatContext";
 import { translate, type Key } from "./i18n";
-import { DROPPED, IN_FLIGHT, RELOADED, settleEndedMessage, settleLoadedThreads, settleMessage, STOP_REQUESTED_REPLY, STOPPED_REPLY } from "./turnRecovery";
+import { DROPPED, IN_FLIGHT, RELOADED, settleEndedMessage, settleLoadedThreads, settleMessage, STOP_GRACE_MS, STOP_REQUESTED_REPLY, STOPPED_REPLY } from "./turnRecovery";
 import {
+  askAgainDraft,
   canChoosePlanner,
   claimPlannerAnswer,
   classifyStartError,
   continuedIds,
+  decideStart,
   promptFor,
+  runningMessageId,
   shortReason,
   START_REFUSALS,
   startFailureFor,
+  startFailureSummary,
+  startPlannerAnswer,
   turnStatus,
   type TurnStateId,
 } from "./turnStatus";
@@ -82,6 +87,7 @@ const everyState = (): [TurnStateId, Message, { continued?: boolean }?][] => [
   ["couldntStart", s9()],
   ["startUnknown", msg({ status: "error", startUnknown: { agent: "Claude Code", reason: "Failed to fetch" }, driverTurn: { agent: "Claude Code" } })],
   ["stoppedInPage", msg({ stoppedInPage: true, text: "Stopped." })],
+  ["stoppedBeforeStart", msg({ stoppedBeforeStart: true, driverTurn: { agent: "Claude Code" } })],
   ["continued", msg({ approval: card({ status: "approved", output: "ok", exitCode: 0 }), driverTurn: { agent: "Claude Code", id: "t1" } }), { continued: true }],
 ];
 
@@ -100,13 +106,14 @@ describe("the turn state table (UX P2)", () => {
         "Waiting for you · North is paused until you choose.",
         "Finished",
         "Stopped by you. Steps above with a recorded result ran; others have unknown status.",
-        "Stop requested · not confirmed. The harness didn't confirm it stopped, so this turn may still be running there. Execution status: unknown.",
+        "Stop requested · not confirmed. The harness didn't confirm within 5 s that it stopped, so this turn may still be running there. This page no longer follows it. Execution status: unknown.",
         "Failed · Claude Code exited with 1. The agent had started. Steps without a recorded result have unknown status. No retry, no fallback.",
         "Ended after 4 approval rounds without a final answer.",
         "Interrupted · execution status unknown. The connection to the local harness dropped before the turn finished. Sandbench can't confirm what ran after that. Partial text is kept.",
         "Couldn't start · Claude Code isn't available",
         "Start status unknown · Couldn't confirm the start. Claude Code may have started this reply. Nothing will be retried automatically.",
         "Stopped in this page. A command already sent to the harness may still finish there; steps without a recorded result have unknown status.",
+        "Stopped before it started. Nothing was sent to Claude Code.",
         "Continued below",
       ]
     `);
@@ -129,6 +136,7 @@ describe("the turn state table (UX P2)", () => {
       couldntStart: ["checkConnection", "plannerAnswer"],
       startUnknown: ["checkConnection", "askAgain"],
       stoppedInPage: ["askAgain"],
+      stoppedBeforeStart: ["askAgain"],
       continued: [],
     });
   });
@@ -215,19 +223,54 @@ describe("Couldn't start and the one-time planner answer (S9, S12)", () => {
     expect(html).toMatch(/<div class="turn-card tone-bad" role="group" aria-labelledby="turn-s9">/);
   });
 
-  it("F-P2-a in the app: the unavailable branch returns before any POST /turns and before the planner runs (P2-AC2, I-2)", () => {
-    const ask = body("askBot");
+  it("F-P2-a and the H1 race: a chosen agent that can't be resolved before the start is Couldn't start, never the planner (P2-AC2, I-2)", async () => {
     expect(app).not.toContain("so the built-in planner answers.");
-    const branch = ask.slice(ask.indexOf('if (agent?.kind === "unavailable") {\n        if (genRef'), ask.indexOf("const driver = agent?.kind"));
-    expect(branch).toContain("startFailureFor(agent");
-    expect(branch).toContain("return shown;");
-    expect(branch).not.toMatch(/driveTurn|harnessStartTurn|playTurn|streamText|streamReply|completeText/);
-    // The branch is reached before either answerer, and only the planner tap skips it.
-    expect(ask.indexOf("startFailureFor(agent")).toBeLessThan(ask.indexOf("await driveTurn({"));
-    expect(ask.indexOf("startFailureFor(agent")).toBeLessThan(ask.indexOf("await playTurn({"));
-    expect(ask).toMatch(/const intended = options\.plannerOnce \? undefined : agentFor\(bot\);/);
-    // A stale reading is checked once more (health and drivers only) before saying Couldn't start.
-    expect(ask).toMatch(/if \(agent\?\.kind === "unavailable"\) \{\s*await recheckHarness\(\);\s*agent = agentFor\(bot\);\s*\}/);
+    const calls: string[] = [];
+    const decide = (resolved: (string | undefined)[], extra: { chosen?: boolean; plannerOnce?: boolean; abortAfterRecheck?: boolean } = {}) => {
+      let aborted = false;
+      let index = 0;
+      return decideStart<string>({
+        plannerOnce: Boolean(extra.plannerOnce),
+        chosen: extra.chosen ?? true,
+        resolve: () => resolved[Math.min(index++, resolved.length - 1)],
+        recheck: async () => {
+          calls.push("recheck");
+          if (extra.abortAfterRecheck) aborted = true;
+        },
+        aborted: () => aborted,
+      });
+    };
+    // Harness down from the start (F-P2-a): read once more, then Couldn't start.
+    expect(await decide([undefined, undefined])).toEqual({ kind: "couldntStart" });
+    // H1: the agent looked available when the reply began (intended), but the harness dropped
+    // during the skill and memory reads; at the decision it resolves to nothing: still S9.
+    expect(await decide([undefined, undefined])).toEqual({ kind: "couldntStart" });
+    // A stale reading that the re-read fixes: the agent answers.
+    expect(await decide([undefined, "claude"])).toEqual({ kind: "driver", driver: "claude" });
+    expect(await decide(["claude"])).toEqual({ kind: "driver", driver: "claude" });
+    expect(calls).toEqual(["recheck", "recheck", "recheck"]);
+    // Only a bot with no agent chosen gets the planner, and only the tap skips the decision.
+    expect(await decide([undefined], { chosen: false })).toEqual({ kind: "planner" });
+    expect(await decide(["claude"], { plannerOnce: true })).toEqual({ kind: "planner" });
+    // The app decides with this, after its reads, from the bot's and Settings' choice.
+    const ask = body("askBot");
+    expect(ask.indexOf("await decideStart({")).toBeGreaterThan(ask.indexOf("await Promise.all([skillLinesFor(bot), memoryDocFor(botId)])"));
+    expect(ask).toMatch(/chosen: Boolean\(bot\.driver \|\| settingsRef\.current\.defaultAgentDriver\),\s*resolve: \(\) => resolveAgentDriver\(bot\),\s*recheck: recheckHarness,/);
+    expect(ask.indexOf('if (decision.kind === "couldntStart") {')).toBeLessThan(ask.indexOf("await playTurn({"));
+  });
+
+  it("M3: Stop pressed during the S1 re-read (or before it) ends the reply with nothing sent", async () => {
+    let aborted = false;
+    const resolve = () => undefined;
+    let sent = 0;
+    const result = await decideStart({ plannerOnce: false, chosen: true, resolve, recheck: async () => void (aborted = true), aborted: () => aborted });
+    expect(result).toEqual({ kind: "stopped" });
+    expect(await decideStart({ plannerOnce: true, chosen: true, resolve, recheck: async () => void (sent += 1), aborted: () => true })).toEqual({ kind: "stopped" });
+    expect(sent).toBe(0);
+    const line = status(msg({ stoppedBeforeStart: true, driverTurn: { agent: "Claude Code" } }));
+    expect([line.state, line.text, line.actions]).toEqual(["stoppedBeforeStart", "Stopped before it started. Nothing was sent to Claude Code.", ["askAgain"]]);
+    expect(status(msg({ stoppedBeforeStart: true })).text).toBe("Stopped before it started. Nothing ran.");
+    expect(render(msg({ stoppedBeforeStart: true }))).not.toContain(PLANNER_BUTTON);
   });
 
   it("an unavailable driver names the harness's detail; a refused start names the harness's refusal", () => {
@@ -242,22 +285,34 @@ describe("Couldn't start and the one-time planner answer (S9, S12)", () => {
     for (const key of ["tsCouldntStart", "tsCouldntStartLine", "tsReasonUnreachable", "tsReasonUnavailable", "tsNothingSent"] as Key[]) expect(t(key)).not.toMatch(/signed in|not signed/i);
   });
 
-  it("F-P2-a twice quickly: exactly one claim, so one planner turn; the S9 message links to it (I-3, P2-AC4)", () => {
+  it("F-P2-a twice quickly, through the app's claim path: one claim, one planner turn, the S9 message links to it (I-3, P2-AC4)", async () => {
     const source = s9();
-    const thread: Thread = { id: "chat", title: "x", updatedAt: 1, botId: "north", messages: [user("List the files"), source] };
-    // The app's handler: claim from the ref, write the ref, then start the turn. A second tap in
-    // the same tick reads the written ref.
-    let ref = [thread];
-    const started: string[] = [];
-    const tap = (replyId: string) => {
-      const claimed = claimPlannerAnswer(ref, "chat", "s9", { messageId: replyId, at: 1_700_000_000_000 });
-      if (!claimed) return;
-      ref = claimed;
-      started.push(replyId);
-    };
-    tap("reply-1");
-    tap("reply-2");
-    expect(started).toEqual(["reply-1"]);
+    let ref: Thread[] = [{ id: "chat", title: "x", updatedAt: 1, botId: "north", messages: [user("List the files"), source] }];
+    const asks: unknown[] = [];
+    const writes: unknown[] = [];
+    let ids = 0;
+    const tap = () =>
+      startPlannerAnswer({
+        messageId: "s9",
+        runner: false,
+        busy: () => false,
+        onBusy: () => writes.push("busy"),
+        threads: () => ref,
+        write: (claimed, claim) => {
+          // Before the turn is asked for (asks is still empty here on the first tap).
+          writes.push({ asksSoFar: asks.length, ...claim });
+          ref = claimed;
+        },
+        newId: () => `reply-${(ids += 1)}`,
+        now: () => 1_700_000_000_000,
+        // The turn isn't running yet when the second tap lands: only the claim stops it.
+        ask: async (request) => void asks.push(request),
+        refuse: () => undefined,
+      });
+    expect(tap()).toBe(true);
+    expect(tap()).toBe(false);
+    expect(asks).toEqual([{ threadId: "chat", sourceId: "s9", replyId: "reply-1", botId: "north", prompt: "List the files", agent: "Claude Code" }]);
+    expect(writes).toEqual([{ asksSoFar: 0, threadId: "chat", sourceId: "s9", replyId: "reply-1", at: 1_700_000_000_000 }]);
     const claimed = ref[0].messages[1];
     expect(claimed.plannerAnswer).toEqual({ messageId: "reply-1", at: 1_700_000_000_000 });
     expect(canChoosePlanner(claimed, { runner: false, busy: false })).toBe(false);
@@ -267,22 +322,60 @@ describe("Couldn't start and the one-time planner answer (S9, S12)", () => {
     const html = render(claimed);
     expect(html).not.toContain(PLANNER_BUTTON);
     expect(html).toMatch(/<a href="#msg-reply-1">Planner answer chosen at [^<]+ ↓<\/a>/);
+    // The app uses this path, writes the ref and saves at once, and changes no bot or Settings (P2-AC5).
+    const handler = body("answerWithPlanner");
+    expect(handler).toContain("startPlannerAnswer({");
+    expect(handler).toContain("threadsRef.current = claimed;");
+    expect(handler).toContain("void saveSnapshot({ ...workspaceRef.current, threads: claimed })");
+    expect(handler).not.toMatch(/setBots|patchBot|setSettings|patchSettings|defaultAgentDriver/);
   });
 
-  it("the handler writes the claim synchronously before it asks for the planner turn, and checks the running turn first (I-1, I-3)", () => {
-    const handler = body("answerWithPlanner");
-    expect(handler).toMatch(/if \(runnerMode\) return;\s*if \(sendingRef\.current\) \{\s*noteBusy\(\);\s*return;\s*\}/);
-    const claimAt = handler.indexOf("threadsRef.current = claimed;");
-    expect(claimAt).toBeGreaterThan(0);
-    expect(handler.indexOf("claimPlannerAnswer(threadsRef.current")).toBeLessThan(claimAt);
-    expect(handler.indexOf("void askBot(")).toBeGreaterThan(claimAt);
-    expect(handler.slice(0, claimAt)).not.toMatch(/await/);
-    // P2-AC5: no bot or Settings write; P2-AC6/I-6: the turn gets the prompt and the claim only.
-    expect(handler).not.toMatch(/setBots|patchBot|setSettings|patchSettings|defaultAgentDriver|driver:/);
-    expect(handler).toMatch(/void askBot\(source\.authorBotId, prompt, \{\s*threadId: thread\.id,\s*skipUser: true,\s*plannerOnce: \{ replyId: claim\.messageId, sourceId: messageId, agent: source\.startFailure\.agent \},\s*\}\)/);
-    // A planner turn that doesn't start keeps the claim and says why; nothing is retried.
-    expect(handler).toContain("plannerError: reason");
-    expect(handler.match(/askBot\(/g)).toHaveLength(1);
+  it("I-1, I-3, W-3, M4: no claim while a turn runs, in runner mode, for a scheduled run, or when a reply already answered for it", () => {
+    const thread = (messages: Message[]): Thread[] => [{ id: "chat", title: "x", updatedAt: 1, messages }];
+    const attempt = (threads: Thread[], extra: { runner?: boolean; busy?: boolean } = {}) => {
+      const asked: unknown[] = [];
+      let busyNoted = 0;
+      const started = startPlannerAnswer({
+        messageId: "s9",
+        runner: Boolean(extra.runner),
+        busy: () => Boolean(extra.busy),
+        onBusy: () => (busyNoted += 1),
+        threads: () => threads,
+        write: () => asked.push("write"),
+        newId: () => "r",
+        now: () => 1,
+        ask: async (request) => void asked.push(request),
+        refuse: () => undefined,
+      });
+      return { started, asked, busyNoted };
+    };
+    expect(attempt(thread([user("hi"), s9()]), { busy: true })).toEqual({ started: false, asked: [], busyNoted: 1 });
+    expect(attempt(thread([user("hi"), s9()]), { runner: true }).asked).toEqual([]);
+    expect(attempt(thread([user("hi"), { ...s9(), startFailure: { kind: "unreachable", agent: "Claude Code", unattended: true } }])).asked).toEqual([]);
+    // A claim that never reached storage, but whose reply did: the reply blocks a second one.
+    const answered = msg({ answeredBy: { kind: "planner-once", agent: "Claude Code", sourceId: "s9" } });
+    expect(attempt(thread([user("hi"), s9(), answered])).asked).toEqual([]);
+    expect(claimPlannerAnswer(thread([user("hi"), s9(), answered]), "chat", "s9", { messageId: "x", at: 1 })).toBeNull();
+    // With no text to answer, the claim stays and says why; nothing is asked for or retried.
+    const refused: unknown[] = [];
+    startPlannerAnswer({ messageId: "s9", runner: false, busy: () => false, onBusy: () => undefined, threads: () => thread([s9()]), write: () => undefined, newId: () => "r", now: () => 1, ask: async () => refused.push("ask"), refuse: (request) => refused.push(request.reason) });
+    expect(refused).toEqual(["noPrompt"]);
+  });
+
+  it("M4: a scheduled or webhook run that couldn't start says so, offers no planner, and records why", () => {
+    const failure = { kind: "unreachable" as const, agent: "Claude Code", unattended: true };
+    const html = render(msg({ startFailure: failure }));
+    expect(html).not.toContain(PLANNER_BUTTON);
+    expect(html).toContain("This was a scheduled or webhook run, so nothing ran.");
+    expect(startFailureSummary(failure, t)).toBe("Couldn't start · the local harness isn't reachable");
+    const ask = body("askBot");
+    expect(ask).toMatch(/\.\.\.\(options\.unattended \? \{ unattended: true \} : \{\}\),/);
+    expect(ask).toMatch(/receiptDone\(options\.receipt, botId, started, "failed", summary\);\s*if \(options\.routineId\) setRoutines/);
+    const server = readFileSync(new URL("../harness/server.mjs", import.meta.url), "utf8");
+    expect(server).toContain('{ detail: cleanText(body.detail, 240) }');
+    const shell = readFileSync(new URL("./shell.tsx", import.meta.url), "utf8");
+    expect(shell).toContain("{routine.lastNote ? ` · ${routine.lastNote}` : \"\"}");
+    expect(shell).toContain("{run.detail ? ` · ${run.detail}` : \"\"}");
   });
 
   it("the planner turn uses the bot's normal rules and the Settings auto-review list, nothing from the failed start (P2-AC6, I-6)", () => {
@@ -291,11 +384,9 @@ describe("Couldn't start and the one-time planner answer (S9, S12)", () => {
     expect(ask).toMatch(/autoRun: \(command\) => autoApproved\(command, currentStudio\.autoApprove\),/);
     expect(ask).toMatch(/makeApproval\(chosen, Boolean\(options\.unattended\), bot\)/);
     expect(ask).not.toMatch(/plannerOnce\.[a-zA-Z]*[Aa]pprov/);
-    // plannerOnce only names the reply, marks it, and skips the agent.
-    expect([...ask.matchAll(/options\.plannerOnce/g)].length).toBe(5);
-    expect(ask).toContain("const assistantId = options.plannerOnce?.replyId ?? crypto.randomUUID();");
-    expect(ask).toContain("const intended = options.plannerOnce ? undefined : agentFor(bot);");
-    expect(ask).toContain('...(options.plannerOnce ? { answeredBy: { kind: "planner-once" as const, agent: options.plannerOnce.agent, sourceId: options.plannerOnce.sourceId } } : {}),');
+    // The request carries the prompt, the thread and the claim only.
+    const handler = body("answerWithPlanner");
+    expect(handler).toMatch(/askBot\(request\.botId, request\.prompt, \{\s*threadId: request\.threadId,\s*skipUser: true,\s*plannerOnce: \{ replyId: request\.replyId, sourceId: request\.sourceId, agent: request\.agent \},\s*\}\)/);
   });
 
   it("F-P2-b: after a reload the S9 message still shows 'Planner answer chosen' and offers nothing", () => {
@@ -381,7 +472,8 @@ describe("start failures: proof that no turn exists (I-4)", () => {
     expect(drive).toMatch(/await harnessStartTurn\(\{[\s\S]*?\}\)\.catch\(\(error: unknown\) => \{\s*throw classifyStartError\(error\);\s*\}\);/);
     const ask = body("askBot");
     const branch = ask.slice(ask.indexOf("if (error instanceof TurnStartError) {"), ask.indexOf("const aborted = error instanceof DOMException"));
-    expect(branch).toMatch(/error\.kind === "refused"\s*\? \{ \.\.\.message, status: "done", startFailure: \{ kind: "refused"/);
+    expect(branch).toMatch(/const startFailure = \{ kind: "refused" as const, agent: startingAgent, detail: error\.reason,/);
+    expect(branch).toMatch(/error\.kind === "refused"\s*\? \{ \.\.\.message, status: "done", startFailure \}/);
     expect(branch).toMatch(/: \{ \.\.\.message, status: "error", startUnknown: \{ agent: startingAgent, reason: error\.reason \} \}/);
     expect(branch).not.toMatch(/askBot|driveTurn|harnessStartTurn|playTurn|setBanner/);
     // S1 → S2 once the id is back (I-5: from here on the turn counts as started).
@@ -416,7 +508,12 @@ describe("after a start: no planner, no retry (I-5)", () => {
     expect(html).not.toContain(PLANNER_BUTTON);
   });
 
-  it("F-P2-g: Stop with the interrupt refused and no done{stopped:true} → S5b; once it arrives → S5a (P2-AC11)", () => {
+  it("F-P2-g: Stop with the interrupt refused and no done{stopped:true} within the grace → S5b for good; done{stopped:true} inside it → S5a (P2-AC11)", () => {
+    // #31 closes the stream STOP_GRACE_MS after Stop, so a confirmation can only arrive inside it;
+    // the S5b copy says how long the page waited and that it no longer follows the turn.
+    expect(STOP_GRACE_MS).toBe(5000);
+    expect(status(msg({ interrupted: STOP_REQUESTED_REPLY })).text).toContain("didn't confirm within 5 s that it stopped");
+    expect(status(msg({ interrupted: STOP_REQUESTED_REPLY })).text).toContain("This page no longer follows it.");
     const streaming = msg({ status: "streaming", text: "Building…", driverTurn: { agent: "Claude Code", id: "t1" } });
     const unconfirmed = settleEndedMessage(streaming, { stopRequested: true, stopConfirmed: false, failed: false, last: true });
     expect(status(unconfirmed).state).toBe("stopRequested");
@@ -441,6 +538,31 @@ describe("after a start: no planner, no retry (I-5)", () => {
   });
 });
 
+describe("a reply of the turn that is still running (M1)", () => {
+  it("the newest reply of the running turn reads Working, even with a real result on its card", () => {
+    const card = msg({ driverTurn: { agent: "Claude Code", id: "t1" }, approval: { command: "ls", reason: "r", status: "approved", permissionId: "p1", output: "a\nb", exitCode: 0 } });
+    expect(status(card).text).toBe("Finished · 1 approval: ls (approved by you)");
+    const running = turnStatus(card, { t, bot: "North", running: true })!;
+    expect([running.state, running.text]).toEqual(["working", "Working"]);
+    expect(render(card, controls({ running: true }))).not.toContain("Finished");
+    // Running doesn't hide an ending the page already knows, or the S9 card.
+    expect(turnStatus(msg({ status: "error", failure: "boom" }), { t, running: true })!.state).toBe("failed");
+    expect(turnStatus(s9(), { t, running: true })!.state).toBe("couldntStart");
+    expect(turnStatus(msg({ approval: card.approval && { ...card.approval, status: "pending" } }), { t, running: true })!.state).toBe("waiting");
+  });
+
+  it("runningMessageId is the working bot's newest reply in this chat; the shell passes it only for the turn's own chat", () => {
+    const older = msg({ authorBotId: "north" });
+    const other = msg({ authorBotId: "pip" });
+    const newest = msg({ authorBotId: "north" });
+    expect(runningMessageId([user("a"), older, other, newest, user("b")], "north")).toBe(newest.id);
+    expect(runningMessageId([older], null)).toBeUndefined();
+    const shell = readFileSync(new URL("./shell.tsx", import.meta.url), "utf8");
+    expect(shell).toContain("const running = props.workingThreadId && props.workingThreadId === props.openThreadId ? runningMessageId(messages, workingBotId) : undefined;");
+    expect(app).toMatch(/const assistantId = options\.plannerOnce\?\.replyId \?\? crypto\.randomUUID\(\);\s*setWorkingThreadId\(threadId\);/);
+  });
+});
+
 describe("Check connection, Ask again… and the busy note", () => {
   it("P2-AC7: Check connection is the context line's recheck, which reads only /health and /drivers", () => {
     const recheck = app.slice(app.indexOf("const recheckHarness = useCallback("), app.indexOf("}, [checkHealth]);", app.indexOf("const recheckHarness = useCallback(")));
@@ -462,7 +584,15 @@ describe("Check connection, Ask again… and the busy note", () => {
 
   it("P2-AC8: Ask again… fills the composer with the original message and focuses it; it never sends", () => {
     const handler = body("askAgain");
-    expect(handler).toMatch(/setDraft\(promptFor\(thread\.messages, messageId\)\);\s*document\.getElementById\("composer"\)\?\.focus\(\);/);
+    expect(handler).toMatch(/const next = askAgainDraft\(draftRef\.current, promptFor\(thread\.messages, messageId\)\);/);
+    expect(handler).toContain("focusComposer();");
+    // L2: an empty composer (or one holding the same text) gets the original message; a draft
+    // being typed is kept, and the note says how to bring the message back.
+    expect(askAgainDraft("", "List the files")).toEqual({ draft: "List the files", kept: false });
+    expect(askAgainDraft("  ", "List the files")).toEqual({ draft: "List the files", kept: false });
+    expect(askAgainDraft("List the files", "List the files")).toEqual({ draft: "List the files", kept: false });
+    expect(askAgainDraft("half a new quest", "List the files")).toEqual({ draft: "half a new quest", kept: true });
+    expect(t("tsAskAgainKept")).toMatch(/^Your draft is kept\./);
     expect(handler).not.toMatch(/askBot|sendToChannel|harness[A-Z]\w*\(|driveTurn|fetch\(/);
     const messages = [user("first"), msg({ id: "a1" }), user("List the files"), msg({ id: "a2" }), msg({ id: "a3" })];
     expect(promptFor(messages, "a2")).toBe("List the files");
@@ -481,7 +611,7 @@ describe("Check connection, Ask again… and the busy note", () => {
     const channel = body("sendToChannel");
     expect(channel).toMatch(/if \(sendingRef\.current\) \{\s*noteBusy\(\);\s*return;\s*\}/);
     // The note is cleared when the turn ends.
-    expect(ask).toMatch(/finally \{\s*sendingRef\.current = false;\s*workingRef\.current = null;\s*setWorkingBotId\(null\);\s*setBusyNote\(""\);/);
+    expect(ask).toMatch(/finally \{\s*sendingRef\.current = false;\s*workingRef\.current = null;\s*setWorkingBotId\(null\);\s*setWorkingThreadId\(null\);\s*setComposerNote\(\(note\) => \(note\?\.kind === "busy" \? null : note\)\);/);
     expect(t("tsBusy").replace("{bot}", "North")).toBe("North is still replying. Your message is kept; send it when this turn ends.");
     const shell = readFileSync(new URL("./shell.tsx", import.meta.url), "utf8");
     expect(shell).toContain('<p className="busy-note" role="status" aria-live="polite">{props.busyNote}</p>');

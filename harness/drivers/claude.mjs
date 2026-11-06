@@ -384,6 +384,12 @@ async function converse(bin, settingsFile, listFile, turn, io) {
     // The last round: the approved steps would need another round, so the turn ends here and
     // says so (the page shows "Ended after N approval rounds without a final answer").
     if (round === MAX_ROUNDS - 1) {
+      // Each step approved in this last round gets its own end, so the harness's "The agent ran
+      // this step itself" line (turns.mjs, for a granted step with no result) is not added to it.
+      for (const denial of approved) {
+        const permissionId = approvedIds.get(denialCommand(denial));
+        if (permissionId) io.emit({ type: "tool_end", permissionId, undelivered: true, output: "Approved, but the turn ended before Claude Code was given this step." });
+      }
       io.emit({ type: "thinking", text: `Stopped after ${MAX_ROUNDS} approval rounds; the steps approved last were not handed back to Claude Code.`, roundsExhausted: MAX_ROUNDS });
       return;
     }
