@@ -55,7 +55,8 @@ describe("chat context line and sheet (UX P1)", () => {
     expect(row(rows, "folder").value).toBe("Workspace root (configured): Unknown: harness offline");
     // I-9: the last good check shows only with its age.
     expect(row(rows, "runsOn").value).toBe("Unknown: harness offline · last connected 2 min ago");
-    expect(row(rows, "agent").value).toMatch(/needs the local harness, which is not reachable\. Until it is, the built-in planner answers/);
+    // UX P2 (I-2): nothing answers in its place; the planner is a one-time choice on Couldn't start.
+    expect(row(rows, "agent").value).toMatch(/needs the local harness, which is not reachable\. Until it is, a message here shows Couldn't start, and you can choose the built-in planner for that one reply\./);
     expect(JSON.stringify(rows)).not.toContain("win32");
   });
 
@@ -67,10 +68,18 @@ describe("chat context line and sheet (UX P1)", () => {
     expect([line.agent, line.folder, line.connection].join(" · ")).toBe("Codex (not available) · workspace root · Connected");
     expect(line.tone).toBe("bad");
     const rows = sheetRows({ bot: north, agent, route: noKey, connection: connected, messages: [], t });
-    expect(row(rows, "agent").value).toBe("Codex is not available on the harness: codex not found. Until it is, the built-in planner answers this chat.");
+    expect(row(rows, "agent").value).toBe("Codex is not available on the harness: codex not found. Until it is, a message here shows Couldn't start, and you can choose the built-in planner for that one reply.");
     expect(row(rows, "agent").badge).toBe("Chosen for this bot");
-    // The planner answers, so the Model row is the planner's, not "chosen by Codex".
-    expect(row(rows, "model").value).toBe("No model key: replies are local stand-ins");
+    // UX P2: nothing answers in Codex's place. The rows say so, and what a one-time planner answer would use.
+    expect(row(rows, "model").value).toBe("None: replies show Couldn't start. A one-time planner answer, if you choose one, is a local stand-in (no model key).");
+    expect(row(rows, "tools").value).toBe("None: nothing runs until Codex can start. A one-time planner answer, if you choose one, shows a card for each step.");
+    expect(row(rows, "memory").value).toBe("Not read: nothing runs until Codex can start. A one-time planner answer, if you choose one, reads it at its start.");
+    for (const item of rows) expect(item.value).not.toMatch(/planner answers/);
+    // With the runner, the one-time planner answer is withheld (W-3), so nothing promises it.
+    const onRunner = sheetRows({ bot: north, agent, route: noKey, connection: { ...connected, runner: true }, messages: [], t });
+    expect(row(onRunner, "agent").value).toBe("Codex is not available on the runner: codex not found. Until it is, a message here shows Couldn't start and nothing is sent.");
+    expect(row(onRunner, "model").value).toBe("None: replies show Couldn't start until Codex can run on the runner.");
+    for (const item of onRunner) expect(item.value).not.toMatch(/planner/i);
     // Before anyone checked, a chosen driver is not called unavailable.
     const checking: Connection = { state: "checking", runner: false, now: NOW };
     const early = contextLine({ members: [{ name: "North", agent }], connection: checking, t });
@@ -132,7 +141,12 @@ describe("chat context line and sheet (UX P1)", () => {
     expect(pick({ driver: "claude" })).toBe("claude");
     expect(pick({ driver: "codex" }, noKey, "claude")).toBeUndefined(); // a chosen driver never falls back
     expect(pick({}, noKey, "claude")).toBe("claude");
-    expect(pick({}, { provider: "anthropic", ready: true, model: "m" }, "codex")).toBe("anthropic"); // default not ok: provider rule
+    // UX P2 (I-2): a chosen Settings default that can't run is not replaced by the provider's driver.
+    expect(pick({}, { provider: "anthropic", ready: true, model: "m" }, "codex")).toBeUndefined();
+    expect(pick({}, { provider: "anthropic", ready: true, model: "m" }, "claude", [{ ...claudeOk, ok: false }, anthropic])).toBeUndefined();
+    expect(chatAgent({ bot: bot("B"), defaultDriver: "codex", route: { provider: "anthropic", ready: true, model: "m" }, drivers: [codexMissing, anthropic], harnessUp: true }).kind).toBe("unavailable");
+    // With no agent chosen, the provider rules still apply.
+    expect(pick({}, { provider: "anthropic", ready: true, model: "m" })).toBe("anthropic");
     expect(pick({ skills: [] }, { provider: "openai_compat", ready: true, model: "m" })).toBeUndefined();
     expect(pick({ skills: ["computer"] }, { provider: "openai_compat", ready: true, model: "m" })).toBe("http");
     expect(pick({ driver: "claude" }, noKey, undefined, [claudeOk], false)).toBeUndefined(); // no harness, no driver

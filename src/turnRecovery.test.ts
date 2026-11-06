@@ -1,5 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import { readFileSync } from "node:fs";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { translate, type Key } from "./i18n";
+import { MessageBody } from "./views";
 import {
   DROPPED,
   followTurn,
@@ -325,10 +329,15 @@ describe("settling a driver turn's messages when it ends (U-7: Stop never reads 
     expect(drive).not.toMatch(/status: "denied" as const/);
   });
 
-  it("an interrupted reply shows its label and why", () => {
-    const views = readFileSync(new URL("./views.tsx", import.meta.url), "utf8");
-    expect(views).toContain('{message.interrupted ? <span className="meta">{t("interrupted")}</span> : null}');
-    expect(views).toContain('{message.interrupted ? <p className="hint">{message.interrupted}</p> : null}');
+  it("an interrupted reply shows its label and why (now on its UX P2 status line)", () => {
+    const t = (key: Key) => translate("en", key);
+    const html = (patch: Partial<Message>) => renderToStaticMarkup(createElement(MessageBody, { message: message(patch), t, youLabel: "You" }));
+    const lost = html({ status: "error", interrupted: DROPPED, text: "partial" });
+    expect(lost).toContain('<span class="meta">Interrupted</span>');
+    expect(lost).toContain(`Interrupted · execution status unknown. ${DROPPED}`);
+    expect(lost).toContain("partial");
+    expect(html({ interrupted: STOPPED_REPLY })).toContain(STOPPED_REPLY);
+    expect(html({ interrupted: STOP_REQUESTED_REPLY })).toContain("Stop requested · not confirmed.");
   });
 });
 
