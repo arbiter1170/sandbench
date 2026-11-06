@@ -931,6 +931,16 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
 .busy-note { margin: 0; color: var(--muted); font-size: 0.85rem; }
 .busy-note:empty { margin-top: -0.55rem; }
 
+/* "Effective setup" at the top of a bot's Model tab (UX P5): value, where it comes from, where to change it. */
+.effective-setup { margin: 0 0 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid var(--line); }
+.effective-setup h3 { margin: 0 0 0.4rem; font-size: 0.95rem; }
+.effective-setup dl { margin: 0; }
+.es-row { display: grid; grid-template-columns: minmax(6.5rem, 34%) 1fr; gap: 0.5rem; padding: 0.4rem 0; border-top: 1px solid var(--line); }
+.es-row dt { color: var(--muted); font-size: 0.85rem; }
+.es-row dd { margin: 0; min-width: 0; overflow-wrap: anywhere; font-size: 0.9rem; }
+.es-row .es-link { display: inline-block; padding: 0.1rem 0.3rem; font-size: 0.85rem; }
+@media (pointer: coarse) { .es-row .es-link { min-height: 44px; } }
+
 @media (max-width: 899px) {
   .app { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) auto; }
   .rail, .stage, .inspector { display: none; }

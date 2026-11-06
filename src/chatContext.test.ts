@@ -33,7 +33,10 @@ describe("chat context line and sheet (UX P1)", () => {
     expect(row(rows, "agent").badge).toBe("From Settings default");
     expect(row(rows, "agent").value).toMatch(/runs through the CLI's own sign-in · Sandbench stores no key for it/);
     expect(row(rows, "runsOn").value).toBe("Local harness on this computer (win32) · Connected · checked 4 s ago");
-    expect(row(rows, "model").value).toBe("Chosen by Claude Code · known after a reply");
+    // grok-3 (the Settings model) is not a Claude model, so the CLI picks its own.
+    expect(row(rows, "model").value).toBe("Claude Code picks its own model · known after a reply");
+    const sent = sheetRows({ bot: north, agent, route: { provider: "anthropic", ready: true, model: "claude-opus-5" }, connection: connected, messages: [], t });
+    expect(row(sent, "model").value).toBe("claude-opus-5 · sent to Claude Code");
     expect(row(rows, "folder").value).toBe("Workspace root (configured): C:\\Users\\<you>\\.sandbench\\workspace");
   });
 

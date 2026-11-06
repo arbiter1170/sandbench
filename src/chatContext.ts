@@ -4,6 +4,7 @@
 // `/drivers` ok means the CLI binary answers, not that a turn will start or that it is signed in.
 import type { AgentDriver } from "./harness";
 import type { Bot, Message, Thread } from "./types";
+import { safeWorkspacePath } from "./work";
 
 type Route = { provider: string; ready: boolean; model: string };
 type Translate = (key: ContextKey) => string;
@@ -28,6 +29,24 @@ export function effectiveDriver(input: { bot: Pick<Bot, "driver" | "skills">; de
   if (input.route.provider === "anthropic" && input.route.ready) return pick("anthropic");
   if (input.route.provider === "openai_compat" && input.route.ready && input.bot.skills.includes("computer")) return pick("http");
   return undefined;
+}
+
+// The page sends the bot's model with every driver turn (App.tsx `model: route.model`). Each
+// driver keeps it or drops it as below (harness/drivers/*.mjs); a test checks this against
+// claude.mjs's mapCliModel. Returns the model the driver will be asked for, or undefined.
+const CLI_ARG = /^[\w.:\\/@-]+$/;
+const CLI_ARG_PLUS = /^[\w.:\\/@+-]+$/;
+export function driverModel(driverId: string, model: string): string | undefined {
+  const value = model.trim();
+  if (!value) return undefined;
+  if (driverId === "claude") return CLI_ARG.test(value) && (/haiku|sonnet|opus/i.test(value) || /^claude[\w.-]*$/i.test(value)) ? value : undefined;
+  if (driverId === "codex" || driverId === "grok") return CLI_ARG_PLUS.test(value) ? value : undefined;
+  return value;
+}
+
+/** A group chat's working folder as the turn uses it: roomFolder's check, else the workspace root. */
+export function channelFolder(channel: Thread | undefined | null): string {
+  return channel?.memberIds && channel.workingFolder ? (safeWorkspacePath(channel.workingFolder) ?? "") : "";
 }
 
 export type AgentSource = "bot" | "settings" | "provider";
@@ -77,7 +96,7 @@ export type ContextKey =
   | "ctxReachable" | "ctxUnreachable" | "ctxRunnerOffline" | "ctxAgentUnavailableRunner" | "ctxToolsCli" | "ctxConnectorsRunner"
   | "ctxBadgeBot" | "ctxBadgeSettings" | "ctxBadgeProvider"
   | "ctxAgentClaude" | "ctxAgentOther" | "ctxAgentUnavailable" | "ctxAgentUnavailableOffline" | "ctxAgentPlanner"
-  | "ctxUnknownOffline" | "ctxModelAfterReply" | "ctxModelLast" | "ctxModelPlanner" | "ctxModelStandIn"
+  | "ctxUnknownOffline" | "ctxModelAfterReply" | "ctxModelSent" | "ctxModelLast" | "ctxModelPlanner" | "ctxModelStandIn"
   | "ctxFolderBot" | "ctxFolderChannel" | "ctxFolderLast"
   | "ctxToolsClaude" | "ctxToolsDriver" | "ctxToolsPlanner"
   | "ctxConnectorsClaude" | "ctxConnectorsNone" | "ctxConnectorsOther" | "ctxConnectorsPlanner"
@@ -130,7 +149,7 @@ export function contextLine(input: { members: MemberAgent[]; channel?: Thread; c
   const keys = [...groups.keys()];
   const several = Boolean(input.channel) && keys.length > 1;
   const agent = several ? keys.map((key) => `${key} (${groups.get(key)!.join(", ")})`).join(" · ") : (keys[0] ?? t("ctxPlanner"));
-  const folderName = input.channel ? (input.channel.workingFolder?.trim() || "") : "";
+  const folderName = channelFolder(input.channel);
   // A bot chat's folder is the workspace root, which only a reachable harness reports.
   const folder = input.channel ? folderName || t("ctxWorkspaceRoot") : connection.state === "offline" && !connection.runner ? "" : t("ctxWorkspaceRoot");
   const folderPrefix = several && folderName ? t("ctxFolderPrefix") : "";
@@ -211,10 +230,11 @@ export function sheetRows(input: {
         : t("ctxModelStandIn")
       : (() => {
             const seen = lastModel(input.messages);
-            return seen ? fill(t("ctxModelLast"), { model: seen }) : fill(t("ctxModelAfterReply"), { name });
+            const sent = agent.kind === "driver" ? driverModel(agent.id, route.model) : undefined;
+            return seen ? fill(t("ctxModelLast"), { model: seen }) : sent ? fill(t("ctxModelSent"), { model: sent, name }) : fill(t("ctxModelAfterReply"), { name });
           })();
 
-  const folderName = input.channel?.workingFolder?.trim();
+  const folderName = channelFolder(input.channel);
   const configured = folderName
     ? fill(t("ctxFolderChannel"), { folder: folderName })
     : fill(t("ctxFolderBot"), { path: offline || !connection.workspace ? unknown : connection.workspace });
