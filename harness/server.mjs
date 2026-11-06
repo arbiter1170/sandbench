@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { listDrivers } from "./drivers/index.mjs";
 import { listVoices as ttsListVoices, providerMeta, speak as ttsSpeak } from "./tts/index.mjs";
 import { proxyModel } from "./modelProxy.mjs";
+import { createConnectorRegistry } from "./connectors.mjs";
 import { createSecretStore } from "./secrets.mjs";
 import { createTurns } from "./turns.mjs";
 import { parseSkill } from "./skillLibrary.mjs";
@@ -599,6 +600,8 @@ function fillHeaders(headers) {
   return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, secrets.fill(String(value))]));
 }
 
+const localConnectors = createConnectorRegistry({ dir: path.join(SANDBENCH_HOME, "driver-settings") });
+
 async function readJson(req, limit = 256 * 1024) {
   let raw = "";
   for await (const chunk of req) {
@@ -796,6 +799,9 @@ const server = createServer(async (req, res) => {
       const headers = fillHeaders(body.headers);
       return send(res, 200, await callMcp(String(body.url || ""), headers, String(body.tool || ""), body.args));
     }
+    if (req.method === "POST" && url.pathname === "/connectors/sync") {
+      return send(res, 200, localConnectors.sync(await readJson(req)));
+    }
     if (req.method === "POST" && url.pathname === "/schedules") {
       const body = await readJson(req);
       const routines = Array.isArray(body.routines) ? body.routines : [];
@@ -887,7 +893,7 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/turns") {
       const body = await readJson(req);
-      return send(res, 200, agentTurns.start(body));
+      return send(res, 200, agentTurns.start(body, { connectors: localConnectors }));
     }
     const interrupt = /^\/turns\/([a-f0-9]{16})\/interrupt$/.exec(url.pathname);
     if (req.method === "POST" && interrupt) {

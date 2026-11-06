@@ -35,6 +35,7 @@ import {
   harnessRecordRun,
   harnessScreen,
   harnessStartTurn,
+  harnessSyncConnectors,
   harnessSyncSchedules,
   harnessSyncWebhooks,
   harnessTriggers,
@@ -556,6 +557,13 @@ export function App({ user }: { user: User }) {
       })),
     ).catch(() => undefined);
   }, [hydrated, harness, routines]);
+
+  const connectorAssignments = JSON.stringify(bots.map((bot) => [bot.id, bot.connectorIds ?? []]));
+  useEffect(() => {
+    if (!hydrated || !harness || runnerMode) return;
+    const assigned = (JSON.parse(connectorAssignments) as [string, string[]][]).map(([id, connectorIds]) => ({ id, connectorIds }));
+    void harnessSyncConnectors(studio.connectors, assigned).catch(() => undefined);
+  }, [hydrated, harness, studio.connectors, connectorAssignments]);
 
   useEffect(() => {
     if (!hydrated || !harness) return;
@@ -1639,6 +1647,7 @@ export function App({ user }: { user: User }) {
     const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
     const { id: turnId, after } = await harnessStartTurn({
       driver: args.driver,
+      botId: bot.id,
       prompt: args.prompt,
       system: args.system,
       history: args.history,
