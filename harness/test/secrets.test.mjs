@@ -76,7 +76,8 @@ test("a secrets file that can't be read is never overwritten, and the last good 
   store.set("XAI_API_KEY", FAKE);
   store.set("ANTHROPIC_API_KEY", FAKE);
   assert.match(readFileSync(`${file}.bak`, "utf8"), /XAI_API_KEY/);
-  assert.equal(statSync(`${file}.bak`).mode & 0o777, 0o600);
+  // Windows files have no POSIX mode bits to check.
+  if (process.platform !== "win32") assert.equal(statSync(`${file}.bak`).mode & 0o777, 0o600);
   // A hand edit breaks the JSON: lookups go on without file keys, but no write replaces it.
   writeFileSync(file, '{ "secrets": { "XAI_API_KEY": { "value": "x" }, ', { mode: 0o600 });
   assert.equal(store.get("XAI_API_KEY"), null);

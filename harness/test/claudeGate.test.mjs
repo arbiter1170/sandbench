@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, 
 import os from "node:os";
 import path from "node:path";
 import { after, test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const HOME = mkdtempSync(path.join(os.tmpdir(), "sb-gate-"));
 process.env.HOME = HOME;
@@ -93,7 +93,7 @@ test("the hook reads its list from the file on its command line and ignores the 
   assert.equal(imported.stdout, "");
   // A program that imports the hook file (the harness) and has arguments of its own is not the hook.
   const host = path.join(HOME, "host.mjs");
-  writeFileSync(host, `await import(${JSON.stringify(GATE_FILE)});`);
+  writeFileSync(host, `await import(${JSON.stringify(pathToFileURL(GATE_FILE).href)});`);
   const hosted = spawnSync(process.execPath, [host, "--port", "8799"], { input: JSON.stringify(bash("ls")), encoding: "utf8" });
   assert.equal(hosted.status, 0);
   assert.equal(hosted.stdout, "");

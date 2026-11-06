@@ -14,7 +14,8 @@ import { proxyModel, resolveTarget } from "../modelProxy.mjs";
 import { createTurns } from "../turns.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
-const read = (file) => readFileSync(path.join(root, file), "utf8");
+// Git may check source out with CRLF on Windows; these checks read it as LF.
+const read = (file) => readFileSync(path.join(root, file), "utf8").replace(/\r\n/g, "\n");
 
 const rows = new Map(
   // `\r?\n`: a Windows clone with core.autocrlf checks this file out with CRLF.

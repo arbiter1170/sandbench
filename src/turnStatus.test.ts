@@ -58,7 +58,8 @@ const controls = (patch: Partial<TurnControls> = {}): TurnControls => ({
 });
 const render = (message: Message, turn: TurnControls | undefined = controls()) => renderToStaticMarkup(createElement(MessageBody, { message, t, youLabel: "You", author: "North", turn }));
 const PLANNER_BUTTON = "Answer with the built-in planner this time";
-const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+// Git may check source out with CRLF on Windows; these checks read it as LF.
+const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8").replace(/\r\n/g, "\n");
 const body = (name: string) => {
   const start = app.indexOf(`function ${name}(`);
   const end = app.indexOf("\n  }\n", start);
