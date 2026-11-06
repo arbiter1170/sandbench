@@ -51,7 +51,7 @@ import {
 } from "./harness";
 import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
-import { settleEndedMessage, settleLoadedThreads, stoppedCard } from "./turnRecovery";
+import { REFUSED_ELSEWHERE, settleEndedMessage, settleLoadedThreads, STOP_GRACE_MS, stoppedCard } from "./turnRecovery";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -1656,7 +1656,14 @@ export function App({ user }: { user: User }) {
       unattendedDeny: args.unattended && studioRef.current.unattended === "skip",
       captureScreen: settingsRef.current.attachWorkScreenshots !== false,
     });
-    const stop = () => void harnessInterrupt(turnId).catch(() => undefined);
+    // Stop asks the harness to interrupt and keeps reading for a moment: only its
+    // done{stopped:true} proves the turn stopped (U-7). The stream closes after STOP_GRACE_MS.
+    const stream = new AbortController();
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+      void harnessInterrupt(turnId).catch(() => undefined);
+      grace = setTimeout(() => stream.abort(), STOP_GRACE_MS);
+    };
     args.signal.addEventListener("abort", stop, { once: true });
     let current: string | null = args.assistantId;
     const created = [args.assistantId];
@@ -1674,7 +1681,7 @@ export function App({ user }: { user: User }) {
       return id;
     };
     try {
-      await harnessEvents(turnId, after, args.signal, (event) => {
+      await harnessEvents(turnId, after, stream.signal, (event) => {
         // The harness's resolved folder, shown so a path the agent uses can be checked against it.
         if (event.type === "turn_start" && event.cwd) args.appendThinking(`Working folder: ${event.cwd}`);
         if (event.type === "thinking" && event.text) args.appendThinking(event.text);
@@ -1700,14 +1707,16 @@ export function App({ user }: { user: User }) {
         if (event.type === "permission_resolved" && event.permissionId) {
           const id = cards.get(event.permissionId)?.id;
           if (id) {
-            // A refusal while Stop is pressed is the Stop, not a Deny (this page's own Deny click
-            // already left "pending"): see stoppedCard.
+            // This page's own Deny click already left "pending", so a refusal that finds the card
+            // still waiting is not a Deny: Stop (stoppedCard), or an expiry or another tab.
             patchMessage(threadId, id, (message) =>
               message.approval?.status !== "pending"
                 ? message
-                : !event.allow && args.signal.aborted
-                  ? { ...message, approval: stoppedCard(message.approval, false) }
-                  : { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } },
+                : event.allow
+                  ? { ...message, approval: { ...message.approval, status: "approved" } }
+                  : args.signal.aborted
+                    ? { ...message, approval: stoppedCard(message.approval, false) }
+                    : { ...message, approval: { ...message.approval, status: "failed", output: REFUSED_ELSEWHERE } },
             );
           }
         }
@@ -1734,15 +1743,19 @@ export function App({ user }: { user: User }) {
         return event.type === "done" || event.type === "error";
       });
     } catch (error) {
-      if (!(error instanceof TurnLostError)) throw error;
-      lost = error.message;
+      // The stream closed after Stop's grace period without a confirmation: settled below.
+      const closedAfterStop = error instanceof DOMException && error.name === "AbortError" && args.signal.aborted;
+      if (!(error instanceof TurnLostError) && !closedAfterStop) throw error;
+      if (error instanceof TurnLostError) lost = error.message;
     } finally {
+      clearTimeout(grace);
       args.signal.removeEventListener("abort", stop);
       // Lost: nothing reaches this page any more, so nothing is answered or re-run from here.
       // Stop or end: a card nobody answered never says "denied" (turnRecovery.ts).
       const end = { lost, stopRequested: args.signal.aborted, stopConfirmed, failed: Boolean(failure) };
-      for (const id of created) patchMessage(threadId, id, (message) => settleEndedMessage(message, end));
+      created.forEach((id, index) => patchMessage(threadId, id, (message) => settleEndedMessage(message, { ...end, last: index === created.length - 1 })));
     }
+    if (args.signal.aborted) throw new DOMException("Stopped.", "AbortError");
     if (lost) throw new Error(lost);
     if (failure) throw new Error(failure);
     return reply;

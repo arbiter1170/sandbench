@@ -1,6 +1,6 @@
 import { getFirebaseAuth } from "./firebase";
 import type { Connector, PointerAction, TriggerRun, WebhookTrigger } from "./types";
-import { DROPPED, followTurn, HARNESS_RESTARTED } from "./turnRecovery";
+import { DROPPED, followTurn, GAP, HARNESS_RESTARTED } from "./turnRecovery";
 
 const HEADERS = { "x-sandbench-client": "1" };
 // Runner mode (SB-01): VITE_RUNNER_URL (e.g. "/api") points at the hosted runner, and each
@@ -280,6 +280,8 @@ export class TurnLostError extends Error {}
  * unreachable (src/turnRecovery.ts).
  */
 export async function harnessEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
+  // The runner keeps a turn going without the tab and has no GET /turns/<id>: one stream, as before.
+  if (runnerMode) return streamEvents(turnId, after, signal, onEvent);
   const result = await followTurn<AgentEvent>({
     after,
     signal,
@@ -289,6 +291,7 @@ export async function harnessEvents(turnId: string, after: number, signal: Abort
   });
   if (result === "gone") throw new TurnLostError(HARNESS_RESTARTED);
   if (result === "dropped") throw new TurnLostError(DROPPED);
+  if (result === "gap") throw new TurnLostError(GAP);
 }
 
 async function streamEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {

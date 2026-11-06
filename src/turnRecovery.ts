@@ -1,7 +1,9 @@
 import type { Approval, Message, Thread } from "./types";
 
-// Local-harness turns only. A runner turn (SB-03 PR 2) keeps going without the tab and is the
-// runner's to settle, so none of this runs in runner mode.
+// Resuming and settling lost turns is for local-harness turns only: a runner turn (SB-03 PR 2)
+// keeps going without the tab and is the runner's to settle, so runner mode follows one stream
+// as before (src/harness.ts) and skips settleLoadedThreads. The end-of-turn labels below (Stop,
+// no decision) apply to both.
 
 /** The in-flight marker an approved card shows until its result arrives. */
 export const IN_FLIGHT = "…";
@@ -9,6 +11,7 @@ export const IN_FLIGHT = "…";
 export const RELOADED = "The page closed or reloaded before this reply finished.";
 export const DROPPED = "The connection to the local harness dropped before the turn finished.";
 export const HARNESS_RESTARTED = "The local harness restarted, so this turn is gone.";
+export const GAP = "Some of this turn's events were dropped by the local harness before this page read them, so what happened after that is unknown.";
 
 /**
  * A card whose answer or result can no longer reach this page. Nothing is sent to the harness:
@@ -58,14 +61,16 @@ export function settleLoadedThreads(threads: Thread[], reason = RELOADED): Threa
   return changed ? next : threads;
 }
 
-export type FollowResult = "ended" | "dropped" | "gone";
+export type FollowResult = "ended" | "dropped" | "gone" | "gap";
 
 /**
  * Follow a harness turn's event stream until it ends (`onEvent` returns true for done or error).
  * A stream that closes or fails first is resumed from the last event seen, so nothing is shown
  * twice and nothing is re-run; the harness replays what was missed. Returns "gone" when the
- * harness no longer knows the turn and "dropped" when it stays unreachable. Stop (the signal)
- * rethrows the AbortError.
+ * harness no longer knows the turn, "gap" when some of its events fell out of the harness's
+ * replay buffer before they were read, and "dropped" when it stays unreachable (`retries`
+ * failed resumes in a row; a resume that brings new events starts the count again). The
+ * signal rethrows the AbortError.
  */
 export async function followTurn<E extends { seq?: number; type: string }>(options: {
   after: number;
@@ -80,7 +85,12 @@ export async function followTurn<E extends { seq?: number; type: string }>(optio
   const delay = options.delayMs ?? ((attempt) => 500 * 2 ** attempt);
   let last = options.after;
   let ended = false;
+  let gap = false;
   const handle = (event: E) => {
+    if (event.type === "gap") {
+      gap = true;
+      return true;
+    }
     if (typeof event.seq === "number") {
       if (event.seq <= last) return false;
       last = event.seq;
@@ -89,12 +99,15 @@ export async function followTurn<E extends { seq?: number; type: string }>(optio
     return ended;
   };
   for (let attempt = 0; ; attempt += 1) {
+    const from = last;
     try {
       await options.subscribe(last, handle);
     } catch (error) {
       if (isAbort(error) || options.signal.aborted) throw error;
     }
+    if (gap) return "gap";
     if (ended) return "ended";
+    if (last > from) attempt = 0;
     if (options.signal.aborted) throw new DOMException("Stopped.", "AbortError");
     if (attempt >= retries) return "dropped";
     await wait(delay(attempt), options.signal);
@@ -127,15 +140,23 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
 // can fail unseen, so a card that was still waiting when Stop was pressed never says "denied".
 // It says the stop was requested until the harness's `done{stopped:true}` confirms it.
 export const STOP_REQUESTED = "Stop requested · no decision. Nobody answered before Stop, and the harness has not confirmed the stop yet.";
+/** How long the page keeps reading a turn's events after Stop, waiting for done{stopped:true}. */
+export const STOP_GRACE_MS = 5_000;
 export const STOPPED = "Stopped · no decision. Nobody answered before the turn stopped, so it was not approved.";
 export const NO_DECISION = "No decision recorded here. The turn ended before this page saw an answer.";
+// A refusal this page did not make: its own Deny leaves "pending" before the request is sent.
+export const REFUSED_ELSEWHERE = "Not approved. No decision was recorded here: the request expired after 30 minutes or was answered somewhere else.";
+// On the reply itself (Message.interrupted): S5a and S5b in the UX design.
+export const STOPPED_REPLY = "Stopped by you. Steps above with a recorded result ran; others have unknown status.";
+export const STOP_REQUESTED_REPLY = "Stop requested · not confirmed. The harness has not said the turn stopped.";
+const NO_RESULT_AT_STOP = "No result came back before the turn stopped. It may have run; check before running it again.";
 
 /** A driver card that was still waiting when Stop was pressed. */
 export function stoppedCard(approval: Approval, confirmed: boolean): Approval {
   return { ...approval, status: "failed", output: confirmed ? STOPPED : STOP_REQUESTED };
 }
 
-const waitingDriverCard = (approval: Approval | undefined): approval is Approval =>
+const waitingDriverCard = (approval: Approval | undefined): boolean =>
   Boolean(approval?.permissionId) && (approval?.status === "pending" || (approval?.status === "failed" && approval.output === STOP_REQUESTED));
 
 /**
@@ -143,13 +164,19 @@ const waitingDriverCard = (approval: Approval | undefined): approval is Approval
  * stream could not be resumed), stopped (Stop pressed; `stopConfirmed` once `done{stopped:true}`
  * arrived), or ended (done or error, `failed` for an error).
  */
-export function settleEndedMessage(message: Message, end: { lost?: string; stopRequested: boolean; stopConfirmed: boolean; failed: boolean }): Message {
+export function settleEndedMessage(message: Message, end: { lost?: string; stopRequested: boolean; stopConfirmed: boolean; failed: boolean; last?: boolean }): Message {
   if (end.lost) return settleMessage(message, end.lost);
-  const approval = waitingDriverCard(message.approval)
+  const card = message.approval;
+  const approval = card && waitingDriverCard(card)
     ? end.stopRequested
-      ? stoppedCard(message.approval, end.stopConfirmed)
-      : { ...message.approval, status: "failed" as const, output: NO_DECISION }
-    : message.approval;
+      ? stoppedCard(card, end.stopConfirmed)
+      : { ...card, status: "failed" as const, output: NO_DECISION }
+    : end.stopRequested && message.approval?.status === "approved" && message.approval.output === IN_FLIGHT
+      ? { ...message.approval, output: NO_RESULT_AT_STOP }
+      : message.approval;
   const status = message.status === "streaming" ? (end.failed && !end.stopRequested ? "error" : "done") : message.status;
-  return approval === message.approval && status === message.status ? message : { ...message, status, ...(approval ? { approval } : {}) };
+  // A stopped reply never looks finished: the one still arriving, or the turn's last message, says so.
+  const marked = end.stopRequested && !message.interrupted && (message.status === "streaming" || end.last);
+  if (approval === message.approval && status === message.status && !marked) return message;
+  return { ...message, status, ...(approval ? { approval } : {}), ...(marked ? { interrupted: end.stopConfirmed ? STOPPED_REPLY : STOP_REQUESTED_REPLY } : {}) };
 }

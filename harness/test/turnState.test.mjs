@@ -82,3 +82,58 @@ test("the harness serves a turn's state at GET /turns/<id>", async () => {
   assert.ok(at > 0, "route regex");
   assert.match(source.slice(at, at + 220), /if \(req\.method === "GET" && turnState\) \{\s*return send\(res, 200, \{ state: agentTurns\.state\(turnState\[1\]\) \}\);/);
 });
+
+const chatty = (id, count, end = "done") => ({
+  id,
+  label: `${id} (tests only)`,
+  available: async () => ({ ok: true }),
+  startTurn(_turn, io) {
+    const done = (async () => {
+      for (let index = 0; index < count; index += 1) io.emit({ type: "message_delta", text: `d${index}` });
+      if (end === "error") throw new Error("boom");
+    })();
+    return { done, interrupt: () => undefined };
+  },
+});
+
+test("events that fell out of the replay buffer are reported as a gap, and a turn that ended stays finished", async () => {
+  const many = chatty("test-many", 600);
+  const failing = chatty("test-failing", 3, "error");
+  DRIVERS.push(many, failing);
+  try {
+    const turns = createTurns({ runShell: async () => ({ code: 0, stdout: "", stderr: "" }), resolveFolder: () => tmp });
+    const { id } = turns.start({ driver: many.id, prompt: "hi" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    // Its first events and its end are no longer replayable from the start...
+    // Each subscription is closed before its assertion, so a failure cannot leave its keep-alive running.
+    const resumed = collectRaw(turns, 0, id);
+    const firstResumed = resumed.first();
+    resumed.close();
+    assert.deepEqual(firstResumed, { type: "gap", turnId: id });
+    // ...but it is still known to have finished, not "unknown" (which reads as a restart).
+    assert.equal(turns.state(id), "finished");
+    // A page that read everything up to the newest evicted event sees no gap.
+    const { id: other } = turns.start({ driver: failing.id, prompt: "hi" });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    const clean = collectRaw(turns, 0, other);
+    const firstClean = clean.first();
+    clean.close();
+    assert.notEqual(firstClean?.type, "gap");
+    // An error ends a turn too.
+    assert.equal(turns.state(other), "finished");
+  } finally {
+    DRIVERS.splice(DRIVERS.indexOf(many), 1);
+    DRIVERS.splice(DRIVERS.indexOf(failing), 1);
+  }
+});
+
+function collectRaw(turns, from, turnId) {
+  const chunks = [];
+  let close = () => {};
+  turns.subscribe(
+    { on: (name, fn) => name === "close" && (close = fn) },
+    { writeHead() {}, write: (chunk) => chunks.push(String(chunk)), on() {}, end() {} },
+    new URL(`http://x/events?turn=${turnId}&after=${from}`),
+  );
+  return { first: () => (chunks[0] ? JSON.parse(chunks[0].split("data: ")[1]) : undefined), close: () => close() };
+}
