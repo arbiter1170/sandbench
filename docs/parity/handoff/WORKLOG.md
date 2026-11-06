@@ -33,7 +33,7 @@ ENTRIES START BELOW
 - **Tests run (real results):** on `83fe13f` (same tree as `8c2fe5b` apart from this log): `npm run typecheck` → clean; `npm run test:web` → 216 passed (15 files); `npm run test:node` → 311 pass, 0 fail, 32 skipped (every layout test for P1 to P4, including P4's touch targets, Enter keys, keyboard inset, contrast and 320 px / 200% zoom reflow on the merged page); `npm run build` → ok.
 - **Not run / could not run:** real iOS and Android keyboards, pinch zoom, VoiceOver and TalkBack, Windows IME (unchanged, §9).
 - **Decisions made and why:** P4's global touch rules now also apply to P2's and P3's new buttons; their own layout tests (44 px buttons and toggles) still pass with them.
-- **Open questions for Vincent or the Supervisor:** none new. Correction: the UX P4 entry below says 10:55 ET; it was written ahead of the clock, at about 10:15 ET.
+- **Open questions for Vincent or the Supervisor:** none new. Correction, from the commit times: the UX P4 entry below (10:55 ET) was written at about 10:00 ET, and the P3 (10:50), P2 (10:30) and #38 gate (10:20) entries at about 09:59, 09:55 and 09:53 ET.
 - **Next step:** merge #41 once its four checks are green on this head.
 
 ### Session 10 · 2026-11-06 10:35 ET · Merges #38, #39; UX P3 follows #38's MCP labels · review fix
