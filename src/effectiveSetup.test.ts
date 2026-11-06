@@ -25,7 +25,10 @@ describe("effective setup (UX P5)", () => {
     expect(defaultAgentOption({ bot, settings, route: noKey, drivers: [claudeOk], harnessUp: true, t })).toBe("Use default · Claude Code (CLI)");
     const agent = row(rows(bot), "agent");
     expect([agent.value, agent.badge]).toEqual(["Claude Code (CLI)", "From Settings default"]);
-    expect(row(rows(bot), "model").value).toBe("Chosen by Claude Code");
+    // The page sends the route's model with the turn; Claude Code drops a non-Claude one.
+    expect(row(rows(bot), "model").value).toBe("Claude Code picks its own model (grok-3 is not one it takes)");
+    const sent = row(rows(bot, { route: { provider: "anthropic", ready: true, model: "claude-opus-5" } }), "model");
+    expect([sent.value, sent.badge]).toEqual(["claude-opus-5 · sent to Claude Code", "From Settings default"]);
   });
 
   it("F-P5-b: Claude Code set on the bot", () => {
@@ -97,9 +100,40 @@ describe("effective setup (UX P5)", () => {
     expect(row(rows(pip()), "autoReview").value).toBe("No rules: every command shows a card");
     const connectors = [{ id: "a", name: "A", status: "ok" }, { id: "b", name: "B", status: "untested" }] as unknown as Connector[];
     const bot = pip({ connectorIds: ["a", "b"] });
-    expect(row(rows(bot, { connectors }), "connectors").value).toBe("2 assigned · 1 tested");
+    expect(row(rows(bot, { connectors }), "connectors").value).toBe("2 assigned · 1 tested · Claude Code gets the tested ones that need no stored secret");
+    expect(row(rows(bot, { connectors, settings: { defaultAgentDriver: undefined, model: "grok-3" } }), "connectors").value).toBe("2 assigned · 1 tested");
     expect(row(rows({ ...bot, driver: "codex" }, { connectors, drivers: [claudeOk, { id: "codex", label: "Codex (local CLI)", ok: true, detail: "" }] }), "connectors").value).toBe("Sandbench passes no connectors to Codex chats");
     expect(row(rows(bot, { connectors, runner: true }), "connectors").value).toBe("Not passed to runner turns");
+  });
+
+  it("the page's view of which model a driver takes matches the drivers themselves", async () => {
+    // @ts-expect-error The harness driver is plain JavaScript with no type declarations.
+    const { mapCliModel } = (await import("../harness/drivers/claude.mjs")) as { mapCliModel: (model: string) => string | null };
+    const { driverModel } = await import("./chatContext");
+    for (const model of ["grok-3", "claude-opus-5", "claude-sonnet-4-5", "sonnet", "Opus", "haiku", "claude-3-5-haiku-latest", "gpt-5", "openai/gpt-oss-120b", "claude opus", "", "claude;rm"]) {
+      expect(Boolean(driverModel("claude", model)), model).toBe(mapCliModel(model) !== null);
+    }
+    expect(driverModel("codex", "gpt-5")).toBe("gpt-5");
+    expect(driverModel("codex", "bad model")).toBeUndefined();
+    expect(driverModel("anthropic", "anything")).toBe("anything");
+  });
+
+  it("review fixes: unsafe folder, default mode, memory cap and no-key, checking, runner and failed lists", () => {
+    const unsafe = { id: "c1", title: "t", updatedAt: 1, messages: [], memberIds: ["pip"], workingFolder: "../outside" } as unknown as Thread;
+    expect(row(rows(pip(), { channel: unsafe }), "folder").value).toBe("workspace root"); // the turn runs there (roomFolder)
+    expect(row(rows(pip({ approvalMode: "ask" })), "mode").badge).toBe("Default");
+    expect(row(rows(pip(), { memory: { state: "loaded", hasIndex: true, files: 20 } }), "memory").value).toBe("MEMORY.md + 19 files · a reply reads up to 8 of them");
+    expect(row(rows(pip(), { settings: { defaultAgentDriver: undefined, model: "grok-3" } }), "memory").value).toBe("Not read without a model key");
+    const checking = rows(pip({ driver: "codex" }), { checking: true, drivers: [], harnessUp: false, memory: { state: "offline" } });
+    expect(row(checking, "agent").value).toBe("Codex (CLI) · Checking…");
+    expect(row(checking, "memory").value).toBe("Checking…");
+    const library = pip({ librarySkillIds: ["notes"] } as Partial<Bot>);
+    expect(row(rows(library, { skills: { state: "runner" } }), "skills").value).toBe("1 assigned · library not checked in runner mode");
+    expect(row(rows(library, { skills: { state: "failed" } }), "skills").value).toBe("1 assigned · library couldn't be listed");
+    // Links name their row, so three "Customize tab" buttons are told apart.
+    const shell = readFileSync(new URL("./shell.tsx", import.meta.url), "utf8");
+    expect(shell).toMatch(/aria-describedby=\{`es-\$\{row\.id\}`\}/);
+    expect(shell).toMatch(/skillsOnDisk\.botId === bot\.id \? skillsOnDisk\.value : \{ state: "loading" \}/);
   });
 
   it("P5-AC4: no new tab; every row links to where it is changed today", () => {

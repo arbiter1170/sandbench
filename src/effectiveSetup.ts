@@ -1,7 +1,7 @@
 // "Effective setup" at the top of a bot's Model tab (UX P5): what this bot actually runs with,
 // where each value comes from, and where it is changed. Display only; it reuses the P1 derivation
 // (chatAgent / effectiveDriver), so the badges follow the same order as the turn itself.
-import { agentName, chatAgent, type ChatAgent } from "./chatContext";
+import { agentName, channelFolder, chatAgent, driverModel, type ChatAgent } from "./chatContext";
 import type { AgentDriver } from "./harness";
 import type { Bot, Connector, Settings, Thread } from "./types";
 
@@ -13,7 +13,7 @@ export type SetupKey =
   | "esPlanner" | "esNotAvailable" | "esUseDefault" | "esChosenBy" | "esStandIn" | "esWorkspaceRoot" | "esChannelFolder"
   | "esRules" | "esNoRules" | "esSharedSet" | "esSharedNone" | "esSharedOnlyChannels"
   | "esSkillsCount" | "esSkillsMissing" | "esSkillsNone" | "esUnknownOffline" | "esChecking"
-  | "esMemoryFiles" | "esMemoryNone" | "esMemoryFailed" | "esMemoryRunner" | "esMemoryIndexOnly" | "esConnectorsCount" | "esConnectorsNone" | "esConnectorsRunner" | "esConnectorsNotUsed"
+  | "esMemoryFiles" | "esMemoryNone" | "esMemoryFailed" | "esMemoryRunner" | "esMemoryStandIn" | "esMemoryFilesCapped" | "esSkillsRunner" | "esSkillsFailed" | "esModelSent" | "esConnectorsClaude" | "esMemoryIndexOnly" | "esConnectorsCount" | "esConnectorsNone" | "esConnectorsRunner" | "esConnectorsNotUsed"
   | "esLinkHere" | "esLinkCustomize" | "esLinkSettings" | "esLinkTeam" | "esLinkWork"
   | "permissionAsk" | "permissionAuto" | "permissionFull";
 
@@ -25,7 +25,7 @@ export type SetupLink = { to: "here"; id: string } | { to: "customize" | "settin
 export type SetupRow = { id: string; label: string; value: string; badge?: string; link?: SetupLink };
 
 /** What the bot's library skills look like on the harness: the ids found, offline, or still loading. */
-export type SkillsOnDisk = { state: "loaded"; ids: string[] } | { state: "offline" } | { state: "loading" };
+export type SkillsOnDisk = { state: "loaded"; ids: string[] } | { state: "failed" } | { state: "offline" } | { state: "loading" } | { state: "runner" };
 export type MemoryState = { state: "loaded"; hasIndex: boolean; files: number } | { state: "failed" } | { state: "offline" } | { state: "loading" };
 
 /** A driver's name for a select option: "Claude Code (CLI)", "Anthropic (API)". */
@@ -57,6 +57,8 @@ export function setupRows(input: {
   connectors: Connector[];
   skills: SkillsOnDisk;
   memory: MemoryState;
+  /** No health answer yet: nothing is called unavailable or offline. */
+  checking?: boolean;
   t: Translate;
 }): SetupRow[] {
   const { bot, t, route } = input;
@@ -68,15 +70,19 @@ export function setupRows(input: {
   const agentRow: SetupRow = {
     id: "agent",
     label: t("esAgent"),
-    value: agentLabel(agent, input.drivers, t),
+    value: agent.kind === "unavailable" && input.checking ? `${optionName(agent.id, input.drivers)} · ${t("esChecking")}` : agentLabel(agent, input.drivers, t),
     badge: agent.kind === "planner" ? badge("default") : badge(agent.source),
     link: { to: "here", id: "bot-agent-select" },
   };
 
-  // A driver picks its own model; the planner (and a chosen driver that can't run) uses the route.
+  // The page sends the route's model with a driver turn too; the driver keeps or drops it
+  // (driverModel). The planner, and a chosen driver that can't run, use it as is.
+  const sent = agent.kind === "driver" ? driverModel(agent.id, route.model) : undefined;
   const modelRow: SetupRow =
     agent.kind === "driver"
-      ? { id: "model", label: t("esModel"), value: fill(t("esChosenBy"), { name: agent.name }), link: { to: "here", id: "bot-model-select" } }
+      ? sent
+        ? { id: "model", label: t("esModel"), value: fill(t("esModelSent"), { model: sent, name: agent.name }), badge: badge(bot.model?.trim() ? "bot" : "settings"), link: { to: "here", id: "bot-model-select" } }
+        : { id: "model", label: t("esModel"), value: fill(t("esChosenBy"), { name: agent.name, model: route.model }), link: { to: "here", id: "bot-model-select" } }
       : {
           id: "model",
           label: t("esModel"),
@@ -85,7 +91,8 @@ export function setupRows(input: {
           link: { to: "here", id: "bot-model-select" },
         };
 
-  const folderName = input.channel?.memberIds ? input.channel.workingFolder?.trim() : "";
+  // The same check roomFolder makes: an unsafe folder runs in the workspace root.
+  const folderName = channelFolder(input.channel);
   const folderRow: SetupRow = folderName
     ? { id: "folder", label: t("esFolder"), value: fill(t("esChannelFolder"), { folder: folderName }), badge: badge("channel"), link: { to: "work" } }
     : { id: "folder", label: t("esFolder"), value: t("esWorkspaceRoot"), badge: badge("default") };
@@ -95,7 +102,8 @@ export function setupRows(input: {
     id: "mode",
     label: t("esMode"),
     value: t(mode === "auto" ? "permissionAuto" : mode === "full" ? "permissionFull" : "permissionAsk"),
-    badge: badge(bot.approvalMode ? "bot" : "default"),
+    // New bots store "ask", the default, so only another mode counts as set on the bot.
+    badge: badge(bot.approvalMode && bot.approvalMode !== "ask" ? "bot" : "default"),
     link: { to: "customize" },
   };
 
@@ -118,14 +126,22 @@ export function setupRows(input: {
             const base = fill(t("esSkillsCount"), { count: builtIn + library.length });
             return missing ? `${base} · ${fill(t("esSkillsMissing"), { count: missing })}` : base;
           })()
-        : `${fill(t("esSkillsCount"), { count: builtIn + library.length })} · ${input.skills.state === "loading" ? t("esChecking") : unknown}`;
+        : `${fill(t("esSkillsCount"), { count: builtIn + library.length })} · ${
+            input.skills.state === "loading" || input.checking
+              ? t("esChecking")
+              : input.skills.state === "runner"
+                ? t("esSkillsRunner")
+                : input.skills.state === "failed"
+                  ? t("esSkillsFailed")
+                  : unknown
+          }`;
   const skillsRow: SetupRow = { id: "skills", label: t("esSkills"), value: skillsValue, badge: badge("bot"), link: { to: "customize" } };
 
   const memory = input.memory;
   const memoryValue =
     input.runner
       ? t("esMemoryRunner")
-      : memory.state === "loading"
+      : memory.state === "loading" || input.checking
         ? t("esChecking")
         : memory.state === "offline"
           ? unknown
@@ -133,9 +149,12 @@ export function setupRows(input: {
             ? t("esMemoryFailed")
             : memory.files === 0
               ? t("esMemoryNone")
-              : memory.hasIndex && memory.files === 1
-                ? t("esMemoryIndexOnly")
-                : fill(t("esMemoryFiles"), { index: memory.hasIndex ? "MEMORY.md + " : "", count: memory.hasIndex ? memory.files - 1 : memory.files });
+              : agent.kind !== "driver" && !route.ready
+                ? t("esMemoryStandIn")
+                : memory.hasIndex && memory.files === 1
+                  ? t("esMemoryIndexOnly")
+                  : // A reply reads at most 8 files (memoryDocument).
+                    fill(t(memory.files > 8 ? "esMemoryFilesCapped" : "esMemoryFiles"), { index: memory.hasIndex ? "MEMORY.md + " : "", count: memory.hasIndex ? memory.files - 1 : memory.files });
   const memoryRow: SetupRow = { id: "memory", label: t("esMemory"), value: memoryValue, badge: badge("bot"), link: { to: "customize" } };
 
   // Claude Code turns get the bot's tested connectors (#32); other drivers get none; runner turns none.
@@ -147,7 +166,9 @@ export function setupRows(input: {
       ? t("esConnectorsRunner")
       : agent.kind === "driver" && agent.id !== "claude"
         ? fill(t("esConnectorsNotUsed"), { name: agent.name })
-        : fill(t("esConnectorsCount"), { count: assigned.length, tested });
+        : agent.kind === "driver"
+          ? fill(t("esConnectorsClaude"), { count: assigned.length, tested })
+          : fill(t("esConnectorsCount"), { count: assigned.length, tested });
   const connectorsRow: SetupRow = { id: "connectors", label: t("esConnectors"), value: connectorsValue, badge: badge("bot"), link: { to: "team" } };
 
   return [agentRow, modelRow, folderRow, modeRow, reviewRow, sharedRow, skillsRow, memoryRow, connectorsRow];

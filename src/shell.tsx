@@ -202,29 +202,33 @@ export function Workspace(props: {
 
   // Effective setup (UX P5): which library skills the harness has and whether the bot's memory
   // reads, for counts only. Display only: a failure here never blocks a send.
-  const [skillsOnDisk, setSkillsOnDisk] = useState<SkillsOnDisk>({ state: "loading" });
-  const [memoryState, setMemoryState] = useState<MemoryState>({ state: "loading" });
+  // Each result is tagged with its bot, so another bot's counts never show while a new read runs.
+  const [skillsOnDisk, setSkillsOnDisk] = useState<{ botId?: string; value: SkillsOnDisk }>({ value: { state: "loading" } });
+  const [memoryState, setMemoryState] = useState<{ botId?: string; value: MemoryState }>({ value: { state: "loading" } });
   const setupBotId = panel === "model" ? bot?.id : undefined;
   useEffect(() => {
-    if (!setupBotId) return;
-    if (!props.harness || props.runner) {
-      setSkillsOnDisk({ state: "offline" });
-      setMemoryState({ state: "offline" });
+    if (!setupBotId || !props.healthChecked) return;
+    if (props.runner) {
+      setSkillsOnDisk({ botId: setupBotId, value: { state: "runner" } });
+      setMemoryState({ botId: setupBotId, value: { state: "offline" } });
+      return;
+    }
+    if (!props.harness) {
+      setSkillsOnDisk({ botId: setupBotId, value: { state: "offline" } });
+      setMemoryState({ botId: setupBotId, value: { state: "offline" } });
       return;
     }
     let active = true;
-    setSkillsOnDisk({ state: "loading" });
-    setMemoryState({ state: "loading" });
     void harnessSkills()
-      .then((result) => active && setSkillsOnDisk({ state: "loaded", ids: result.skills.map((skill) => skill.id) }))
-      .catch(() => active && setSkillsOnDisk({ state: "offline" }));
+      .then((result) => active && setSkillsOnDisk({ botId: setupBotId, value: { state: "loaded", ids: result.skills.map((skill) => skill.id) } }))
+      .catch(() => active && setSkillsOnDisk({ botId: setupBotId, value: { state: "failed" } }));
     void harnessBotMemory(setupBotId)
-      .then((result) => active && setMemoryState({ state: "loaded", hasIndex: result.files.some((file) => file.path === "MEMORY.md"), files: result.files.length }))
-      .catch(() => active && setMemoryState({ state: "failed" }));
+      .then((result) => active && setMemoryState({ botId: setupBotId, value: { state: "loaded", hasIndex: result.files.some((file) => file.path === "MEMORY.md"), files: result.files.length } }))
+      .catch(() => active && setMemoryState({ botId: setupBotId, value: { state: "failed" } }));
     return () => {
       active = false;
     };
-  }, [setupBotId, props.harness, props.runner]);
+  }, [setupBotId, props.harness, props.runner, props.healthChecked]);
   const openSetupLink = (link: SetupLink) => {
     if (link.to === "here") document.getElementById(link.id)?.focus();
     else if (link.to === "customize" || link.to === "work") setPanel(link.to);
@@ -693,8 +697,9 @@ export function Workspace(props: {
                 channel,
                 autoApprove: studio.autoApprove,
                 connectors: studio.connectors,
-                skills: skillsOnDisk,
-                memory: memoryState,
+                skills: skillsOnDisk.botId === bot.id ? skillsOnDisk.value : { state: "loading" },
+                memory: memoryState.botId === bot.id ? memoryState.value : { state: "loading" },
+                checking: !props.healthChecked,
                 t,
               });
               const linkLabel = (link: SetupLink) => t(link.to === "here" ? "esLinkHere" : link.to === "customize" ? "esLinkCustomize" : link.to === "work" ? "esLinkWork" : link.to === "team" ? "esLinkTeam" : "esLinkSettings");
@@ -707,11 +712,15 @@ export function Workspace(props: {
                       const link: SetupLink | undefined = row.link?.to === "here" && row.link.id === "bot-agent-select" && !agentSelect ? { to: "settings" } : row.link;
                       return (
                         <div key={row.id} className="es-row">
-                          <dt>{row.label}</dt>
+                          <dt id={`es-${row.id}`}>{row.label}</dt>
                           <dd>
                             <span className="es-value">{row.value}</span>
                             {row.badge ? <span className="ctx-badge">{row.badge}</span> : null}
-                            {link ? <button type="button" className="text-btn es-link" onClick={() => openSetupLink(link)}>{linkLabel(link)} ›</button> : null}
+                            {link ? (
+                              <button type="button" className="text-btn es-link" aria-describedby={`es-${row.id}`} onClick={() => openSetupLink(link)}>
+                                {linkLabel(link)} ›
+                              </button>
+                            ) : null}
                           </dd>
                         </div>
                       );
