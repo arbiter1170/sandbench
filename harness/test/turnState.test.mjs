@@ -74,3 +74,11 @@ test("a turn reports running, then finished while its end is replayable, and unk
   const restarted = createTurns({ runShell: async () => ({ code: 0, stdout: "", stderr: "" }), resolveFolder: () => tmp });
   assert.equal(restarted.state(id), "unknown");
 });
+
+test("the harness serves a turn's state at GET /turns/<id>", async () => {
+  const { readFileSync } = await import("node:fs");
+  const source = readFileSync(new URL("../server.mjs", import.meta.url), "utf8");
+  const at = source.indexOf("const turnState = /^\\/turns\\/([a-f0-9]{16})$/.exec(url.pathname);");
+  assert.ok(at > 0, "route regex");
+  assert.match(source.slice(at, at + 220), /if \(req\.method === "GET" && turnState\) \{\s*return send\(res, 200, \{ state: agentTurns\.state\(turnState\[1\]\) \}\);/);
+});

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { DROPPED, followTurn, IN_FLIGHT, RELOADED, settleCard, settleLoadedThreads, settleMessage } from "./turnRecovery";
+import { readFileSync } from "node:fs";
+import { DROPPED, followTurn, IN_FLIGHT, NO_DECISION, RELOADED, settleCard, settleEndedMessage, settleLoadedThreads, settleMessage, STOP_REQUESTED, STOPPED, stoppedCard } from "./turnRecovery";
 import type { Approval, Message, Thread } from "./types";
 
 const message = (patch: Partial<Message>): Message => ({
@@ -212,5 +213,68 @@ describe("harnessEvents (the local driver path)", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+describe("settling a driver turn's messages when it ends (U-7: Stop never reads as a Deny)", () => {
+  const driverCard = card({ permissionId: "b".repeat(16) });
+  const ended = { stopRequested: false, stopConfirmed: false, failed: false };
+
+  it("a card still waiting when Stop was pressed says the stop was requested, then stopped once the harness confirms", () => {
+    const requested = settleEndedMessage(message({ approval: driverCard }), { ...ended, stopRequested: true });
+    expect(requested.approval).toMatchObject({ status: "failed", output: STOP_REQUESTED });
+    expect(requested.approval?.status).not.toBe("denied");
+    const confirmed = settleEndedMessage(message({ approval: driverCard }), { ...ended, stopRequested: true, stopConfirmed: true });
+    expect(confirmed.approval).toMatchObject({ status: "failed", output: STOPPED });
+    // A card the stream already marked "stop requested" is upgraded when the confirmation arrives.
+    const upgraded = settleEndedMessage(message({ approval: stoppedCard(driverCard, false) }), { ...ended, stopRequested: true, stopConfirmed: true });
+    expect(upgraded.approval?.output).toBe(STOPPED);
+    expect(stoppedCard(driverCard, true)).toMatchObject({ status: "failed", output: STOPPED, command: driverCard.command, permissionId: driverCard.permissionId });
+  });
+
+  it("a card nobody answered when the turn ended on its own says no decision was recorded, not denied", () => {
+    const settled = settleEndedMessage(message({ approval: driverCard }), ended);
+    expect(settled.approval).toMatchObject({ status: "failed", output: NO_DECISION });
+  });
+
+  it("cards the user answered, auto-approved ones, results and planner cards are left as they are", () => {
+    for (const approval of [
+      card({ permissionId: "c".repeat(16), status: "denied" }),
+      card({ permissionId: "c".repeat(16), status: "approved", output: "ran" }),
+      card({ permissionId: "c".repeat(16), status: "approved", auto: true, output: IN_FLIGHT }),
+      card({ permissionId: "c".repeat(16), status: "failed", output: "exit 1" }),
+      card({}),
+    ]) {
+      const done = message({ approval });
+      for (const end of [ended, { ...ended, stopRequested: true }, { ...ended, stopRequested: true, stopConfirmed: true }]) expect(settleEndedMessage(done, end)).toBe(done);
+    }
+  });
+
+  it("a reply still arriving becomes done on Stop or a normal end, and an error when the turn failed", () => {
+    const streaming = message({ status: "streaming", text: "partial" });
+    expect(settleEndedMessage(streaming, ended).status).toBe("done");
+    expect(settleEndedMessage(streaming, { ...ended, failed: true }).status).toBe("error");
+    expect(settleEndedMessage(streaming, { ...ended, failed: true, stopRequested: true }).status).toBe("done");
+    expect(settleEndedMessage(streaming, ended).text).toBe("partial");
+  });
+
+  it("a lost turn settles exactly as before: interrupted, nothing answered", () => {
+    const lost = settleEndedMessage(message({ status: "streaming", approval: driverCard }), { ...ended, lost: DROPPED, stopRequested: true });
+    expect(lost).toEqual(settleMessage(message({ status: "streaming", approval: driverCard }), DROPPED));
+    expect(lost.interrupted).toBe(DROPPED);
+  });
+
+  it("a loaded workspace is settled only in local mode; runner turns outlive the tab and are the runner's", () => {
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    expect(app).toContain("setThreads(runnerMode ? snapshot.threads : settleLoadedThreads(snapshot.threads));");
+  });
+
+  it("the page settles every message of a driver turn this way, and a refusal during Stop is not shown as a Deny", () => {
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    const drive = app.slice(app.indexOf("const cards = new Map<string, { id: string; command: string }>();"), app.indexOf("if (lost) throw new Error(lost);"));
+    expect(drive).toMatch(/!event\.allow && args\.signal\.aborted\s*\?\s*\{ \.\.\.message, approval: stoppedCard\(message\.approval, false\) \}/);
+    expect(drive).toMatch(/if \(event\.type === "done" && event\.stopped === true\) stopConfirmed = true;/);
+    expect(drive).toMatch(/const end = \{ lost, stopRequested: args\.signal\.aborted, stopConfirmed, failed: Boolean\(failure\) \};\s*for \(const id of created\) patchMessage\(threadId, id, \(message\) => settleEndedMessage\(message, end\)\);/);
+    expect(drive).not.toMatch(/status: "denied" as const/);
   });
 });

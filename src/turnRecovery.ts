@@ -121,3 +121,35 @@ function wait(ms: number, signal: AbortSignal): Promise<void> {
     signal.addEventListener("abort", stop, { once: true });
   });
 }
+
+// Stop (U-7 in the UX design): the harness publishes the same `permission_resolved
+// {allow:false}` for a user's Deny, a 30-minute expiry and Stop, and the page's interrupt POST
+// can fail unseen, so a card that was still waiting when Stop was pressed never says "denied".
+// It says the stop was requested until the harness's `done{stopped:true}` confirms it.
+export const STOP_REQUESTED = "Stop requested · no decision. Nobody answered before Stop, and the harness has not confirmed the stop yet.";
+export const STOPPED = "Stopped · no decision. Nobody answered before the turn stopped, so it was not approved.";
+export const NO_DECISION = "No decision recorded here. The turn ended before this page saw an answer.";
+
+/** A driver card that was still waiting when Stop was pressed. */
+export function stoppedCard(approval: Approval, confirmed: boolean): Approval {
+  return { ...approval, status: "failed", output: confirmed ? STOPPED : STOP_REQUESTED };
+}
+
+const waitingDriverCard = (approval: Approval | undefined): approval is Approval =>
+  Boolean(approval?.permissionId) && (approval?.status === "pending" || (approval?.status === "failed" && approval.output === STOP_REQUESTED));
+
+/**
+ * Settle one of a driver turn's messages once the turn stops reaching the page: lost (the
+ * stream could not be resumed), stopped (Stop pressed; `stopConfirmed` once `done{stopped:true}`
+ * arrived), or ended (done or error, `failed` for an error).
+ */
+export function settleEndedMessage(message: Message, end: { lost?: string; stopRequested: boolean; stopConfirmed: boolean; failed: boolean }): Message {
+  if (end.lost) return settleMessage(message, end.lost);
+  const approval = waitingDriverCard(message.approval)
+    ? end.stopRequested
+      ? stoppedCard(message.approval, end.stopConfirmed)
+      : { ...message.approval, status: "failed" as const, output: NO_DECISION }
+    : message.approval;
+  const status = message.status === "streaming" ? (end.failed && !end.stopRequested ? "error" : "done") : message.status;
+  return approval === message.approval && status === message.status ? message : { ...message, status, ...(approval ? { approval } : {}) };
+}

@@ -51,7 +51,7 @@ import {
 } from "./harness";
 import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
-import { settleLoadedThreads, settleMessage } from "./turnRecovery";
+import { settleEndedMessage, settleLoadedThreads, stoppedCard } from "./turnRecovery";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -1661,6 +1661,7 @@ export function App({ user }: { user: User }) {
     let current: string | null = args.assistantId;
     const created = [args.assistantId];
     let lost: string | undefined;
+    let stopConfirmed = false;
     let reply = "";
     let failure: string | undefined;
     const cards = new Map<string, { id: string; command: string }>();
@@ -1699,8 +1700,14 @@ export function App({ user }: { user: User }) {
         if (event.type === "permission_resolved" && event.permissionId) {
           const id = cards.get(event.permissionId)?.id;
           if (id) {
+            // A refusal while Stop is pressed is the Stop, not a Deny (this page's own Deny click
+            // already left "pending"): see stoppedCard.
             patchMessage(threadId, id, (message) =>
-              message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } } : message,
+              message.approval?.status !== "pending"
+                ? message
+                : !event.allow && args.signal.aborted
+                  ? { ...message, approval: stoppedCard(message.approval, false) }
+                  : { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } },
             );
           }
         }
@@ -1723,6 +1730,7 @@ export function App({ user }: { user: User }) {
           }
         }
         if (event.type === "error") failure = event.message || "The agent stopped with an error.";
+        if (event.type === "done" && event.stopped === true) stopConfirmed = true;
         return event.type === "done" || event.type === "error";
       });
     } catch (error) {
@@ -1730,17 +1738,10 @@ export function App({ user }: { user: User }) {
       lost = error.message;
     } finally {
       args.signal.removeEventListener("abort", stop);
-      const stopped = args.signal.aborted;
-      for (const id of created) {
-        patchMessage(threadId, id, (message) => {
-          // Lost: nothing reaches this page any more, so nothing is answered or re-run from here.
-          if (lost) return settleMessage(message, lost);
-          // Ended or Stop: the harness has resolved (or, on Stop, denies) whatever was waiting.
-          const approval = message.approval?.status === "pending" && message.approval.permissionId ? { ...message.approval, status: "denied" as const } : message.approval;
-          const status = message.status === "streaming" ? (failure && !stopped ? "error" : "done") : message.status;
-          return approval === message.approval && status === message.status ? message : { ...message, status, ...(approval ? { approval } : {}) };
-        });
-      }
+      // Lost: nothing reaches this page any more, so nothing is answered or re-run from here.
+      // Stop or end: a card nobody answered never says "denied" (turnRecovery.ts).
+      const end = { lost, stopRequested: args.signal.aborted, stopConfirmed, failed: Boolean(failure) };
+      for (const id of created) patchMessage(threadId, id, (message) => settleEndedMessage(message, end));
     }
     if (lost) throw new Error(lost);
     if (failure) throw new Error(failure);
