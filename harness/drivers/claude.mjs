@@ -67,7 +67,9 @@ export function buildClaudeArgs({ settingsFile, model, sessionId, extras = {} })
   checkExtras(extras);
   // Settings and skills from the turn folder are not loaded: a `.claude/settings.json` in a
   // cloned repository could turn the approval hook off, and a skill's shell lines run without it.
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile, "--setting-sources", "user", "--disable-slash-commands"];
+  // Only the bot's own connectors (--mcp-config) load: never the MCP servers in the user's own
+  // Claude Code setup, which follow that setup's permission rules rather than Sandbench's cards.
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile, "--setting-sources", "user", "--disable-slash-commands", "--strict-mcp-config"];
   if (model) args.push("--model", model);
   if (extras.mcpConfig !== undefined) args.push("--mcp-config", extras.mcpConfig);
   if (extras.maxTurns !== undefined) args.push("--max-turns", String(extras.maxTurns));

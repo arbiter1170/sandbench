@@ -56,14 +56,14 @@ test("http normalizeEvent reads text and tool call deltas", () => {
 
 test("claude buildClaudeArgs: no extras gives exactly the base arguments", () => {
   // Turn-folder settings and skills are never loaded (see claudeGate.test.mjs).
-  const base = ["-p", "--output-format", "stream-json", "--verbose", "--settings", "/tmp/s.json", "--setting-sources", "user", "--disable-slash-commands"];
+  const base = ["-p", "--output-format", "stream-json", "--verbose", "--settings", "/tmp/s.json", "--setting-sources", "user", "--disable-slash-commands", "--strict-mcp-config"];
   assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: null, sessionId: "" }), base);
   assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "sonnet", sessionId: "session-1234", extras: {} }), [...base, "--model", "sonnet", "--resume", "session-1234"]);
 });
 
 test("claude buildClaudeArgs: extras add --max-turns and --mcp-config, and resume replaces --resume", () => {
   const args = claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "haiku", sessionId: "session-old1", extras: { maxTurns: 5, mcpConfig: "/srv/sandbench/mcp.json", resume: "session-new2" } });
-  assert.deepEqual(args.slice(9), ["--model", "haiku", "--mcp-config", "/srv/sandbench/mcp.json", "--max-turns", "5", "--resume", "session-new2"]);
+  assert.deepEqual(args.slice(10), ["--model", "haiku", "--mcp-config", "/srv/sandbench/mcp.json", "--max-turns", "5", "--resume", "session-new2"]);
   assert.equal(args.filter((arg) => arg === "--resume").length, 1);
 });
 

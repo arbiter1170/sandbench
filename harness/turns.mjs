@@ -74,6 +74,9 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
       // Driver extras (claude.mjs) are set by the engine in later items, never from the request.
       extras: {},
     };
+    // Only the local harness passes `ctx.connectors`: the bot's own synced servers, never the request's.
+    const mcp = driver.id === "claude" && ctx.connectors ? ctx.connectors.attach({ turnId: id, botId: body.botId }) : null;
+    if (mcp?.file) turn.extras = { mcpConfig: mcp.file };
     const io = {
       signal: controller.signal,
       emit: (event) => {
@@ -139,8 +142,19 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
       current: "",
     };
     publish(id, { type: "turn_start", driver: driver.id, ...(where ? { cwd } : {}) });
-    const handle = driver.startTurn(turn, io);
+    let handle;
+    try {
+      handle = driver.startTurn(turn, io);
+    } catch (error) {
+      // The turn never started, so its done promise will never remove the connector file.
+      mcp?.release();
+      throw error;
+    }
     turns.set(id, { controller, handle });
+    if (mcp?.servers.length) {
+      publish(id, { type: "thinking", text: `Connectors for this turn: ${mcp.servers.map((item) => item.connector).join(", ")}. Each tool asks for approval.` });
+    }
+    for (const item of mcp?.skipped ?? []) publish(id, { type: "thinking", text: `Connector ${item.name} left out: ${item.reason}` });
     handle.done
       .then(() => {
         for (const permissionId of granted) {
@@ -152,7 +166,10 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
         const aborted = controller.signal.aborted || error?.name === "AbortError";
         publish(id, aborted ? { type: "done", stopped: true } : { type: "error", message: error instanceof Error ? error.message : String(error) });
       })
-      .finally(() => turns.delete(id));
+      .finally(() => {
+        turns.delete(id);
+        mcp?.release();
+      });
     return { id, after };
   }
 
