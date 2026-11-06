@@ -26,6 +26,16 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 11 · 2026-11-06 15:00 ET · Windows-found fixes and docs refresh · partial
+- **Branch / PR / head sha:** this entry is on `claude/docs-drift`. #45 `claude/harness-token-after-listen`, #46 `claude/windows-test-portability`, #47 `claude/last-round-not-run`.
+- **Checks on the head:** #45, #46 and #47 had all four required checks green on their heads when this was written; none merged at this writing.
+- **What was done:** first session on Vincent's Windows machine. #45: Claude started a second harness while one was running; it overwrote `.harness-token` before failing on the port, so the running harness answered 401 to the page. That was Claude's error, found live; the token is now written after listen. #46: 6 test-only Windows failures fixed. #47: #42's LOW 3. This PR: STATUS rewritten, PLAN's first-word text corrected (FINDINGS R4). `CLAUDE_CODE_PROMPT.md` still says first-word matching; it is a hard-rule doc, so it is left alone, and `GAP_AUDIT.md` is a dated audit. A-02: no `grokbot-poc` remains in README or app files; the remaining uses are a dated design doc and a test asserting its absence.
+- **Tests run (real results, Windows, Node 24):** on #46: `test:web` 219 passed; `test:node` 296 pass, 1 fail, 52 skipped. The failure is `exec needs approval and runs in bash`: `bash` here is the WSL launcher with no distribution, and the runner only runs in Linux. Docs-only here.
+- **Not run / could not run:** POSIX-only fake-CLI tests skip on Windows (CI runs them). The gate hook has not run in a real Claude Code turn on Windows. No live connector, approve, deny or Monitor turn yet: the local harness needs a restart by Vincent.
+- **Decisions made and why:** the auto-mode safety check refused two actions: stopping the running harness, and merging #45 to #47 without review. Neither was worked around. An independent review was started for #45 to #47, which had been skipped.
+- **Open questions for Vincent or the Supervisor:** restart the harness; approve #45 to #47 after review. Docker: see STATUS blocker 1.
+- **Next step:** review result, then Vincent's approval.
+
 ### Session 11 · 2026-11-06 14:40 ET · Fix blank page under `npm run dev` · done
 - **Branch / PR / head sha:** `claude/dev-harness-import` · PR opened right after this commit · cut from `deploy/vercel` `e4f3fff`
 - **Checks on the head:** pending on push

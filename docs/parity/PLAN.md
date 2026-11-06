@@ -21,7 +21,7 @@
 | Shell | `runShell` defaults to a **30-second timeout** and a 64 KB output cap. Driver commands use the default | `harness/server.mjs:43`, `harness/server.mjs:83-110`, `harness/turns.mjs:99` |
 | Step cap | `MAX_STEPS = 6` | `harness/drivers/anthropic.mjs:5`, `harness/drivers/http.mjs:7` |
 | Permissions | Kept in memory and lost on restart. 30-minute timeout | `harness/turns.mjs:7`, `harness/turns.mjs:78` |
-| Auto-review | Matches only the first word of a command and refuses `; & | > \` $(` | `harness/turns.mjs:26-31` |
+| Auto-review | A rule skips a card only if the whole command passes positive validation; anything else asks. A git command needs a rule for exactly that command | `harness/autoReview.mjs` |
 | Scheduler | An English-phrase parser with a 15-second tick that queues work to `/due`. **The open page runs due items** | `harness/server.mjs:458-544`, `src/App.tsx:378-444` |
 | Webhooks | `127.0.0.1:8801/hooks/<id>`. The bearer secret is stored as a SHA-256 hash | `harness/server.mjs:901-926` |
 | Data | One Firestore document, `users/{uid}/workspace/snapshot`. The newer `updatedAt` wins and logs are capped at 40 | `src/cloudSync.ts:5-70`, `firestore.rules` |
@@ -245,7 +245,7 @@ Key choices:
     - **Send only after approval:** email sends, owner notifications from any bot other than the Supervisor, and comments or issues on public repos all create a card. The send job runs only with a matching approval id signed with an HMAC.
     - **Stop all:** `POST /stop` cancels every running or queued job in each `root_job_id` tree, kills process groups, interrupts drivers, and pauses schedules until Vincent resumes them. A per-agent stop is also available.
     - **Enforced in three places:** (a) a Claude Code `PreToolUse` hook (`runner/policy/hook.mjs`, registered in the per-turn `--settings` file at `harness/drivers/claude.mjs:194`) that POSTs to `/policy/check`; (b) tool handlers; (c) `job.exec`.
-    - Replace the first-word auto-review in `harness/turns.mjs:26-31` with policy rules.
+    - Replace the local auto-review (`harness/autoReview.mjs`) with policy rules.
     - UI: extend `Approval` (`src/types.ts:50-62`) with `class`, `requiredApprover` and `decisionId`, and add an approval inbox.
     - Every decision is written to `audit_log`.
   - **Approach:** a plain rules table with unit tests written first, using `shell-quote` to parse arguments.
