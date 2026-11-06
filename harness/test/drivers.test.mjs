@@ -78,7 +78,7 @@ test("claude buildClaudeArgs: bad extras are refused", () => {
 
 test("claude buildClaudeSettings: extras.settings can't widen what is allowed", () => {
   const hook = claude.gateHookCommand("/tmp/t.approved.json");
-  const gate = [{ matcher: "Bash|PowerShell", hooks: [{ type: "command", command: hook, timeout: 30 }] }];
+  const gate = [{ matcher: "Bash|PowerShell|Monitor|WebFetch|WebSearch|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: [{ type: "command", command: hook, timeout: 30, onFailure: "block" }] }];
   assert.equal(
     claude.buildClaudeSettings(["Bash(ls)"], {}, hook),
     JSON.stringify({ env: { NODE_OPTIONS: "", BASH_ENV: "", ENV: "" }, disableAllHooks: false, hooks: { PreToolUse: gate }, permissions: { allow: ["Bash(ls)"] } }),

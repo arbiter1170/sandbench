@@ -50,8 +50,15 @@ test("approvals are keyed by the exact command, and a Monitor call is keyed as t
   assert.equal(gateKey("PowerShell", { command: "Get-Date" }), "PowerShell(Get-Date)");
   assert.equal(gateKey("Read", { file_path: "notes.txt" }), "Read(notes.txt)");
   assert.equal(gateKey("Glob", { path: "src" }), "Glob(src)");
-  assert.equal(gateKey("WebSearch", { query: "x" }), "WebSearch");
-  for (const [tool, input] of [["Bash", { command: "" }], ["Bash", {}], ["PowerShell", { file_path: "x" }], ["Bash", undefined], ["", { command: "ls" }], [null, {}], [5, {}]]) assert.equal(gateKey(tool, input), null, JSON.stringify([tool, input]));
+  assert.equal(gateKey("WebSearch", { query: "x" }), "WebSearch(x)");
+  assert.equal(gateKey("WebFetch", { url: "https://example.test/a", prompt: "p" }), "WebFetch(https://example.test/a)");
+  assert.equal(gateKey("Write", { file_path: "/w/a.txt", content: "x" }), "Write(/w/a.txt)");
+  assert.equal(gateKey("Edit", { file_path: "/w/a.txt", old_string: "a", new_string: "b" }), "Edit(/w/a.txt)");
+  assert.equal(gateKey("NotebookEdit", { notebook_path: "/w/n.ipynb" }), "NotebookEdit(/w/n.ipynb)");
+  assert.equal(gateKey("mcp__srv__send", { to: "a", body: { x: 1, a: 2 } }), gateKey("mcp__srv__send", { body: { a: 2, x: 1 }, to: "a" }));
+  assert.notEqual(gateKey("mcp__srv__send", { to: "a" }), gateKey("mcp__srv__send", { to: "b" }));
+  assert.equal(gateKey("TodoWrite", { todos: [] }), "TodoWrite");
+  for (const [tool, input] of [["WebFetch", {}], ["WebFetch", { url: "" }], ["WebSearch", {}], ["Write", { content: "x" }], ["Edit", {}], ["mcp__srv__send", undefined], ["mcp__srv__send", []], ["Bash", { command: "" }], ["Bash", {}], ["PowerShell", { file_path: "x" }], ["Bash", undefined], ["", { command: "ls" }], [null, {}], [5, {}]]) assert.equal(gateKey(tool, input), null, JSON.stringify([tool, input]));
   // An approved non-shell call the hook is sent goes through once approved (it was a loop before).
   assert.equal(gateDecision({ tool_name: "Read", tool_input: { file_path: "notes.txt" } }, ["Read(notes.txt)"]), null);
   assert.deepEqual(gateDecision({ tool_name: "Read", tool_input: { file_path: "notes.txt" } }, ["Read(other.txt)", "Read"]), ASK);
@@ -134,7 +141,7 @@ test("the settings file always runs the hook first, keeps hooks on, and clears w
   assert.deepEqual(plain.permissions, { allow: ["Bash(ls)"] });
   assert.equal(plain.disableAllHooks, false);
   assert.deepEqual(plain.env, { NODE_OPTIONS: "", BASH_ENV: "", ENV: "" });
-  assert.deepEqual(plain.hooks.PreToolUse, [{ matcher: "Bash|PowerShell", hooks: [{ type: "command", command, timeout: 30 }] }]);
+  assert.deepEqual(plain.hooks.PreToolUse, [{ matcher: "Bash|PowerShell|Monitor|WebFetch|WebSearch|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: [{ type: "command", command, timeout: 30, onFailure: "block" }] }]);
   const other = { matcher: "Bash", hooks: [{ type: "command", command: "audit" }] };
   const merged = JSON.parse(
     claude.buildClaudeSettings(
@@ -347,4 +354,67 @@ test("a CLI that exits without reading its prompt does not crash the harness", {
     const big = { ...turn(), prompt: "x".repeat(4 * 1024 * 1024) };
     await assert.rejects(claude.startTurn(big, io()).done, /without a result|exited/);
   });
+});
+
+test("one approved WebFetch or Write covers that exact call only, and the next one still gets its own card", { skip: !posix }, async () => {
+  const refused = (id, name, input) => ran(id, name, input, REASON, true);
+  const fetchOne = { url: "https://example.test/one", prompt: "x" };
+  const fetchTwo = { url: "https://example.test/two?d=fake", prompt: "x" };
+  const write = { file_path: "/w/a.txt", content: "hello" };
+  const cli = fakeCli([
+    { type: "system", subtype: "init", session_id: "session-0006" },
+    ...refused("tu1", "WebFetch", fetchOne),
+    ...refused("tu2", "Write", write),
+    ...refused("tu3", "WebFetch", fetchTwo),
+    {
+      type: "result",
+      session_id: "session-0006",
+      result: "done",
+      permission_denials: [
+        { tool_name: "WebFetch", tool_input: fetchOne },
+        { tool_name: "Write", tool_input: write },
+        { tool_name: "WebFetch", tool_input: fetchTwo },
+      ],
+    },
+  ]);
+  await withCli(cli, async () => {
+    const turnIo = io(false);
+    let asked = 0;
+    // Approve the first two cards (WebFetch one, Write), deny the rest.
+    turnIo.requestPermission = async (request) => {
+      turnIo.cards.push(request);
+      turnIo.current = `p${turnIo.cards.length}`;
+      asked += 1;
+      return asked <= 2;
+    };
+    await claude.startTurn(turn(), turnIo).done;
+    assert.deepEqual(
+      turnIo.cards.map((card) => card.command),
+      ["WebFetch https://example.test/one", "Write /w/a.txt", "WebFetch https://example.test/two?d=fake", "WebFetch https://example.test/two?d=fake"],
+    );
+    const [first, second] = cli.seen();
+    assert.deepEqual(first.list, []);
+    // Claude Code's rule is the bare name; the hook's list holds the exact calls.
+    assert.deepEqual(second.settings.permissions.allow, ["WebFetch", "Write"]);
+    assert.deepEqual(second.list, ["WebFetch(https://example.test/one)", "Write(/w/a.txt)"]);
+    assert.deepEqual(gateDecision({ tool_name: "WebFetch", tool_input: fetchTwo }, second.list), ASK);
+    assert.equal(gateDecision({ tool_name: "WebFetch", tool_input: fetchOne }, second.list), null);
+  });
+});
+
+test("an unapproved WebFetch, Write or MCP call that comes back with anything but the refusal stops the turn", { skip: !posix }, async () => {
+  for (const [name, input] of [
+    ["WebFetch", { url: "https://example.test/x", prompt: "p" }],
+    ["Write", { file_path: "/w/a.txt", content: "x" }],
+    ["mcp__srv__send", { to: "a" }],
+  ]) {
+    const cli = fakeCli([
+      { type: "system", subtype: "init", session_id: "session-0007" },
+      ...ran("tu1", name, input, "ok", false),
+      { type: "result", session_id: "session-0007", result: "done", permission_denials: [] },
+    ]);
+    await withCli(cli, async () => {
+      await assert.rejects(claude.startTurn(turn(), io()).done, /nobody approved/, name);
+    });
+  }
 });

@@ -34,10 +34,11 @@
 //     command, with the repository-config risk above.
 //   - It sees only what reaches it. Claude Code runs its own read-only shell commands (`cat`,
 //     `ls`, read-only `git`) without asking, so the driver adds a hook (drivers/claudeGate.mjs)
-//     that sends every Bash and PowerShell call here first, and starts Claude Code without the
-//     turn folder's settings or skills. A hook that times out still lets its call run (the
-//     driver then stops the turn). Claude Code's file tools (Read, Grep, Glob) read inside the
-//     turn folder without a request and never reach this gate.
+//     that sends every Bash and PowerShell call here first, gives every WebFetch, WebSearch,
+//     file write or edit and MCP call a card for that exact call, and starts Claude Code without
+//     the turn folder's settings or skills. A hook that crashes or times out blocks its call.
+//     Claude Code's file tools (Read, Grep, Glob) read inside the turn folder without a request
+//     and never reach this gate, and a subagent's refused call never becomes a card.
 
 const SAFE = /^[A-Za-z0-9 _\-./:=+]+$/;
 const PROGRAM = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -218,7 +219,8 @@ export function reviewCommand(command, rules) {
 
 // Shell tools whose permission requests carry a shell command line. Every other tool (Claude
 // Code's Write, Edit, WebFetch, MCP tools, ...) is described as "<Tool> <target>" and always
-// gets a card, whatever the rules say. The codex and grok drivers label every request with
+// gets a card, whatever the rules say; for Claude Code each approval covers only that exact
+// call (drivers/claudeGate.mjs). The codex and grok drivers label every request with
 // their own name, including file changes and other tools, so they always get a card too.
 const SHELL_TOOLS = new Set(["bash", "powershell"]);
 

@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ASK, GATED_TOOLS, HOOK_FLAG, REASON, gateKey } from "./claudeGate.mjs";
+import { ASK, GATED_TOOLS, HOOK_FLAG, HOOK_MATCHER, REASON, gateKey, hookedTool } from "./claudeGate.mjs";
 
 const GATE_FILE = fileURLToPath(new URL("./claudeGate.mjs", import.meta.url));
 
@@ -108,7 +108,8 @@ export function buildClaudeSettings(allow, extras = {}, hookCommand) {
   const { disableAllHooks: _off, ...settings } = extras.settings ?? {};
   const hooks = settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks) ? settings.hooks : {};
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env) ? settings.env : {};
-  const gate = { matcher: GATED_TOOLS.join("|"), hooks: [{ type: "command", command: hookCommand, timeout: 30 }] };
+  // onFailure "block": a hook that crashes or times out blocks the call instead of letting it run.
+  const gate = { matcher: HOOK_MATCHER, hooks: [{ type: "command", command: hookCommand, timeout: 30, onFailure: "block" }] };
   const preToolUse = [gate, ...(Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [])];
   return JSON.stringify({ ...settings, env: { ...env, ...HOOK_ENV }, disableAllHooks: false, hooks: { ...hooks, PreToolUse: preToolUse }, permissions: { allow } });
 }
@@ -191,14 +192,24 @@ export async function available() {
 function denialCommand(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return String(input.command ?? "").trim();
-  // Another tool that runs a command (Monitor) shows the command on its card.
-  const target = (typeof input.command === "string" ? input.command : "") || input.file_path || input.path || input.url || "";
-  return `${denial?.tool_name ?? "Tool"}${target ? ` ${target}` : ""}`;
+  // Another tool that runs a command (Monitor) shows the command on its card; an MCP tool its arguments.
+  const name = String(denial?.tool_name ?? "Tool");
+  const target =
+    (typeof input.command === "string" ? input.command : "") ||
+    input.file_path ||
+    input.notebook_path ||
+    input.path ||
+    input.url ||
+    input.query ||
+    (/^mcp__/.test(name) && Object.keys(input).length ? JSON.stringify(input).slice(0, 300) : "");
+  return `${name}${target ? ` ${target}` : ""}`;
 }
 
 function allowRule(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return `${denial.tool_name}(${input.command})`;
+  // The hook lets only the approved call through (claudeGate.mjs), so Claude Code's rule is the bare name.
+  if (hookedTool(denial?.tool_name)) return String(denial.tool_name);
   const target = input.file_path ?? input.path;
   return target ? `${denial.tool_name}(${target})` : String(denial?.tool_name ?? "");
 }
@@ -215,7 +226,7 @@ export function normalizeEvent(raw) {
       if (part.type === "tool_use") {
         return [
           { type: "thinking", text: `Claude wants ${part.name}${part.input?.command ? `: ${part.input.command}` : ""}.` },
-          { type: "tool_use", toolUseId: part.id, tool: part.name, label: denialCommand({ tool_name: part.name, tool_input: part.input }), gated: GATED_TOOLS.includes(part.name) || typeof part.input?.command === "string", key: gateKey(part.name, part.input) },
+          { type: "tool_use", toolUseId: part.id, tool: part.name, label: denialCommand({ tool_name: part.name, tool_input: part.input }), gated: hookedTool(part.name) || typeof part.input?.command === "string", key: gateKey(part.name, part.input) },
         ];
       }
       return [];
@@ -355,7 +366,9 @@ async function converse(bin, settingsFile, listFile, turn, io) {
     if (unapproved) throw new Error(`Claude Code ran a command nobody approved (${unapproved.slice(0, 120)}), or the approval hook did not answer, so the turn was stopped.`);
     if (!result) throw new Error("Claude Code ended without a result.");
     if (result.isError) throw new Error(result.text || "Claude Code reported an error.");
-    const denials = result.denials.filter((item) => !allow.includes(allowRule(item)));
+    // A hooked tool's rule is its bare name, so "already approved" is decided by its exact key.
+    const approvedAlready = (item) => (hookedTool(item?.tool_name) ? approvedKeys.includes(gateKey(item.tool_name, item.tool_input)) : allow.includes(allowRule(item)));
+    const denials = result.denials.filter((item) => !approvedAlready(item));
     if (denials.length === 0) return;
     const approved = [];
     for (const denial of denials) {
@@ -366,7 +379,7 @@ async function converse(bin, settingsFile, listFile, turn, io) {
       }
     }
     if (approved.length === 0 || !sessionId) return;
-    allow.push(...approved.map(allowRule));
+    for (const rule of approved.map(allowRule)) if (!allow.includes(rule)) allow.push(rule);
     approvedKeys.push(...approved.map((denial) => gateKey(denial.tool_name, denial.tool_input)).filter((key) => key !== null));
     io.emit({ type: "thinking", text: "Resume the session with the approved tools." });
     prompt = `The user approved: ${approved.map(denialCommand).join("; ")}. Run ${approved.length === 1 ? "it" : "them"} now and continue.`;
