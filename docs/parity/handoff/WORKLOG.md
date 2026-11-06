@@ -26,6 +26,18 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 10:55 ET · UX P4: phone basics · done
+- **Branch / PR / head sha:** `claude/ux-p4-phone-basics` · PR opened right after this commit. Cut from `deploy/vercel` `a648f9e`.
+- **Release:** Vincent released P4 in chat on 2026-11-06.
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** built by a Claude Code subagent, reviewed by another, fixed, checked here. Composer keys (Enter adds a line on touch, sends on a fine pointer, Ctrl/Cmd+Enter sends anywhere, never during IME composition); `--accent-fill` #c83a3a for primary buttons (text 4.86:1, was 3.75:1); 44 px targets on coarse pointers; the composer stays above the soft keyboard (`src/viewportFit.ts`); the context line breaks into two rows below a 350 px column. Review fixes: a photo with no text can be sent on a phone again (HIGH, a regression in the first commit), keyboard send on coarse pointers, real viewportFit in tests, placeholder and thread list on touch.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 136 passed; `npm run test:node` 291 pass, 0 fail, 32 skipped (ui-layout 52 browser tests, Playwright linked locally); `npm run build` ok.
+- **Not run / could not run:** the soft keyboard and pinch zoom on real iOS and Android, VoiceOver/TalkBack, Windows IME, 200% zoom.
+- **Decisions made and why:** the S3 copy ("Answer the card first…") is left to P2's busy note.
+- **Deviations from the plan:** besides `styles.css` and the composer `onKeyDown`: `src/composerKeys.ts`, `src/viewportFit.ts`, two lines in `src/main.tsx`, `enterKeyHint`, the fixture.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge last (after #38, P2, P3); re-run its layout tests on the merged tip.
+
 ### Session 10 · 2026-11-06 09:05 ET · UX P5: effective setup in the Model tab · done
 - **Branch / PR / head sha:** `claude/ux-p5-effective-setup` · PR opened right after this commit · code head `09e9733`. Cut from `deploy/vercel` `70bf68b` (after #36, UX P1).
 - **Release:** Vincent released P5 in chat on 2026-11-06 ("yes it is", after merging #36), and P2 after it. #36 was merged by Claude at Vincent's request (merge commit `70bf68b`, head `9c166a5`, four checks green).
