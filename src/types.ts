@@ -14,6 +14,8 @@ export type Message = {
   createdAt: number;
   attachments: Attachment[];
   status: "done" | "streaming" | "error";
+  /** Why a reply stopped reaching the page before it finished (local harness turns). */
+  interrupted?: string;
   localStandIn: boolean;
   fresh: boolean;
   thinking?: string[];

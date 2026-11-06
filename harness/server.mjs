@@ -852,6 +852,10 @@ const server = createServer(async (req, res) => {
       const body = await readJson(req);
       return send(res, 200, agentTurns.start(body));
     }
+    const turnState = /^\/turns\/([a-f0-9]{16})$/.exec(url.pathname);
+    if (req.method === "GET" && turnState) {
+      return send(res, 200, { state: agentTurns.state(turnState[1]) });
+    }
     const interrupt = /^\/turns\/([a-f0-9]{16})\/interrupt$/.exec(url.pathname);
     if (req.method === "POST" && interrupt) {
       return send(res, 200, { ok: agentTurns.interrupt(interrupt[1]) });
