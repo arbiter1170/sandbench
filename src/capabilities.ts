@@ -34,7 +34,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Auto-review rules and approvals",
-    web: "Rules are exact commands, or a command name that then covers only built-in read-only forms, checked flag by flag; git commands only skip a card under a rule for exactly that command. Any other flag or argument asks, as do chained, piped, redirected, quoted, backslashed or expanded commands. Credential files and other sensitive locations ask even under a rule for exactly that command. The same check gates planner turns, Claude Code's shell commands (through a hook, since Claude Code runs read-only commands on its own) and the API drivers' commands; Claude Code's own Read, Grep and Glob tools still read inside the turn folder without a card, and Codex and Grok requests always ask. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
+    web: "Rules are exact commands, or a command name that then covers only built-in read-only forms, checked flag by flag; git commands only skip a card under a rule for exactly that command. Any other flag or argument asks, as do chained, piped, redirected, quoted, backslashed or expanded commands. Credential files and other sensitive locations ask even under a rule for exactly that command. The same check gates planner turns, Claude Code's shell commands (through a hook, since Claude Code runs read-only commands on its own; the turn folder's own Claude Code settings and skills are not loaded) and the API drivers' commands; Claude Code's own Read, Grep and Glob tools still read inside the turn folder without a card, and Codex and Grok requests always ask. A narrowing heuristic, not a sandbox. Plus a setting for unattended routines",
     state: "working",
   },
   {

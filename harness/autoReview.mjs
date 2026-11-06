@@ -34,8 +34,10 @@
 //     command, with the repository-config risk above.
 //   - It sees only what reaches it. Claude Code runs its own read-only shell commands (`cat`,
 //     `ls`, read-only `git`) without asking, so the driver adds a hook (drivers/claudeGate.mjs)
-//     that sends every Bash and PowerShell call here first. Claude Code's file tools (Read,
-//     Grep, Glob) read inside the turn folder without a request and never reach this gate.
+//     that sends every Bash and PowerShell call here first, and starts Claude Code without the
+//     turn folder's settings or skills. A hook that times out still lets its call run (the
+//     driver then stops the turn). Claude Code's file tools (Read, Grep, Glob) read inside the
+//     turn folder without a request and never reach this gate.
 
 const SAFE = /^[A-Za-z0-9 _\-./:=+]+$/;
 const PROGRAM = /^[A-Za-z][A-Za-z0-9_-]*$/;
@@ -97,11 +99,14 @@ function form({ flags = [], values = {}, counts = false, positional = null, min 
   const key = (name) => (anyCase ? name.toLowerCase() : name);
   const flagSet = new Set(flags.map(key));
   const valueMap = new Map(Object.entries(values).map(([name, check]) => [key(name), check]));
+  // A path given to a flag (`-Path other`) counts as one too.
   const positionals = (args) => {
     let used = 0;
     for (let index = 0; index < args.length; index += 1) {
-      if (valueMap.has(key(args[index]))) index += 1;
-      else if (!args[index].startsWith("-")) used += 1;
+      if (valueMap.has(key(args[index]))) {
+        if (valueMap.get(key(args[index])) === isRelative) used += 1;
+        index += 1;
+      } else if (!args[index].startsWith("-")) used += 1;
     }
     return used;
   };
