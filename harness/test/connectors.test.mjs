@@ -337,7 +337,8 @@ test("CLI fixture: an approved connector tool runs once against the bot's own se
     assert.deepEqual(notes.calls[0], { name: "write_note", arguments: { text: "synthetic note" } });
     assert.equal(other.calls.length + other.authorizations.length, 0, "another bot's server is never contacted");
     const asked = events.find((item) => item.type === "permission_request");
-    assert.match(asked.command, /^mcp__sb_notes_c_a_ca__write_note$/);
+    // The card shows the exact call it approves (the Claude Code gate keys MCP approvals on the input).
+    assert.equal(asked.command, 'mcp__sb_notes_c_a_ca__write_note {"text":"synthetic note"}');
     assert.equal(asked.auto, false);
     const ended = events.find((item) => item.type === "tool_end" && item.permissionId === asked.permissionId);
     assert.match(ended.output, /saved: synthetic note/);
