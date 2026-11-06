@@ -10,6 +10,8 @@ RUN npm ci --no-audit --no-fund
 COPY index.html tsconfig.json vite.config.ts ./
 COPY public ./public
 COPY src ./src
+# The page and the harness share one auto-review check.
+COPY harness/autoReview.mjs harness/autoReview.d.mts ./harness/
 # Public Firebase web config only (it ships in every page anyway). No API keys here.
 ARG VITE_FIREBASE_API_KEY=""
 ARG VITE_FIREBASE_AUTH_DOMAIN=""

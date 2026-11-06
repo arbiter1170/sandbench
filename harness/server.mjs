@@ -14,6 +14,7 @@ import { proxyModel } from "./modelProxy.mjs";
 import { createSecretStore } from "./secrets.mjs";
 import { createTurns } from "./turns.mjs";
 import { parseSkill } from "./skillLibrary.mjs";
+import { POSIX_SHELL, windowsPowerShell } from "./shellPath.mjs";
 
 const PORT = Number(process.env.SANDBENCH_HARNESS_PORT || 8799);
 const HOOK_PORT = Number(process.env.SANDBENCH_WEBHOOK_PORT || 8801);
@@ -49,6 +50,7 @@ Prefer MEMORY.md for long-lived facts and keep daily logs under memory/log/.
 seedSampleSkill();
 const MAX_OUTPUT = 64 * 1024;
 const WINDOWS = process.platform === "win32";
+const POWERSHELL = windowsPowerShell();
 const POINTER_VK = { enter: 13, tab: 9, escape: 27, up: 38, down: 40, left: 37, right: 39, space: 32, backspace: 8 };
 const POINTER_CLICK = `
 if (-not ([System.Management.Automation.PSTypeName]'SBPoint').Type) {
@@ -91,8 +93,11 @@ function runShell(command, { timeoutMs = 30_000, cwd = WORKSPACE, maxOutput = MA
   return new Promise((resolve) => {
     const started = Date.now();
     const child = WINDOWS
-      ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd, windowsHide: true, env: env ? { ...process.env, ...env } : process.env })
-      : spawn("/bin/sh", ["-c", command], { cwd, env: env ? { ...process.env, ...env } : process.env });
+      ? spawn(POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command", command], { cwd, windowsHide: true, env: env ? { ...process.env, ...env } : process.env })
+      : spawn(POSIX_SHELL, ["-c", command], { cwd, env: env ? { ...process.env, ...env } : process.env });
+    // Nothing types into a command, so a program that reads standard input (`cat` with no file)
+    // sees its end at once instead of waiting for the timeout.
+    child.stdin.end();
     let stdout = "";
     let stderr = "";
     let truncated = false;
@@ -516,7 +521,7 @@ function saveSchedules() {
 function notifyRoutine(title) {
   if (!WINDOWS) return;
   const child = spawn(
-    "powershell.exe",
+    POWERSHELL,
     [
       "-NoProfile",
       "-WindowStyle",
