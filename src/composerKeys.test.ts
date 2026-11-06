@@ -22,6 +22,27 @@ describe("enterSends", () => {
     expect(enterSends(enter({ coarse: true, shiftKey: true }))).toBe(false);
   });
 
+  it("Ctrl+Enter and Cmd+Enter send on any pointer, so a tablet with a hardware keyboard can send", () => {
+    for (const coarse of [false, true]) {
+      for (const shiftKey of [false, true]) {
+        expect(enterSends(enter({ coarse, shiftKey, ctrlKey: true }))).toBe(true);
+        expect(enterSends(enter({ coarse, shiftKey, metaKey: true }))).toBe(true);
+      }
+    }
+  });
+
+  it("Ctrl/Cmd+Enter never sends during IME composition", () => {
+    for (const coarse of [false, true]) {
+      expect(enterSends(enter({ coarse, ctrlKey: true, isComposing: true }))).toBe(false);
+      expect(enterSends(enter({ coarse, metaKey: true, keyCode: 229 }))).toBe(false);
+    }
+  });
+
+  it("Ctrl/Cmd with another key never sends", () => {
+    expect(enterSends(enter({ key: "a", ctrlKey: true }))).toBe(false);
+    expect(enterSends(enter({ key: "s", metaKey: true, coarse: true }))).toBe(false);
+  });
+
   it("never sends while an IME composition is active, on any device", () => {
     for (const coarse of [false, true]) {
       for (const shiftKey of [false, true]) {

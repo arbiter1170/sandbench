@@ -291,9 +291,10 @@ const NARROW = { name: "phone-320", width: 320, height: 640, wide: false };
 // 1280 x 800 at 200% browser zoom lays out as 640 x 400 CSS px.
 const ZOOM_200 = { name: "zoom-200", width: 640, height: 400, wide: false };
 
-async function openPage(viewport, { touch = false, query = "" } = {}) {
+async function openPage(viewport, { touch = false, query = "", init = null } = {}) {
   const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, ...(touch ? TOUCH : {}) });
   const page = await context.newPage();
+  if (init) await page.addInitScript(init);
   const errors = [];
   page.on("pageerror", (error) => errors.push(String(error)));
   await page.goto(`${base}${query}`, { waitUntil: "load", timeout: 20_000 });
@@ -577,32 +578,184 @@ describe("phone basics (UX P4)", () => {
     assert.deepEqual(sent, ["hi\nyou"], "Enter did not send on a fine pointer");
   });
 
-  test("phone-390: with the soft keyboard open the composer ends above it and the dock steps aside", async () => {
-    const { context, page } = await openPage(PHONES[1], { touch: true });
-    const measure = () => page.evaluate(() => ({
-      composerBottom: document.querySelector(".composer").getBoundingClientRect().bottom,
-      composerTop: document.querySelector(".composer").getBoundingClientRect().top,
+  // A stand-in visualViewport, installed before the page's scripts, so the fixture's real
+  // installViewportFit() reads it. Headless Chromium has no soft keyboard; this is the shape a
+  // keyboard (or a pinch) gives the real object.
+  function fakeVisualViewport() {
+    const target = new EventTarget();
+    const state = { height: window.innerHeight, offsetTop: 0, scale: 1 };
+    const viewport = {
+      get height() { return state.height; },
+      get width() { return window.innerWidth; },
+      get offsetTop() { return state.offsetTop; },
+      get offsetLeft() { return 0; },
+      get scale() { return state.scale; },
+      addEventListener: target.addEventListener.bind(target),
+      removeEventListener: target.removeEventListener.bind(target),
+    };
+    Object.defineProperty(window, "visualViewport", { configurable: true, get: () => viewport });
+    window.__setViewport = (patch) => {
+      Object.assign(state, patch);
+      target.dispatchEvent(new Event("resize"));
+    };
+  }
+  const frames = (page) => page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  const keyboardFacts = (page) => page.evaluate(() => {
+    const composer = document.querySelector(".composer").getBoundingClientRect();
+    return {
+      keyboard: document.documentElement.dataset.keyboard ?? null,
+      inset: document.documentElement.style.getPropertyValue("--keyboard-inset"),
+      composerBottom: composer.bottom,
+      composerTop: composer.top,
+      composerPadding: getComputedStyle(document.querySelector(".composer")).paddingBottom,
       dock: getComputedStyle(document.querySelector(".dock")).display,
       innerHeight,
-    }));
-    const closed = await measure();
-    // What src/viewportFit.ts publishes for a 300 px keyboard (it is unit-tested on its own).
-    await page.evaluate(() => {
-      document.documentElement.style.setProperty("--keyboard-inset", "300px");
-      document.documentElement.dataset.keyboard = "open";
-    });
-    const open = await measure();
-    await page.evaluate(() => {
-      document.documentElement.style.removeProperty("--keyboard-inset");
-      delete document.documentElement.dataset.keyboard;
-    });
-    const again = await measure();
+    };
+  });
+
+  test("phone-390: viewportFit sees the soft keyboard; the composer ends above it and the dock steps aside", async () => {
+    const { context, page, errors } = await openPage(PHONES[1], { touch: true, init: fakeVisualViewport });
+    const closed = await keyboardFacts(page);
+    // The keyboard covers 336 px of an 844 px layout viewport.
+    await page.evaluate(() => window.__setViewport({ height: 508 }));
+    await frames(page);
+    const open = await keyboardFacts(page);
+    // The browser panned the page itself instead: nothing is hidden below, so no inset.
+    await page.evaluate(() => window.__setViewport({ offsetTop: 336 }));
+    await frames(page);
+    const panned = await keyboardFacts(page);
+    await page.evaluate(() => window.__setViewport({ height: 844, offsetTop: 0 }));
+    await frames(page);
+    const again = await keyboardFacts(page);
     await context.close();
+    assert.deepEqual(errors, []);
+    assert.equal(closed.keyboard, null);
     assert.equal(closed.dock, "grid");
-    assert.ok(closed.composerBottom <= closed.innerHeight + 0.5);
+    assert.equal(open.keyboard, "open", "viewportFit did not see the keyboard");
+    assert.equal(open.inset, "336px");
     assert.equal(open.dock, "none", "the dock stays up while typing");
-    assert.ok(open.composerBottom <= open.innerHeight - 300 + 0.5, `the composer ends at ${open.composerBottom}, under the keyboard`);
+    assert.ok(open.composerBottom <= 508 + 0.5, `the composer ends at ${open.composerBottom}, under the keyboard`);
     assert.ok(open.composerTop >= 0, "the composer is pushed off the top");
+    assert.equal(panned.keyboard, null, "a panned page was padded as well");
     assert.deepEqual(again, closed, "closing the keyboard did not restore the layout");
+  });
+
+  test("phone-390: pinch zoom is not a keyboard", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true, init: fakeVisualViewport });
+    const before = await keyboardFacts(page);
+    await page.evaluate(() => window.__setViewport({ scale: 2, height: 422 }));
+    await frames(page);
+    const zoomed = await keyboardFacts(page);
+    await context.close();
+    assert.equal(zoomed.keyboard, null, "pinch zoom was taken for a keyboard");
+    assert.equal(zoomed.inset, "");
+    assert.deepEqual(zoomed, before);
+  });
+
+  test("a window resized from 800 to 500 px tall is not a keyboard (real visualViewport)", async () => {
+    const { context, page } = await openPage({ width: 390, height: 800 }, { touch: true });
+    assert.equal(await page.evaluate(() => Boolean(window.visualViewport)), true);
+    await page.setViewportSize({ width: 390, height: 500 });
+    await frames(page);
+    const facts = await keyboardFacts(page);
+    await context.close();
+    assert.equal(facts.innerHeight, 500);
+    assert.equal(facts.keyboard, null, "a shorter window was taken for a keyboard");
+    assert.equal(facts.inset, "");
+    assert.equal(facts.dock, "grid");
+    assert.ok(facts.composerBottom <= 500, "the composer runs past the window");
+  });
+
+  test("tablet-1024: with the keyboard open the composer drops its safe-area padding (no double gap)", async () => {
+    const { context, page } = await openPage({ width: 1024, height: 768 }, { touch: true, init: fakeVisualViewport });
+    await page.evaluate(() => window.__setViewport({ height: 450 }));
+    await frames(page);
+    const open = await keyboardFacts(page);
+    // Headless Chromium reports no safe-area inset, so also check the rule that removes it is
+    // global (not only in the phone media query), where an iPad at 900 px and up would reach it.
+    const rule = await page.evaluate(() => [...document.styleSheets].flatMap((sheet) => [...sheet.cssRules]).some((item) => item instanceof CSSStyleRule && item.selectorText.replace(/\s+/g, " ") === ':root[data-keyboard="open"] .composer' && item.style.paddingBottom === "0.75rem"));
+    await context.close();
+    assert.equal(open.keyboard, "open");
+    assert.equal(open.composerPadding, "12px");
+    assert.ok(open.composerBottom <= 450 + 0.5, `the composer ends at ${open.composerBottom}, under the keyboard`);
+    assert.equal(rule, true, "no top-level rule drops the safe-area padding while the keyboard is open");
+  });
+
+  test("touch: with a photo attached and no text, the Send button sends (it does not record)", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true, query: "?attach=1" });
+    const orb = await page.evaluate(() => ({ text: document.querySelector(".composer .send-orb").textContent, label: document.querySelector(".composer .send-orb").getAttribute("aria-label") }));
+    await page.tap(".composer .send-orb");
+    const result = await page.evaluate(() => ({ sent: [...window.__sent], voice: window.__voice.length }));
+    await context.close();
+    assert.deepEqual(orb, { text: "Send", label: "Send" });
+    assert.deepEqual(result, { sent: [""], voice: 0 }, "the attached photo was not sent");
+  });
+
+  test("touch: with nothing to send the button records a voice note", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true });
+    const text = await page.evaluate(() => document.querySelector(".composer .send-orb").textContent);
+    await page.tap(".composer .send-orb");
+    const result = await page.evaluate(() => ({ sent: [...window.__sent], voice: window.__voice.length }));
+    await context.close();
+    assert.equal(text, "Rec");
+    assert.deepEqual(result, { sent: [], voice: 1 });
+  });
+
+  for (const touch of [true, false]) {
+    test(`${touch ? "coarse" : "fine"} pointer: Ctrl+Enter and Cmd+Enter send (a hardware keyboard on a tablet)`, async () => {
+      const { context, page } = await openPage(touch ? PHONES[1] : VIEWPORTS[3], { touch });
+      await page.focus("#composer");
+      await page.keyboard.type("one");
+      await page.keyboard.press("Control+Enter");
+      await page.keyboard.type("two");
+      await page.keyboard.press("Meta+Enter");
+      const sent = await page.evaluate(() => [...window.__sent]);
+      await context.close();
+      assert.deepEqual(sent, ["one", "two"]);
+    });
+
+    test(`${touch ? "coarse" : "fine"} pointer: an Enter with keyCode 229 or isComposing never sends, even with Ctrl or Cmd`, async () => {
+      const { context, page } = await openPage(touch ? PHONES[1] : VIEWPORTS[3], { touch });
+      await page.focus("#composer");
+      await page.keyboard.type("draft");
+      const codes = await page.evaluate(() => {
+        const box = document.querySelector("#composer");
+        const seen = [];
+        for (const init of [{}, { ctrlKey: true }, { metaKey: true }]) {
+          // Safari's composition-committing keydown: isComposing false, keyCode 229.
+          const event = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+          Object.defineProperty(event, "keyCode", { value: 229 });
+          box.dispatchEvent(event);
+          seen.push(event.keyCode);
+          box.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true, ...init }));
+        }
+        return seen;
+      });
+      const sent = await page.evaluate(() => [...window.__sent]);
+      await context.close();
+      assert.deepEqual(codes, [229, 229, 229]);
+      assert.deepEqual(sent, [], "an IME Enter sent the draft");
+    });
+  }
+
+  test("phone-360 touch: the composer placeholder stays on one line (ellipsis), and typed text still wraps", async () => {
+    const { context, page } = await openPage(PHONES[0], { touch: true });
+    const empty = await page.evaluate(() => getComputedStyle(document.querySelector("#composer")).whiteSpace);
+    await page.focus("#composer");
+    await page.keyboard.type("typed text");
+    const typed = await page.evaluate(() => getComputedStyle(document.querySelector("#composer")).whiteSpace);
+    await context.close();
+    assert.equal(empty, "nowrap");
+    assert.notEqual(typed, "nowrap", "typed text no longer wraps");
+  });
+
+  test("phone-390 touch: the rail's thread list keeps about four and a half 44 px rows in view", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true });
+    await page.tap(".dock button >> nth=0");
+    await page.waitForSelector(".chat-list");
+    const list = await page.evaluate(() => ({ max: parseFloat(getComputedStyle(document.querySelector(".chat-list")).maxHeight), row: document.querySelector(".chat-list li").getBoundingClientRect().height }));
+    await context.close();
+    assert.ok(list.row >= 44, `a thread row is ${list.row}px`);
+    assert.ok(list.max / list.row >= 4.4, `the list shows ${(list.max / list.row).toFixed(1)} rows`);
   });
 });

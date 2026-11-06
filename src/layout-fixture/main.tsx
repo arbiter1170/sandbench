@@ -9,6 +9,7 @@ import { createRoot } from "react-dom/client";
 import { translate, type Key } from "../i18n";
 import { Workspace } from "../shell";
 import { defaultSettings, defaultStudio, type Bot, type BotTask, type Message, type Reminder, type Routine, type Thread } from "../types";
+import { installViewportFit } from "../viewportFit";
 import { blankBot } from "../work";
 import "../styles.css";
 
@@ -20,6 +21,10 @@ const channelScenario = new URLSearchParams(location.search).get("scenario") ===
 // ?scenario=long (UX P4): F-P4-a, a pending card whose command is one 175-character run with no
 // spaces, and F-P4-b, a 60-character Windows path under C:\Users\<you>\. Synthetic.
 const longScenario = new URLSearchParams(location.search).get("scenario") === "long";
+// ?attach=1 (UX P4): a photo waits in the composer, so the Send button must send with no text.
+const attached = new URLSearchParams(location.search).get("attach") === "1";
+// The real soft-keyboard tracking, as in src/main.tsx (the test may stand in a visualViewport).
+installViewportFit();
 const members: Bot[] = [
   { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
   { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
@@ -131,7 +136,8 @@ const noop = () => undefined;
 
 // What the composer sent, for the UX P4 key checks (read by the layout test).
 const sent: string[] = [];
-(window as unknown as { __sent: string[] }).__sent = sent;
+const voice: number[] = [];
+Object.assign(window, { __sent: sent, __voice: voice });
 
 function Fixture() {
   // The app's own breakpoint (App.tsx) decides rail + stage + inspector versus one pane.
@@ -176,7 +182,7 @@ function Fixture() {
       onRemoveFile={noop}
       hub={null}
       draft={draft}
-      hasPending={false}
+      hasPending={attached}
       recording={false}
       listening={false}
       dragging={false}
@@ -229,13 +235,13 @@ function Fixture() {
       onPhoto={noop}
       onCamera={noop}
       onSwatch={noop}
-      onVoice={noop}
+      onVoice={() => voice.push(Date.now())}
       onDictate={noop}
       onLocation={noop}
       onDragOver={noop}
       onDragLeave={noop}
       onDrop={noop}
-      pending={null}
+      pending={attached ? <ul className="pending"><li>photo.png</li></ul> : null}
     />
   );
 }

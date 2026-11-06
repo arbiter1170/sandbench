@@ -147,6 +147,9 @@ export function Workspace(props: {
     platform: props.harness?.platform,
     workspace: props.harness?.workspace,
   };
+  // The orb records a voice note only with nothing to send: no text and no attachment (or while
+  // a recording runs, to stop it). With a photo attached it sends, since on a phone Enter doesn't.
+  const voiceOrb = !draft.trim() && (!props.hasPending || recording);
   const send = (text: string) => {
     if (!text.trim() && !props.hasPending) return;
     if (channel) props.onSendChannel(channel.id, text);
@@ -606,7 +609,7 @@ export function Workspace(props: {
                   enterKeyHint="enter"
                   onKeyDown={(event) => {
                     // UX P4: phones and tablets get a newline (Send sends); never send mid-IME.
-                    if (enterSends({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode, coarse: coarsePointer() })) {
+                    if (enterSends({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode, coarse: coarsePointer() })) {
                       event.preventDefault();
                       send(draft);
                     }
@@ -616,13 +619,13 @@ export function Workspace(props: {
                 {(streaming || bots.find((item) => item.id === workingBotId)?.driver) && workingBotId !== null && (channel ? channel.memberIds?.includes(workingBotId) : workingBotId === bot?.id) ? (
                   <button type="button" className="send-orb" onClick={props.onStop}>{t("stop")}</button>
                 ) : (
-                  <button type="submit" className="send-orb" aria-label={draft.trim() ? t("send") : t("voice")} onClick={(event) => {
-                    if (!draft.trim()) {
+                  <button type="submit" className="send-orb" aria-label={voiceOrb ? t("voice") : t("send")} onClick={(event) => {
+                    if (voiceOrb) {
                       event.preventDefault();
                       props.onVoice();
                     }
                   }}>
-                    {recording ? "Stop" : draft.trim() ? t("send") : "Rec"}
+                    {recording ? "Stop" : voiceOrb ? "Rec" : t("send")}
                   </button>
                 )}
               </div>

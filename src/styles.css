@@ -956,6 +956,8 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
    above the keyboard, so the composer stays visible; the dock steps aside while typing. With no
    keyboard, or where the browser already resizes the page, the inset is 0 and nothing changes. */
 .app { padding-bottom: var(--keyboard-inset, 0px); }
+/* The keyboard covers the home indicator, so the safe-area padding would only add a gap (iPad). */
+:root[data-keyboard="open"] .composer { padding-bottom: 0.75rem; }
 @media (max-width: 899px) {
   /* On a phone the dock under the composer already clears the home indicator. */
   .composer { padding-bottom: 0.75rem; }
@@ -973,6 +975,10 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
   .chat-context .ctx-conn { order: 2; flex: 0 1 auto; min-width: 0; white-space: normal; }
   .chat-context .ctx-more { order: 2; }
   /* "Message this bot" stays on one line in the narrow box rather than half-hidden on a second. */
+  .composer-bar textarea:placeholder-shown, .composer-bar textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+/* On touch the 44 px buttons narrow the textarea, so the same applies at any width there. */
+@media (pointer: coarse) {
   .composer-bar textarea:placeholder-shown, .composer-bar textarea::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 /* A button label in a bubble breaks between words, not inside one ("Den|y"); a single word that
@@ -997,6 +1003,8 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
   .bot-link { min-height: 44px; padding-right: 3rem; }
   .bot-menu-btn { opacity: 1; top: calc(50% - 22px); right: 0; min-height: 44px; min-width: 44px; justify-content: center; }
   .bot-menu { top: calc(50% + 24px); }
+  /* Rows are 44 px here, so the thread list keeps about four and a half in view, as with a mouse. */
+  .chat-list { max-height: calc(4.5 * (44px + 0.05rem)); }
   /* The switch keeps its look; the button around the track grows to 44 px. */
   .switch { width: 3.25rem; height: 44px; background: transparent; }
   .switch:hover, .switch.on { background: transparent; }
