@@ -54,6 +54,13 @@ export default defineConfig({
       "/harness": {
         target: "http://127.0.0.1:8799",
         rewrite: (path) => path.replace(/^\/harness/, ""),
+        // The page imports a shared module from this folder (src/approvalPolicy.ts), and in dev the
+        // browser fetches it by URL. A harness call always carries the client header, so a module
+        // GET without it is served by Vite; it never reaches the harness or gets the token.
+        bypass: (req) => {
+          const path = (req.url ?? "").split("?")[0];
+          return req.method === "GET" && !req.headers["x-sandbench-client"] && path.endsWith(".mjs") ? req.url : undefined;
+        },
         configure: (proxy) => {
           proxy.on("proxyReq", (proxyReq, req, res) => {
             const origin = req.headers.origin;
