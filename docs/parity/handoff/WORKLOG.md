@@ -26,6 +26,22 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 9 · 2026-11-05 19:10 ET · capability map labels: fixes from the fourth independent review (#30) · review fix
+- **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `5d6457e` (final head after this log commit is in the session summary)
+- **Checks on the head:** pending at the time of writing. The previous head is `5501b4d`.
+- **What was done:** a fourth independent review of `5501b4d` found five problems. Corrected:
+  - Group chats and voice calls: with no key, a bot that uses an API driver (as its Agent or through the default agent) gets an error while the local harness or the runner is up, not a stand-in. The rows now say so.
+  - Computer use: "without a model key" now applies to the built-in planner only. A CLI driver picks its own steps with its own sign-in.
+  - Bot teammates and README: the API-driver error happens only while the local harness or the runner is up, and also for a bot with no Agent when the default agent is an API driver.
+  - AppsFlyer, Braze, and Sentry: the error log syncs with the signed-in workspace, so it is not only local.
+  - Tests: deleting the desktop app's `startHarness()` call, ignoring `allowLocal`, or making `isEmailAllowed` return true now fails a test. The allowlist test is in `src/capabilities.test.ts`, because Node cannot load `src/firebase.ts`. A new test ties the API-driver error to the page and the drivers.
+- **Tests run (real results):** Node 22.23.4 on Linux. `npm run typecheck` → clean. `npm run test:web` → 43 passed. `npm run test:node` → 161 tests, 127 pass, 2 fail (`runner/test/screenshot.test.mjs` and `runner/test/ui-layout.test.mjs`: `playwright` is not installed in this checkout), 32 skipped. `npm run build` → ok. Each of the review's three mutations was applied, failed a test, and was reverted.
+- **Not run / could not run:** Postgres DB tests, the Auth emulator test, compose + image, gitleaks (left to CI). The page was not opened in a browser.
+- **Decisions made and why:** the Settings heading "Local error log" and its translations stay as they are; they are outside this PR.
+- **Deviations from the plan:** none beyond the earlier entries.
+- **Open questions for Vincent or the Supervisor:** 1. The Settings heading "Local error log" (`src/i18n.ts`, 12 translations) has the same wording problem; fix it here or in a later PR? 2. #29 also edits `src/capabilities.ts`, so whichever merges second needs a merge of `deploy/vercel`.
+- **Next step:** CI on this head, then an independent review of the final head.
+
 ### Session 8 · 2026-11-05 · capability map labels: fixes from the third independent review (#30) · review fix
 - **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `ac379e9` (final head after this log commit is in the PR)
 - **Checks on the head:** pending at the time of writing. All 4 were green on the previous head `a65a3b1`.
