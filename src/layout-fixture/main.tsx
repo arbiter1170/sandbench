@@ -14,6 +14,14 @@ import "../styles.css";
 
 const t = (key: Key) => translate("en", key);
 const bot: Bot = { ...blankBot("North", "General", true), id: "north", createdAt: 1_700_000_000_000 };
+// ?scenario=channel: a group chat with mixed agents, a long folder name and a reachable harness
+// (synthetic), for the context line's layout. The default page has no harness.
+const channelScenario = new URLSearchParams(location.search).get("scenario") === "channel";
+const members: Bot[] = [
+  { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
+  { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
+  { ...blankBot("Fern", "Writer", true), id: "fern", createdAt: 3 },
+];
 
 const WIN_PATH = "C:\\Users\\Some Body\\.sandbench\\workspace";
 const LONG_URL = "https://example.test/articles/2026/11/a-rather-long-slug-that-has-no-spaces-anywhere-in-it-so-it-cannot-wrap-by-itself/sandboxed-agent-workbench";
@@ -96,6 +104,9 @@ const messages: Message[] = [
 ];
 
 const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages, botId: bot.id };
+const channel: Thread = { id: "channel-1", title: "walklings-team", updatedAt: at, messages: [], memberIds: members.map((item) => item.id), workingFolder: "walklings-team/a-rather-long-project-folder-name" };
+const health = { ok: true, platform: "win32", host: "fixture", workspace: "C:\\Users\\<you>\\.sandbench\\workspace" };
+const drivers = [{ id: "claude", label: "Claude Code (local CLI)", ok: true, detail: "" }];
 const settings = defaultSettings();
 const studio = { ...defaultStudio(), onboarded: true };
 const noop = () => undefined;
@@ -111,20 +122,24 @@ function Fixture() {
       focus="chat"
       overlay={null}
       createNonce={0}
-      bots={[bot]}
+      bots={channelScenario ? [bot, ...members] : [bot]}
       tasks={[]}
       routines={[]}
       computer={[]}
       reminders={[]}
-      threads={[thread]}
+      threads={channelScenario ? [thread, channel] : [thread]}
       selectedId={bot.id}
       openThreadId={thread.id}
-      channel={null}
+      channel={channelScenario ? channel : null}
       workingBotId={null}
       studio={studio}
-      harness={null}
+      harness={channelScenario ? health : null}
+      healthLog={{ checkedAt: at }}
+      healthChecked
+      onRecheckHarness={() => new Promise((resolve) => setTimeout(() => resolve(false), 300))}
+      runner={false}
       callActive={false}
-      messages={messages}
+      messages={channelScenario ? [] : messages}
       onApproval={noop}
       onCreateChannel={noop}
       onSendChannel={noop}
@@ -171,7 +186,7 @@ function Fixture() {
       onToggleRoutine={noop}
       onRemoveRoutine={noop}
       triggerRuns={[]}
-      drivers={[]}
+      drivers={channelScenario ? drivers : []}
       hookPort={null}
       freshSecret={null}
       onAddWebhook={noop}

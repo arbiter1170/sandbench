@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "firebase/auth";
 import { completeText, routeFor, streamReply, streamText } from "./assistant";
 import { SignOutButton } from "./AuthGate";
@@ -53,6 +53,7 @@ import {
 } from "./harness";
 import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
+import { effectiveDriver } from "./chatContext";
 import { REFUSED_ELSEWHERE, settleEndedMessage, settleLoadedThreads, STOP_GRACE_MS, stoppedCard } from "./turnRecovery";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
@@ -484,12 +485,31 @@ export function App({ user }: { user: User }) {
     return () => window.clearTimeout(handle);
   }, [hydrated, persist, threads, reminders, events, contacts, settings, logs, bots, tasks, routines, computer, studio, draft, user.uid]);
 
+  // When the health poll last answered and when the harness was last reachable, so the chat's
+  // context line can say "Checking…" before the first answer and never show old values as current.
+  // The times live in a ref (the context sheet reads them while it is open), so a poll that
+  // changes nothing does not re-render the page; `healthChecked` flips once.
+  const healthLog = useRef<{ checkedAt?: number; lastOkAt?: number }>({});
+  const [healthChecked, setHealthChecked] = useState(false);
+  const healthSeq = useRef({ sent: 0, applied: 0 });
+  const checkHealth = useCallback(async () => {
+    const seq = ++healthSeq.current.sent;
+    const next = await harnessHealth();
+    // A slower, older request (the 8 s poll racing "Check again") never overwrites a newer answer.
+    if (seq < healthSeq.current.applied) return next;
+    healthSeq.current.applied = seq;
+    const at = Date.now();
+    setHarness((prev) =>
+      Boolean(prev) === Boolean(next) && prev?.host === next?.host && prev?.workspace === next?.workspace && prev?.platform === next?.platform ? prev : next,
+    );
+    healthLog.current = { checkedAt: at, lastOkAt: next ? at : healthLog.current.lastOkAt };
+    setHealthChecked(true);
+    return next;
+  }, []);
   useEffect(() => {
     let active = true;
     const check = () => {
-      void harnessHealth().then((next) => {
-        if (active) setHarness((prev) => (Boolean(prev) === Boolean(next) && prev?.host === next?.host ? prev : next));
-      });
+      if (active) void checkHealth();
     };
     check();
     const handle = window.setInterval(check, 8000);
@@ -497,7 +517,21 @@ export function App({ user }: { user: User }) {
       active = false;
       window.clearInterval(handle);
     };
-  }, []);
+  }, [checkHealth]);
+  /** "Check again" in the chat's context sheet: re-reads /health and /drivers. It sends nothing. */
+  const recheckHarness = useCallback(async () => {
+    const next = await checkHealth();
+    if (!next) {
+      setDrivers([]);
+      return false;
+    }
+    try {
+      setDrivers((await harnessDrivers()).drivers);
+    } catch {
+      setDrivers([]);
+    }
+    return true;
+  }, [checkHealth]);
 
   useEffect(() => {
     void refreshKeys().then(flushPendingSecrets);
@@ -1987,23 +2021,16 @@ export function App({ user }: { user: User }) {
     if (freshSecret?.id === ref.id) setFreshSecret(null);
   }
 
+  // The same derivation the chat's context line uses (src/chatContext.ts), so they always agree.
   function resolveAgentDriver(bot: Bot): AgentDriver | undefined {
-    if (!harnessRef.current) return undefined;
-    const list = driversRef.current;
-    if (bot.driver) {
-      const chosen = list.find((item) => item.id === bot.driver);
-      return chosen?.ok ? chosen : undefined;
-    }
     const settings = settingsRef.current;
-    const route = routeFor(bot, settings, keyNamesRef.current);
-    const pick = (id: string) => list.find((item) => item.id === id && item.ok);
-    if (settings.defaultAgentDriver) {
-      const chosen = pick(settings.defaultAgentDriver);
-      if (chosen) return chosen;
-    }
-    if (route.provider === "anthropic" && route.ready) return pick("anthropic");
-    if (route.provider === "openai_compat" && route.ready && bot.skills.includes("computer")) return pick("http");
-    return undefined;
+    return effectiveDriver({
+      bot,
+      defaultDriver: settings.defaultAgentDriver,
+      route: routeFor(bot, settings, keyNamesRef.current),
+      drivers: driversRef.current,
+      harnessUp: Boolean(harnessRef.current),
+    });
   }
 
   async function askBot(botId: string, text: string, options: AskOptions = {}): Promise<string[]> {
@@ -2569,6 +2596,10 @@ export function App({ user }: { user: User }) {
         workingBotId={workingBotId}
         studio={studio}
         harness={harness}
+        healthLog={healthLog.current}
+        healthChecked={healthChecked}
+        onRecheckHarness={recheckHarness}
+        runner={runnerMode}
         callActive={callActive}
         messages={activeThread?.messages ?? []}
         onApproval={(messageId, approve, answer) => {

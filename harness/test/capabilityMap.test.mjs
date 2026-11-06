@@ -46,9 +46,12 @@ test("the API drivers report available with no key, as the row says", async () =
 test("a bot on an API driver gets an error with no key only while a harness or runner is up", async () => {
   // Without a harness or runner the page never hands the turn to a driver; with one, the API
   // drivers report available, through the bot's Agent or the default agent, and fail with no key.
+  // resolveAgentDriver (App.tsx) is effectiveDriver (src/chatContext.ts), which the chat's context line shares.
   const app = read("src/App.tsx");
-  assert.match(app, /function resolveAgentDriver\(bot: Bot\): AgentDriver \| undefined \{\r?\n\s+if \(!harnessRef\.current\) return undefined;/);
-  assert.match(app, /if \(settings\.defaultAgentDriver\) \{\r?\n\s+const chosen = pick\(settings\.defaultAgentDriver\);/);
+  const context = read("src/chatContext.ts");
+  assert.match(app, /function resolveAgentDriver\(bot: Bot\): AgentDriver \| undefined \{[\s\S]{0,120}return effectiveDriver\(\{[\s\S]{0,260}defaultDriver: settings\.defaultAgentDriver,[\s\S]{0,200}harnessUp: Boolean\(harnessRef\.current\),/);
+  assert.match(context, /export function effectiveDriver\([^)]*\): AgentDriver \| undefined \{\r?\n\s+if \(!input\.harnessUp\) return undefined;/);
+  assert.match(context, /if \(input\.defaultDriver\) \{\r?\n\s+const chosen = pick\(input\.defaultDriver\);/);
   for (const id of ["anthropic", "http"]) {
     const driver = DRIVERS.find((item) => item.id === id);
     const io = { emit: () => undefined, requestPermission: async () => false, runCommand: async () => ({ code: 0, stdout: "", stderr: "" }), signal: new AbortController().signal };
