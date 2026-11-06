@@ -3,6 +3,7 @@ import { routeFor } from "./assistant";
 import { BotMark } from "./bots";
 import { chatAgent } from "./chatContext";
 import { ChatContext, type ContextMember } from "./chatContextView";
+import { defaultAgentOption, setupRows, type MemoryState, type SetupLink, type SkillsOnDisk } from "./effectiveSetup";
 import { harnessBotMemory, harnessSkills, harnessWriteBotMemory, harnessWriteBotSoul, type AgentDriver, type HarnessHealth } from "./harness";
 import type { Key } from "./i18n";
 import { AvatarEditor, ComputerPanel, LibraryPanel } from "./studio";
@@ -198,6 +199,40 @@ export function Workspace(props: {
   useEffect(() => {
     if (createNonce > 0) setCreating(true);
   }, [createNonce]);
+
+  // Effective setup (UX P5): which library skills the harness has and whether the bot's memory
+  // reads, for counts only. Display only: a failure here never blocks a send.
+  const [skillsOnDisk, setSkillsOnDisk] = useState<SkillsOnDisk>({ state: "loading" });
+  const [memoryState, setMemoryState] = useState<MemoryState>({ state: "loading" });
+  const setupBotId = panel === "model" ? bot?.id : undefined;
+  useEffect(() => {
+    if (!setupBotId) return;
+    if (!props.harness || props.runner) {
+      setSkillsOnDisk({ state: "offline" });
+      setMemoryState({ state: "offline" });
+      return;
+    }
+    let active = true;
+    setSkillsOnDisk({ state: "loading" });
+    setMemoryState({ state: "loading" });
+    void harnessSkills()
+      .then((result) => active && setSkillsOnDisk({ state: "loaded", ids: result.skills.map((skill) => skill.id) }))
+      .catch(() => active && setSkillsOnDisk({ state: "offline" }));
+    void harnessBotMemory(setupBotId)
+      .then((result) => active && setMemoryState({ state: "loaded", hasIndex: result.files.some((file) => file.path === "MEMORY.md"), files: result.files.length }))
+      .catch(() => active && setMemoryState({ state: "failed" }));
+    return () => {
+      active = false;
+    };
+  }, [setupBotId, props.harness, props.runner]);
+  const openSetupLink = (link: SetupLink) => {
+    if (link.to === "here") document.getElementById(link.id)?.focus();
+    else if (link.to === "customize" || link.to === "work") setPanel(link.to);
+    else {
+      props.onOverlay(link.to === "team" ? "hub" : "settings");
+      props.onFocus("chat");
+    }
+  };
 
   const needle = query.trim().toLowerCase();
   const visible = bots
@@ -646,6 +681,45 @@ export function Workspace(props: {
             <div className="inspector-scroll">
               {panel === "model" ? (
           <div className="model-row" role="tabpanel" id="panel-model" aria-labelledby="panel-tab-model">
+            {(() => {
+              const agentSelect = props.drivers.length > 0 || Boolean(bot.driver);
+              const rows = setupRows({
+                bot,
+                settings,
+                route: routeFor(bot, settings, props.keys),
+                drivers: props.drivers,
+                harnessUp: Boolean(props.harness),
+                runner: props.runner,
+                channel,
+                autoApprove: studio.autoApprove,
+                connectors: studio.connectors,
+                skills: skillsOnDisk,
+                memory: memoryState,
+                t,
+              });
+              const linkLabel = (link: SetupLink) => t(link.to === "here" ? "esLinkHere" : link.to === "customize" ? "esLinkCustomize" : link.to === "work" ? "esLinkWork" : link.to === "team" ? "esLinkTeam" : "esLinkSettings");
+              return (
+                <section className="effective-setup" aria-labelledby="effective-setup-title">
+                  <h3 id="effective-setup-title">{t("esTitle")}</h3>
+                  <dl>
+                    {rows.map((row) => {
+                      // The Agent select below needs drivers; without it the default agent is changed in Settings.
+                      const link: SetupLink | undefined = row.link?.to === "here" && row.link.id === "bot-agent-select" && !agentSelect ? { to: "settings" } : row.link;
+                      return (
+                        <div key={row.id} className="es-row">
+                          <dt>{row.label}</dt>
+                          <dd>
+                            <span className="es-value">{row.value}</span>
+                            {row.badge ? <span className="ctx-badge">{row.badge}</span> : null}
+                            {link ? <button type="button" className="text-btn es-link" onClick={() => openSetupLink(link)}>{linkLabel(link)} ›</button> : null}
+                          </dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                </section>
+              );
+            })()}
             {bot.preset === "rea" ? (
               <div className="rea-chips" role="group" aria-label={t("reaModelChips")}>
                 {(
@@ -674,6 +748,7 @@ export function Workspace(props: {
             <label>
               {t("botModel")}
               <select
+                id="bot-model-select"
                 value={
                   bot.modelChoice === "composer"
                     ? ""
@@ -735,8 +810,9 @@ export function Workspace(props: {
             {props.drivers.length > 0 || bot.driver ? (
               <label>
                 {t("agentDriver")}
-                <select value={bot.driver ?? ""} onChange={(event) => props.onPatch(bot.id, { driver: event.target.value || undefined })}>
-                  <option value="">{t("builtinPlanner")}</option>
+                <select id="bot-agent-select" value={bot.driver ?? ""} onChange={(event) => props.onPatch(bot.id, { driver: event.target.value || undefined })}>
+                  {/* The empty value still means "use the default"; the label says what that is now. */}
+                  <option value="">{defaultAgentOption({ bot, settings, route: routeFor(bot, settings, props.keys), drivers: props.drivers, harnessUp: Boolean(props.harness), t })}</option>
                   {props.drivers.map((driver) => (
                     <option key={driver.id} value={driver.id} disabled={!driver.ok && bot.driver !== driver.id}>
                       {driver.label}{driver.ok ? "" : ` · ${t("notInstalled")}`}
