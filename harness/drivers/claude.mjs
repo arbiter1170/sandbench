@@ -388,11 +388,13 @@ async function converse(bin, settingsFile, listFile, turn, io) {
     const denials = result.denials.filter((item) => !approvedAlready(item));
     if (denials.length === 0) return;
     const approved = [];
+    const approvedRequests = [];
     for (const denial of denials) {
       const command = denialCommand(denial);
       const argsShown = mcpArgsShown(denial);
       if (await io.requestPermission({ command, reason: `Claude Code asked to use ${denial.tool_name}.`, tool: denial.tool_name, ...(argsShown ? { argsShown } : {}) })) {
         approved.push(denial);
+        approvedRequests.push(io.current);
         approvedIds.set(command, io.current);
       }
     }
@@ -402,8 +404,8 @@ async function converse(bin, settingsFile, listFile, turn, io) {
     if (round === MAX_ROUNDS - 1) {
       // Each step approved in this last round gets its own end, so the harness's "The agent ran
       // this step itself" line (turns.mjs, for a granted step with no result) is not added to it.
-      for (const denial of approved) {
-        const permissionId = approvedIds.get(denialCommand(denial));
+      // By request, not card text: two steps can read the same (identical calls, or arguments cut short).
+      for (const permissionId of approvedRequests) {
         if (permissionId) io.emit({ type: "tool_end", permissionId, undelivered: true, output: "Approved, but the turn ended before Claude Code was given this step." });
       }
       io.emit({ type: "thinking", text: `Stopped after ${MAX_ROUNDS} approval rounds; the steps approved last were not handed back to Claude Code.`, roundsExhausted: MAX_ROUNDS });

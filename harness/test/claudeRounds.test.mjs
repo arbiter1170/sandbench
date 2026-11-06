@@ -20,7 +20,8 @@ const posix = process.platform !== "win32";
 
 // Each run asks for `echo round-<n>`, n counting the runs, so no round's denial is already approved.
 // `tool`: ask for that tool instead, with `input` (a connector call, say).
-function fakeCli({ denials = true, tool = "", input = null } = {}) {
+function fakeCli({ denials = true, tool = "", input = null, copies = 1 } = {}) {
+  const denial = tool ? `{ tool_name: ${JSON.stringify(tool)}, tool_input: Object.assign(${JSON.stringify(input ?? {})}, { n: runs }) }` : `{ tool_name: "Bash", tool_input: { command: "echo round-" + runs } }`;
   const dir = mkdtempSync(path.join(HOME, "fake-cli-"));
   const bin = path.join(dir, "claude");
   const count = path.join(dir, "runs.txt");
@@ -34,7 +35,7 @@ fs.writeFileSync(file, String(runs));
 const out = (line) => process.stdout.write(JSON.stringify(line) + "\\n");
 out({ type: "system", subtype: "init", session_id: "session-rounds-1" });
 out({ type: "assistant", message: { content: [{ type: "text", text: "round " + runs }] } });
-out({ type: "result", session_id: "session-rounds-1", result: "ok", permission_denials: ${denials} ? [${tool ? `{ tool_name: ${JSON.stringify(tool)}, tool_input: Object.assign(${JSON.stringify(input ?? {})}, { n: runs }) }` : `{ tool_name: "Bash", tool_input: { command: "echo round-" + runs } }`}] : [] });
+out({ type: "result", session_id: "session-rounds-1", result: "ok", permission_denials: ${denials} ? [${Array(copies).fill(denial).join(", ")}] : [] });
 `,
   );
   chmodSync(bin, 0o755);
@@ -149,6 +150,18 @@ test("through createTurns: the last round's approved step is not reported as run
       assert.match(events.find((event) => event.type === "tool_end" && event.permissionId === request.permissionId)?.output ?? "", /ran this step itself/);
     }
     assert.equal(events.filter((event) => event.roundsExhausted === 4).length, 1);
+  });
+});
+
+test("two identical steps approved in the last round each get their own not-run end", { skip: !posix }, async () => {
+  const cli = fakeCli({ copies: 2 });
+  await withCli(cli, async () => {
+    const turnIo = io(true);
+    await claude.startTurn(turn(), turnIo, noGateCheck).done;
+    assert.equal(turnIo.cards.length, 8);
+    assert.deepEqual(turnIo.cards.slice(-2), ["echo round-4", "echo round-4"]);
+    const ends = turnIo.events.filter((event) => event.undelivered).map((event) => event.permissionId);
+    assert.deepEqual(ends, ["p7", "p8"]);
   });
 });
 
