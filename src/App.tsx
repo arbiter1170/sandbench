@@ -1803,7 +1803,9 @@ export function App({ user }: { user: User }) {
             ...(event.auto ? { auto: true, output: "…" } : {}),
             ...(event.denied ? { autoDenied: true } : {}),
             // The harness's own tool name for the request: the card trusts it over the reason text.
-            ...(typeof (event as { tool?: unknown }).tool === "string" ? { agentTool: (event as { tool?: string }).tool } : {}),
+            ...(typeof event.tool === "string" ? { agentTool: event.tool } : {}),
+            // How much of a connector call the card text shows, when the harness says (claude.mjs).
+            ...(event.argsShown === "all" || event.argsShown === "cut" ? { argsShown: event.argsShown } : {}),
           };
           patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
           current = null;
@@ -1839,6 +1841,8 @@ export function App({ user }: { user: User }) {
                       ...(message.approval.status === "failed" ? { status: "approved" as const, answerError: message.approval.output ?? "" } : {}),
                       output: event.output ?? "",
                       ...(event.code !== undefined ? { exitCode: event.code } : {}),
+                      // The harness never handed this approved step to the agent: it did not run.
+                      ...(event.undelivered === true ? { notRun: true } : {}),
                     },
                     ...(thumb && thumb.length < 200_000 ? { screenThumb: thumb } : {}),
                   }

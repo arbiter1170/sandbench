@@ -256,6 +256,10 @@ export type AgentEvent = {
   roundsExhausted?: number;
   /** On a Claude driver `tool_end`: the step was approved but never handed to the agent (rounds ran out), so it did not run. */
   undelivered?: boolean;
+  /** On a permission_request: the harness's own tool name for the request (Claude Code's, "codex", "grok"). */
+  tool?: string;
+  /** On a Claude Code connector (MCP) permission_request: whether the card text shows every argument or a cut. */
+  argsShown?: "all" | "cut";
 };
 export type TurnRequest = {
   driver: string;

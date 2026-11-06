@@ -150,6 +150,7 @@ const cardApprovals: Approval[] = [
   { command: "Write notes/plan.md", reason: "Save the plan.", status: "unavailable", file: { path: "notes/plan.md", op: "write", preview: "# Plan" } },
   claude("Bash", "git status", { status: "failed", output: "That request is no longer waiting." }),
   { command: "npm run report", reason: "Make the weekly report.", status: "denied", autoDenied: true },
+  claude("Bash", "npm run build", { status: "approved", notRun: true, output: "Approved, but the turn ended before Claude Code was given this step." }),
 ];
 const cardMessages: Message[] = cardApprovals.map((approval) => message({ role: "assistant", text: "", approval }));
 // This card's Deny was pressed in this tab, so it reads "Denied by you".
