@@ -34,7 +34,7 @@ export function needsLabel(item: Capability): string {
 export const CAPABILITIES: Capability[] = [
   {
     observed: "Bot teammates",
-    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins, or an error for a bot set to an API driver. Bots do not save new memories themselves yet",
+    web: "Create teammates, write instructions, persona, skills, and memories, and chat with each one. With a model key or a signed-in CLI driver, bots read the memories you write. The MEMORY.md you edit on the Customize tab (local harness) reaches agent-driver turns, and planner replies only when the decision step fails. Without a key or a signed-in CLI driver, replies are local stand-ins. The exception is a bot that uses an API driver, as its Agent or through the default agent: while the local harness or the runner is up, it gets an error instead. Bots do not save new memories themselves yet",
     state: "working",
     needs: "harness",
     key: "orCli",
@@ -53,7 +53,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Computer use (local exec daemon, window capture)",
-    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply. On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness. Without a model key, the next step only follows what the request already spelled out",
+    web: "Bots propose one PowerShell command, click, keystroke, or workspace file change at a time, or ask you a question. You approve or answer, they read the result, and they can ask for the next step. File changes show the new text or a line diff first. Clicks use primary-screen pixels, are never automatic, and attach a small screenshot to the reply. On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness. Without a model key, the built-in planner's next step only follows what the request already spelled out, and a bot that uses an API driver gets an error. A CLI driver picks its own steps with its own sign-in",
     state: "partial",
     needs: "harness",
     key: true,
@@ -87,7 +87,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Group chats",
-    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick who answers. The working folder only acts through the local harness or the runner. Without a model key or a signed-in CLI driver, replies are local stand-ins",
+    web: "Group chats with an editable roster, shared instructions, a lead, and a working folder. Mention @Name to ask one, or let the chat pick who answers. The working folder only acts through the local harness or the runner. Without a model key or a signed-in CLI driver, replies are local stand-ins, except that a member that uses an API driver gets an error while the local harness or the runner is up",
     state: "working",
     needs: "harnessOrRunner",
     key: "orCli",
@@ -195,7 +195,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "Background audio and voice calls",
-    web: "A call mode that listens, sends, and reads replies in the bot's voice while the tab is open. No background audio session. Without a model key or a signed-in CLI driver, the replies are local stand-ins",
+    web: "A call mode that listens, sends, and reads replies in the bot's voice while the tab is open. No background audio session. Without a model key or a signed-in CLI driver, the replies are local stand-ins, except that a bot that uses an API driver gets an error while the local harness or the runner is up",
     state: "partial",
     needs: "harnessOrRunner",
     key: "orCli",
@@ -226,7 +226,7 @@ export const CAPABILITIES: Capability[] = [
   },
   {
     observed: "AppsFlyer, Braze, and Sentry",
-    web: "Not included. Errors stay in a local log",
+    web: "Not included. Errors go to the error log in Settings, which syncs with your signed-in workspace. Nothing is sent to a vendor",
     state: "omitted",
     needs: "browser",
   },

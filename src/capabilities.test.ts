@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CAPABILITIES, needsLabel } from "./capabilities";
+import { isEmailAllowed } from "./firebase";
 
 // Every row the map has carried so far; a row may be reworded but not silently dropped.
 const OBSERVED = [
@@ -94,5 +95,19 @@ describe("capability map", () => {
     const row = CAPABILITIES.find((item) => item.observed === "Google sign-in and 1Password")!;
     expect(row.web).toMatch(/sign-in is required/i);
     expect(row.web).not.toMatch(/omitted/i);
+  });
+
+  it("lets in only allowlisted accounts, as the sign-in row says", () => {
+    vi.stubEnv("VITE_ALLOWED_EMAILS", "Allowed@Example.test, second@example.test");
+    try {
+      expect(isEmailAllowed("allowed@example.test")).toBe(true);
+      expect(isEmailAllowed(" SECOND@example.test ")).toBe(true);
+      expect(isEmailAllowed("other@example.test")).toBe(false);
+      expect(isEmailAllowed(null)).toBe(false);
+      vi.stubEnv("VITE_ALLOWED_EMAILS", "");
+      expect(isEmailAllowed("allowed@example.test")).toBe(false);
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

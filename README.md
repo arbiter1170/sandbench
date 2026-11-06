@@ -110,7 +110,7 @@ Drivers stream events to the page through `GET /events` (server-sent events with
 - A widget-shaped preview of the latest text
 - Optional model calls: put your own API key in Settings
 
-With no key and no signed-in CLI driver, replies are a local stand-in, or an error for a bot set to an API driver. When you are signed in, threads sync to your own workspace, stand-in replies included. With a key, model calls go through the local harness or the runner (see above), which hold the key; the page keeps only its name and a short preview.
+With no key and no signed-in CLI driver, replies are a local stand-in. The exception is a bot that uses an API driver, as its Agent or through the default agent: while the local harness or the runner is up, it gets an error instead. When you are signed in, threads sync to your own workspace, stand-in replies included. With a key, model calls go through the local harness or the runner (see above), which hold the key; the page keeps only its name and a short preview.
 
 ## Still native-only or not built
 

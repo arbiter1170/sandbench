@@ -1,13 +1,16 @@
 // The capability map (src/capabilities.ts) is a hand-written table. These tests tie a set of
 // rows that describe harness, runner and import behavior to the code. They do not pin every
 // sentence, so a behavior change can still leave a row out of date. src/capabilities.test.ts
-// pins every row's Needs label.
+// pins every row's Needs label and checks the sign-in allowlist, which Node cannot load here.
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { createRunner } from "../../runner/api/server.mjs";
 import { DRIVERS } from "../drivers/index.mjs";
+import { proxyModel, resolveTarget } from "../modelProxy.mjs";
 import { createTurns } from "../turns.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -38,6 +41,25 @@ test("the API drivers report available with no key, as the row says", async () =
     const state = await DRIVERS.find((driver) => driver.id === id).available();
     assert.equal(state.ok, true, id);
   }
+});
+
+test("a bot on an API driver gets an error with no key only while a harness or runner is up", async () => {
+  // Without a harness or runner the page never hands the turn to a driver; with one, the API
+  // drivers report available, through the bot's Agent or the default agent, and fail with no key.
+  const app = read("src/App.tsx");
+  assert.match(app, /function resolveAgentDriver\(bot: Bot\): AgentDriver \| undefined \{\r?\n\s+if \(!harnessRef\.current\) return undefined;/);
+  assert.match(app, /if \(settings\.defaultAgentDriver\) \{\r?\n\s+const chosen = pick\(settings\.defaultAgentDriver\);/);
+  for (const id of ["anthropic", "http"]) {
+    const driver = DRIVERS.find((item) => item.id === id);
+    const io = { emit: () => undefined, requestPermission: async () => false, runCommand: async () => ({ code: 0, stdout: "", stderr: "" }), signal: new AbortController().signal };
+    await assert.rejects(driver.startTurn({ id: "t", prompt: "hi", system: "", history: [], model: "m", base: "https://api.example.test/v1", key: "", cwd: root }, io).done, /API key|API_KEY/, id);
+  }
+  const apiError = /a bot that uses an API driver gets an error/;
+  assert.match(row("Bot teammates").web, /a bot that uses an API driver, as its Agent or through the default agent: while the local harness or the runner is up, it gets an error instead/);
+  assert.match(row("Group chats").web, /a member that uses an API driver gets an error while the local harness or the runner is up/);
+  assert.match(row("Background audio and voice calls").web, /a bot that uses an API driver gets an error while the local harness or the runner is up/);
+  assert.match(row("Computer use (local exec daemon, window capture)").web, apiError);
+  assert.match(row("Computer use (local exec daemon, window capture)").web, /A CLI driver picks its own steps with its own sign-in/);
 });
 
 test("the runner image installs none of the CLI drivers, as the row says", () => {
@@ -153,9 +175,43 @@ test("rows that say the harness or the runner are served by both", () => {
   assert.ok(read("src/harness.ts").includes("fetch(`${BASE}/model`"));
 });
 
-test("a local provider base works only on the harness, as the model and profile rows say", () => {
-  assert.ok(read("harness/server.mjs").includes("allowLocal: true"));
-  assert.ok(read("runner/api/server.mjs").includes("allowLocal: false"));
+test("a local provider base works only on the harness, as the model and profile rows say", async () => {
+  const local = { provider: "openai_compat", base: "http://127.0.0.1:1/v1", path: "/chat/completions", payload: {} };
+  assert.throws(() => resolveTarget(local, { allowLocal: false }), /must start with https:\/\/\./);
+  assert.equal(resolveTarget(local, { allowLocal: true }).url, "http://127.0.0.1:1/v1/chat/completions");
+  // proxyModel passes the setting on: a refused base is 400, an allowed one gets as far as the key check (409).
+  const proxied = async (allowLocal) => {
+    const out = {};
+    const res = { writeHead: (status) => (out.status = status), write: () => undefined, end: () => undefined };
+    await proxyModel(local, res, { store: { get: () => null }, allowLocal });
+    return out.status;
+  };
+  assert.equal(await proxied(false), 400);
+  assert.equal(await proxied(true), 409);
+  // The harness's /model route allows a local base.
+  assert.match(read("harness/server.mjs"), /url\.pathname === "\/model"\) \{[^]{0,300}?proxyModel\(body, res, \{[^}]*allowLocal: true[^}]*\}\)/);
+  // The runner's /model route refuses one.
+  const tmp = mkdtempSync(path.join(os.tmpdir(), "sb-map-"));
+  const runner = createRunner({
+    home: path.join(tmp, "home"),
+    uiDir: path.join(tmp, "dist"),
+    allowedEmails: ["map@example.test"],
+    env: {},
+    verifyIdToken: async () => ({ uid: "u1", email: "map@example.test", email_verified: true }),
+  });
+  try {
+    await new Promise((resolve) => runner.listen(0, "127.0.0.1", resolve));
+    const response = await fetch(`http://127.0.0.1:${runner.address().port}/api/model`, {
+      method: "POST",
+      headers: { authorization: "Bearer test", "content-type": "application/json" },
+      body: JSON.stringify(local),
+    });
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /must start with https:\/\/\./);
+  } finally {
+    runner.close();
+    rmSync(tmp, { recursive: true, force: true });
+  }
   assert.ok(read("src/testProfiles.ts").includes("http://127.0.0.1:11434/v1"));
   assert.match(row("Model per bot").web, /page model calls to a local provider address work only with the local harness/);
   assert.match(row("Test stack profiles").web, /Ready does not check that a local server such as Ollama is running/);
@@ -191,7 +247,9 @@ test("the table shows the label, the note states the rule, and the hint is usabl
   assert.match(i18n, /says what must be running for everything in a row to work/);
   assert.match(i18n, /or open the desktop app, which starts its own harness/);
   assert.ok(!i18n.includes("grokbot-poc"));
-  assert.ok(read("electron/main.mjs").includes("harness/server.mjs"), "the desktop app starts its own harness");
+  const main = read("electron/main.mjs");
+  assert.match(main, /function startHarness\(\) \{[^]{0,200}?spawn\("node", \["harness\/server\.mjs"\]/, "startHarness spawns the harness");
+  assert.match(main, /app\.whenReady\(\)\.then\(async \(\) => \{\r?\n\s+startHarness\(\);/, "the desktop app starts its own harness when it opens");
 });
 
 test("the sign-in row matches the gate the page is wrapped in", () => {
