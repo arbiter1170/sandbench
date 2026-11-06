@@ -38,6 +38,17 @@ ENTRIES START BELOW
 - **Open questions for Vincent or the Supervisor:** none.
 - **Next step:** CI and review; then P3 (after #38) and P4.
 
+### Session 10 · 2026-11-06 10:20 ET · Claude Code gate: MCP keys before the command branch · review fix
+- **Branch / PR / head sha:** `claude/gate-mcp-keys` · PR opened right after this commit · code head see PR. Cut from `deploy/vercel` `a648f9e`.
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** the UX P3 review found that `gateKey` (`harness/drivers/claudeGate.mjs`, from #34) keyed a connector tool with a `command` argument as `Bash(<command>)`: approving it let the same tool run with other arguments, let a Bash call with that command through, and a Bash approval let the connector through. The `mcp__` branch now comes first. `denialCommand` labels connector cards with all their arguments.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 119 passed; `npm run test:node` 255 pass, 0 fail, 32 skipped (Playwright linked locally); `npm run build` ok. The two new gate tests fail with the old `claudeGate.mjs` and `claude.mjs`.
+- **Not run / could not run:** a live Claude Code turn with a real MCP server.
+- **Decisions made and why:** a separate PR from P3, because it changes approval behaviour in merged code and P3 is display only.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge before the P3 PR (its connector-card copy assumes this keying).
+
 ### Session 10 · 2026-11-06 09:05 ET · UX P5: effective setup in the Model tab · done
 - **Branch / PR / head sha:** `claude/ux-p5-effective-setup` · PR opened right after this commit · code head `09e9733`. Cut from `deploy/vercel` `70bf68b` (after #36, UX P1).
 - **Release:** Vincent released P5 in chat on 2026-11-06 ("yes it is", after merging #36), and P2 after it. #36 was merged by Claude at Vincent's request (merge commit `70bf68b`, head `9c166a5`, four checks green).

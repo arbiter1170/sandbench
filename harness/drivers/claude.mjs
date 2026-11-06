@@ -194,8 +194,13 @@ export async function available() {
 function denialCommand(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return String(input.command ?? "").trim();
-  // Another tool that runs a command (Monitor) shows the command on its card; an MCP tool its arguments.
+  // Another tool that runs a command (Monitor) shows the command on its card. A connector (MCP)
+  // tool always shows all of its arguments, since one approval covers exactly those (gateKey).
   const name = String(denial?.tool_name ?? "Tool");
+  if (/^mcp__/.test(name)) {
+    const args = Object.keys(input).length ? JSON.stringify(input) : "";
+    return `${name}${args ? ` ${args.length > 300 ? `${args.slice(0, 299)}…` : args}` : ""}`;
+  }
   const target =
     (typeof input.command === "string" ? input.command : "") ||
     input.file_path ||
@@ -203,7 +208,7 @@ function denialCommand(denial) {
     input.path ||
     input.url ||
     input.query ||
-    (/^mcp__/.test(name) && Object.keys(input).length ? JSON.stringify(input).slice(0, 300) : "");
+    "";
   return `${name}${target ? ` ${target}` : ""}`;
 }
 
