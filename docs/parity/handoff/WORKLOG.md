@@ -26,6 +26,18 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 10 · 2026-11-06 10:50 ET · UX P3: approval cards · done
+- **Branch / PR / head sha:** `claude/ux-p3-approval-cards` · PR opened right after this commit. Cut from `deploy/vercel` `a648f9e`.
+- **Release:** Vincent released P3 (and P4) in chat on 2026-11-06 ("Start P3 and P4 too").
+- **Checks on the head:** pending at the time of writing.
+- **What was done:** built by a Claude Code subagent, reviewed by another, fixed, checked here. Cards say what runs and where, and what approving grants, true to the merged code (Claude Code: that exact call for the rest of the reply; harness drivers: this request; planner: this action); endings stay distinct with a word and an icon at full opacity (I-8); Expired, Not run stay withheld (D-5, D-6). Review fixes: a model can't make a driver card pass for a Claude Code card (the harness's `tool` is stored as `agentTool`); connector single-value labels; 404 and late-result endings; unattended denials. The review also found the gate bug fixed separately in #38.
+- **Tests run (real results):** `npm run typecheck` clean; `npm run test:web` 166 passed (`approvalView.test.ts` 47); `npm run test:node` 259 pass, 0 fail, 32 skipped; `npm run build` ok.
+- **Not run / could not run:** real devices and screen readers.
+- **Decisions made and why:** display only; approving and denying are unchanged. Small `App.tsx`/`types.ts` additions (agentTool, autoDenied, answerError) where the card needed facts the harness already sends.
+- **Deviations from the plan:** `App.tsx` and `types.ts` are outside P3's §8 list (above).
+- **Open questions for Vincent or the Supervisor:** none.
+- **Next step:** merge after #38 and #39; the connector scope can become exact-call wording once #38 lands.
+
 ### Session 10 · 2026-11-06 09:05 ET · UX P5: effective setup in the Model tab · done
 - **Branch / PR / head sha:** `claude/ux-p5-effective-setup` · PR opened right after this commit · code head `09e9733`. Cut from `deploy/vercel` `70bf68b` (after #36, UX P1).
 - **Release:** Vincent released P5 in chat on 2026-11-06 ("yes it is", after merging #36), and P2 after it. #36 was merged by Claude at Vincent's request (merge commit `70bf68b`, head `9c166a5`, four checks green).
