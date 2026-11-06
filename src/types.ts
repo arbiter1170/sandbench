@@ -104,6 +104,10 @@ export type Approval = {
   autoDenied?: boolean;
   /** A failed card that later got a result: what the card said before (for example the error from sending this page's answer). */
   answerError?: string;
+  /** Claude Code connector (MCP) cards: how much of the call the card text shows, as the harness reported it ("all" or "cut"). Absent from a harness that doesn't report it. */
+  argsShown?: "all" | "cut";
+  /** Approved, but the harness says the step was never handed to the agent (tool_end `undelivered`), so it did not run. */
+  notRun?: boolean;
 };
 
 export type ActivityChip = { label: string; ms?: number; shotId?: string };

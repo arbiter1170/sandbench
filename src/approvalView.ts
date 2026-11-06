@@ -29,6 +29,7 @@ export type CardEnding =
   | "approved-exit"
   | "approved-tool-error"
   | "approved-no-separate-result"
+  | "approved-not-run"
   | "approved-no-result-at-stop"
   | "approved-failed"
   | "denied-by-you"
@@ -90,6 +91,9 @@ export function deniedAt(cardId: string): number | undefined {
 // card text agree with it. Another driver's reason and command can be model-written, so they alone
 // prove nothing; a card saved before agentTool existed counts as not Claude Code's.
 const CLAUDE_REASON = /^Claude Code asked to use ([\w.:-]+)\.$/;
+// The fixed `tool` the Codex and Grok drivers put on their requests (their reason text can be the
+// model's own words), so a card carrying one of them is never Claude Code's.
+const OTHER_DRIVER_TOOLS = new Set(["codex", "grok"]);
 const SHELL_TOOLS = new Set(["Bash", "PowerShell", "Monitor"]);
 const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 // claude.mjs denialCommand cuts MCP arguments at 300 characters.
@@ -99,7 +103,7 @@ export type ClaudeRequest = { tool: string; target: string };
 
 /** The Claude Code tool and its target as the card shows them, or null for any other card. */
 export function claudeRequest(approval: Pick<Approval, "command" | "reason" | "permissionId" | "agentTool">): ClaudeRequest | null {
-  if (!approval.permissionId || !approval.agentTool) return null;
+  if (!approval.permissionId || !approval.agentTool || OTHER_DRIVER_TOOLS.has(approval.agentTool)) return null;
   const match = CLAUDE_REASON.exec(approval.reason ?? "");
   if (!match || match[1] !== approval.agentTool) return null;
   const tool = match[1];
@@ -111,19 +115,25 @@ export function claudeRequest(approval: Pick<Approval, "command" | "reason" | "p
 }
 
 // claude.mjs denialCommand shows an MCP call as all of its arguments in JSON, cut to 299
-// characters and "…" past 300 (#38). A harness from before #38 showed one argument (command,
-// file_path, notebook_path, path, url or query) when it had one: text that isn't a JSON object
-// is that one value. The page can't tell a pre-#38 harness from its labels alone.
+// characters and "…" past 300 (#38), and the harness says which with the request (`argsShown`,
+// stored as Approval.argsShown). A harness from before #38 showed one argument (command,
+// file_path, notebook_path, path, url or query) when it had one, and that value could itself be
+// JSON, so text alone never proves every argument is shown: without the report, no exact call.
 
-/** What an MCP card's target text is: all the arguments, all of them cut short, one value, or nothing. */
-export function mcpArguments(target: string): "full" | "cut" | "single" | "none" {
-  if (!target) return "none";
+/** What an MCP card's target text is: all the arguments, all of them cut short, one value, unreported, or nothing. */
+export function mcpArguments(target: string, shown?: Approval["argsShown"]): "full" | "cut" | "single" | "unreported" | "none" {
+  let object = false;
   try {
     const parsed: unknown = JSON.parse(target);
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? "full" : "single";
+    object = Boolean(parsed) && typeof parsed === "object" && !Array.isArray(parsed);
   } catch {
-    return target.length === MCP_ARGS_SHOWN && target.startsWith('{"') ? "cut" : "single";
+    object = false;
   }
+  if (shown === "all") return !target ? "none" : object ? "full" : "single";
+  if (shown === "cut") return "cut";
+  if (!object && target.length === MCP_ARGS_SHOWN && target.startsWith('{"')) return "cut";
+  if (!object && target) return "single";
+  return "unreported";
 }
 
 function claudeKind(tool: string): CardKind {
@@ -167,7 +177,8 @@ function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Tran
   const late = approval.answerError !== undefined;
   const elsewhere = late && approval.answerError?.trim() === NOT_WAITING;
   const who = approval.auto ? t("acWhoAuto") : elsewhere ? t("acWhoElsewhere") : t("acWhoApproved");
-  const lateNote = late ? (elsewhere ? t("acApprovedElsewhereBody") : t("acLateResultBody")) : "";
+  // A step that never ran has no "result" to speak of: its own sentence says what happened.
+  const lateNote = late && !approval.notRun ? (elsewhere ? t("acApprovedElsewhereBody") : t("acLateResultBody")) : "";
   const approved = (key: Key, icon: CardIcon, extra: Partial<Ending> = {}, values: Record<string, string | number> = {}): Ending => {
     const detail = [lateNote, approval.auto ? t("acAutoBody") : "", extra.detail ?? ""].filter(Boolean).join(" ");
     return { ending: "approved-recorded", icon, showOutput: false, ...extra, label: `${who} · ${fill(t(key), values)}`, ...(detail ? { detail } : { detail: undefined }) };
@@ -176,6 +187,8 @@ function endingFor(approval: Approval, kind: CardKind, agent: CardAgent, t: Tran
     case "pending":
       return { ending: "waiting", label: t("approvalPending"), icon: "clock", showOutput: false };
     case "approved": {
+      // The harness's own report (tool_end `undelivered`, claude.mjs): never handed to the agent.
+      if (approval.notRun && agent === "claude") return approved("acResultNotRun", "minus", { ending: "approved-not-run", detail: t("acNotRunBody") });
       if (output === undefined || output === IN_FLIGHT) return approved("acResultNoneYet", "dots", { ending: "approved-no-result-yet" });
       if (approval.exitCode !== undefined) {
         if (approval.exitCode === 0) return approved("acResultRecorded", "check", { ending: "approved-recorded", showOutput: true });
@@ -288,10 +301,11 @@ export function approvalView(
       approveLabel = t("acApproveChange");
     } else if (kind === "connector") {
       title = t("acTitleConnector");
-      const args = mcpArguments(target);
+      const args = mcpArguments(target, approval.argsShown);
       if (args === "full") field("target", "acFieldArguments", target, { code: true });
       else if (args === "cut") field("target", "acFieldArguments", target, { code: true, note: t("acArgsCut") });
       else if (args === "single") field("target", "acFieldTarget", target, { code: true, note: t("acArgsOthersHidden") });
+      else if (args === "unreported") field("target", "acFieldArguments", target || t("acArgsNoneShown"), { code: Boolean(target), note: t("acArgsUnreported") });
       effect = t("acEffectConnector");
       // Only a card that shows every argument can say the approval is for exactly this call.
       scope = args === "full" || args === "none" ? t("acScopeClaudeConnector") : t("acScopeClaudeConnectorPartial");

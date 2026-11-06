@@ -212,6 +212,16 @@ function denialCommand(denial) {
   return `${name}${target ? ` ${target}` : ""}`;
 }
 
+// How much of a connector (MCP) call its card label shows (denialCommand above): every argument,
+// or the JSON cut short. The harness reports it with the request so the page never has to guess
+// from the label's text (a harness from before this field showed one argument for some calls).
+export function mcpArgsShown(denial) {
+  if (!/^mcp__/.test(String(denial?.tool_name ?? ""))) return undefined;
+  const input = denial?.tool_input ?? {};
+  const args = Object.keys(input).length ? JSON.stringify(input) : "";
+  return args.length > 300 ? "cut" : "all";
+}
+
 function allowRule(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return `${denial.tool_name}(${input.command})`;
@@ -380,7 +390,8 @@ async function converse(bin, settingsFile, listFile, turn, io) {
     const approved = [];
     for (const denial of denials) {
       const command = denialCommand(denial);
-      if (await io.requestPermission({ command, reason: `Claude Code asked to use ${denial.tool_name}.`, tool: denial.tool_name })) {
+      const argsShown = mcpArgsShown(denial);
+      if (await io.requestPermission({ command, reason: `Claude Code asked to use ${denial.tool_name}.`, tool: denial.tool_name, ...(argsShown ? { argsShown } : {}) })) {
         approved.push(denial);
         approvedIds.set(command, io.current);
       }

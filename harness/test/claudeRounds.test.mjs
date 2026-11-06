@@ -19,7 +19,8 @@ const { createTurns } = await import("../turns.mjs");
 const posix = process.platform !== "win32";
 
 // Each run asks for `echo round-<n>`, n counting the runs, so no round's denial is already approved.
-function fakeCli({ denials = true } = {}) {
+// `tool`: ask for that tool instead, with `input` (a connector call, say).
+function fakeCli({ denials = true, tool = "", input = null } = {}) {
   const dir = mkdtempSync(path.join(HOME, "fake-cli-"));
   const bin = path.join(dir, "claude");
   const count = path.join(dir, "runs.txt");
@@ -33,7 +34,7 @@ fs.writeFileSync(file, String(runs));
 const out = (line) => process.stdout.write(JSON.stringify(line) + "\\n");
 out({ type: "system", subtype: "init", session_id: "session-rounds-1" });
 out({ type: "assistant", message: { content: [{ type: "text", text: "round " + runs }] } });
-out({ type: "result", session_id: "session-rounds-1", result: "ok", permission_denials: ${denials} ? [{ tool_name: "Bash", tool_input: { command: "echo round-" + runs } }] : [] });
+out({ type: "result", session_id: "session-rounds-1", result: "ok", permission_denials: ${denials} ? [${tool ? `{ tool_name: ${JSON.stringify(tool)}, tool_input: Object.assign(${JSON.stringify(input ?? {})}, { n: runs }) }` : `{ tool_name: "Bash", tool_input: { command: "echo round-" + runs } }`}] : [] });
 `,
   );
   chmodSync(bin, 0o755);
@@ -50,7 +51,9 @@ const io = (approve) => {
     signal: new AbortController().signal,
     current: null,
     emit: (event) => events.push(event),
+    requests: [],
     requestPermission: async (request) => {
+      turnIo.requests.push(request);
       cards.push(request.command);
       turnIo.current = `p${cards.length}`;
       return approve;
@@ -146,5 +149,26 @@ test("through createTurns: the last round's approved step is not reported as run
       assert.match(events.find((event) => event.type === "tool_end" && event.permissionId === request.permissionId)?.output ?? "", /ran this step itself/);
     }
     assert.equal(events.filter((event) => event.roundsExhausted === 4).length, 1);
+  });
+});
+
+test("a connector (MCP) request carries argsShown: \"all\" for a whole label, \"cut\" past 300 characters; other tools none", { skip: !posix }, async () => {
+  for (const [input, shown] of [[{ q: "a" }, "all"], [{ q: "x".repeat(400) }, "cut"]]) {
+    const cli = fakeCli({ tool: "mcp__docs__search", input });
+    await withCli(cli, async () => {
+      const turnIo = io(false);
+      await claude.startTurn(turn(), turnIo, noGateCheck).done;
+      assert.equal(turnIo.requests.length, 1);
+      assert.equal(turnIo.requests[0].tool, "mcp__docs__search");
+      assert.equal(turnIo.requests[0].argsShown, shown);
+      if (shown === "all") assert.equal(turnIo.requests[0].command, `mcp__docs__search ${JSON.stringify({ ...input, n: 1 })}`);
+      else assert.ok(turnIo.requests[0].command.endsWith("…"));
+    });
+  }
+  const cli = fakeCli();
+  await withCli(cli, async () => {
+    const turnIo = io(false);
+    await claude.startTurn(turn(), turnIo, noGateCheck).done;
+    assert.ok(!("argsShown" in turnIo.requests[0]), "a Bash request carries argsShown");
   });
 });

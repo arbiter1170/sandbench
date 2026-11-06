@@ -358,7 +358,7 @@ describe("approval cards (UX P3)", () => {
       await context.close();
       assert.deepEqual(errors, [], "the fixture page threw");
       assert.equal(facts.focusInCard, false, "a card took focus");
-      assert.equal(facts.cards.length, 13);
+      assert.equal(facts.cards.length, 14);
       const endings = facts.cards.map((card) => card.ending);
       assert.equal(new Set(endings).size, endings.length, `two cards share an ending: ${endings.join(", ")}`);
       const labels = facts.cards.map((card) => card.label);

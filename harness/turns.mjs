@@ -83,19 +83,21 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
         if (event.type === "tool_end") ran.add(event.permissionId);
         return publish(id, event);
       },
-      requestPermission: ({ command, reason, tool }) => {
+      requestPermission: ({ command, reason, tool, argsShown }) => {
         const permissionId = randomBytes(8).toString("hex");
+        // claude.mjs: how much of a connector call the card's text shows. Only its two values pass.
+        const shown = argsShown === "all" || argsShown === "cut" ? { argsShown } : {};
         if (reviewPermission({ command, tool }, rules).auto) {
-          publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: true });
+          publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: true });
           granted.add(permissionId);
           io.current = permissionId;
           return Promise.resolve(true);
         }
         if (body.unattendedDeny) {
-          publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: false, denied: true });
+          publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: false, denied: true });
           return Promise.resolve(false);
         }
-        publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: false });
+        publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: false });
         return new Promise((resolve) => {
           const timer = setTimeout(() => finish(false), PERMISSION_TIMEOUT_MS);
           const finish = (allow) => {

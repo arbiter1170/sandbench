@@ -122,6 +122,33 @@ test("the real drivers label their requests, so the gate can tell a shell comman
   assert.ok(driver("grok").includes('tool: "grok"'));
 });
 
+test("argsShown passes through on every permission_request when it is \"all\" or \"cut\", and nothing else does", async () => {
+  // Waiting, auto-approved and unattended-denied cards all carry it (turns.mjs publishes three ways).
+  const asked = await scriptedTurn(
+    [
+      { command: 'mcp__docs__search {"q":"a"}', tool: "mcp__docs__search", argsShown: "all" },
+      { command: 'mcp__docs__search {"q":"xx…', tool: "mcp__docs__search", argsShown: "cut" },
+      { command: 'mcp__docs__search {"q":"b"}', tool: "mcp__docs__search", argsShown: "yes" },
+      { command: 'mcp__docs__search {"q":"c"}', tool: "mcp__docs__search", argsShown: { all: true } },
+      { command: 'mcp__docs__search {"q":"d"}', tool: "mcp__docs__search" },
+    ],
+    [],
+    () => false,
+  );
+  assert.deepEqual(asked.requests.map((event) => event.argsShown), ["all", "cut", undefined, undefined, undefined]);
+  assert.ok(asked.requests.every((event) => !("argsShown" in event) || ["all", "cut"].includes(event.argsShown)));
+  const auto = await scriptedTurn([{ command: "git status", argsShown: "all" }], ["git status"], () => false);
+  assert.deepEqual(auto.requests.map((event) => [event.auto, event.argsShown]), [[true, "all"]]);
+  const unattended = await scriptedTurn([{ command: "git push origin main", argsShown: "cut" }], [], () => undefined, { unattendedDeny: true });
+  assert.deepEqual(unattended.requests.map((event) => [event.denied, event.argsShown]), [[true, "cut"]]);
+});
+
+test("only the Claude Code driver reports argsShown; the drivers that relay model text never pass it", () => {
+  const driver = (name) => readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../drivers", `${name}.mjs`), "utf8");
+  assert.ok(driver("claude").includes("...(argsShown ? { argsShown } : {})"));
+  for (const name of ["codex", "grok", "http", "anthropic"]) assert.ok(!driver(name).includes("argsShown"), `${name} mentions argsShown`);
+});
+
 test("a `git` rule auto-runs no git command", async () => {
   const { ran, requests } = await scriptedTurn([{ command: "git status" }, { command: "git log --oneline" }], ["git"], () => false);
   assert.deepEqual(ran, []);

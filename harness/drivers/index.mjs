@@ -5,7 +5,8 @@
 //   startTurn(turn, io): { done: Promise<void>, interrupt(): void }
 //     turn: { id, prompt, system, history: [{ role, content }], model, base, key, cwd }
 //     io.emit(event)                       sends a Sandbench event for this turn
-//     io.requestPermission({ command, reason, tool }) resolves true when the user approves
+//     io.requestPermission({ command, reason, tool, argsShown? }) resolves true when the user approves
+//                                          (argsShown: claude.mjs only, "all" | "cut" for an MCP card)
 //     io.runCommand(command)               runs an approved PowerShell command in turn.cwd
 //     io.signal                            aborts when the user presses Stop
 //   normalizeEvent(raw): Sandbench events for one provider event
