@@ -418,3 +418,31 @@ test("an unapproved WebFetch, Write or MCP call that comes back with anything bu
     });
   }
 });
+
+test("a connector tool is keyed on its whole input, even with an argument named command", () => {
+  const deploy = gateKey("mcp__ops__run", { command: "deploy", target: "prod", force: true });
+  assert.equal(deploy, 'mcp__ops__run({"command":"deploy","force":true,"target":"prod"})');
+  // Not a shell key: approving it lets no Bash call through, and a Bash approval doesn't cover it.
+  assert.notEqual(deploy, gateKey("Bash", { command: "deploy" }));
+  assert.equal(gateDecision({ tool_name: "Bash", tool_input: { command: "deploy" } }, [deploy]), ASK);
+  assert.equal(gateDecision({ tool_name: "mcp__ops__run", tool_input: { command: "deploy", target: "staging" } }, ["Bash(deploy)", deploy]), ASK);
+  // The same tool with other arguments, or another tool with the same ones, is another call.
+  assert.notEqual(deploy, gateKey("mcp__ops__run", { command: "deploy", target: "staging", force: true }));
+  assert.notEqual(deploy, gateKey("mcp__other__run", { command: "deploy", target: "prod", force: true }));
+  assert.equal(gateDecision({ tool_name: "mcp__ops__run", tool_input: { force: true, target: "prod", command: "deploy" } }, [deploy]), null);
+  // Monitor still comes to the hook as Bash and is keyed by its command.
+  assert.equal(gateKey("Bash", { command: "tail -f log" }), "Bash(tail -f log)");
+});
+
+test("a connector tool's card shows all of its arguments, which is what one approval covers", () => {
+  const label = (name, input) => claude.normalizeEvent({ type: "assistant", message: { content: [{ type: "tool_use", id: "t1", name, input }] } }).find((event) => event.type === "tool_use").label;
+  assert.equal(label("mcp__fs__write_file", { path: "/notes/a.md", content: "hello" }), 'mcp__fs__write_file {"path":"/notes/a.md","content":"hello"}');
+  assert.equal(label("mcp__ops__run", { command: "deploy", target: "prod" }), 'mcp__ops__run {"command":"deploy","target":"prod"}');
+  assert.equal(label("mcp__srv__ping", {}), "mcp__srv__ping");
+  const long = label("mcp__srv__send", { body: "x".repeat(400) });
+  assert.equal(long.length, "mcp__srv__send ".length + 300);
+  assert.ok(long.endsWith("…"));
+  // Other tools keep their target.
+  assert.equal(label("Monitor", { command: "tail -f log" }), "Monitor tail -f log");
+  assert.equal(label("WebFetch", { url: "https://example.test/a" }), "WebFetch https://example.test/a");
+});
