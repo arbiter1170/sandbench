@@ -6,7 +6,10 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ALLOW_ENV, ASK, GATE_FILE, GATED_TOOLS, HOOK_FLAG } from "./claudeGate.mjs";
+import { fileURLToPath } from "node:url";
+import { ASK, GATED_TOOLS, HOOK_FLAG, REASON, gateKey } from "./claudeGate.mjs";
+
+const GATE_FILE = fileURLToPath(new URL("./claudeGate.mjs", import.meta.url));
 
 export const id = "claude";
 export const label = "Claude Code (local CLI)";
@@ -62,7 +65,9 @@ function checkExtras(extras) {
 /** The `claude -p` arguments for one round. `model` is the already-mapped CLI model (or null). */
 export function buildClaudeArgs({ settingsFile, model, sessionId, extras = {} }) {
   checkExtras(extras);
-  const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile];
+  // Settings and skills from the turn folder are not loaded: a `.claude/settings.json` in a
+  // cloned repository could turn the approval hook off, and a skill's shell lines run without it.
+  const args = ["-p", "--output-format", "stream-json", "--verbose", "--settings", settingsFile, "--setting-sources", "user", "--disable-slash-commands"];
   if (model) args.push("--model", model);
   if (extras.mcpConfig !== undefined) args.push("--mcp-config", extras.mcpConfig);
   if (extras.maxTurns !== undefined) args.push("--max-turns", String(extras.maxTurns));
@@ -72,29 +77,40 @@ export function buildClaudeArgs({ settingsFile, model, sessionId, extras = {} })
 }
 
 /**
- * The hook command that runs claudeGate.mjs. Claude Code passes it to a shell, so each path is
- * quoted, and a path with a character that a shell would still expand inside quotes is refused.
+ * The hook command that runs claudeGate.mjs with the turn's approved list. Claude Code passes it
+ * to a shell, so each path is quoted, and a path with a character that a shell would still
+ * expand inside quotes is refused.
  */
-export function gateHookCommand(node = process.execPath, gate = GATE_FILE) {
-  for (const part of [node, gate]) {
+export function gateHookCommand(listFile, node = process.execPath, gate = GATE_FILE) {
+  if (!isListFile(listFile)) throw new Error("The Claude Code approval hook needs its list file.");
+  for (const part of [node, gate, listFile]) {
     if (typeof part !== "string" || !path.isAbsolute(part) || /["$`%!\r\n]/.test(part)) throw new Error("The Claude Code approval hook cannot be set up from this install folder.");
   }
-  return `"${node}" "${gate}" ${HOOK_FLAG}`;
+  return `"${node}" "${gate}" ${HOOK_FLAG} "${listFile}"`;
 }
+
+// The hook's approved list lives next to the settings file as `<turn>.approved.json`.
+const isListFile = (file) => typeof file === "string" && path.isAbsolute(file) && file.endsWith(".approved.json");
+
+// Variables that would change what the hook process runs before it reads its list.
+const HOOK_ENV = { NODE_OPTIONS: "", BASH_ENV: "", ENV: "" };
 
 /**
  * The settings file's JSON. `extras.settings` is merged in, but `permissions` is always the
  * driver's own approved list and the approval hook always runs first: extras can never widen
- * what Claude Code may run or turn the hook off. Another PreToolUse hook can only add a "deny"
- * or "ask", because Claude Code takes the strictest answer.
+ * what Claude Code may run, turn hooks off (`disableAllHooks: false` here also outranks the
+ * user's own settings) or change what the hook process loads. Another PreToolUse hook can only
+ * add a "deny" or "ask", because Claude Code takes the strictest answer.
  */
-export function buildClaudeSettings(allow, extras = {}, hookCommand = gateHookCommand()) {
+export function buildClaudeSettings(allow, extras = {}, hookCommand) {
   checkExtras(extras);
+  if (typeof hookCommand !== "string" || !hookCommand) throw new Error("The settings need the approval hook command.");
   const { disableAllHooks: _off, ...settings } = extras.settings ?? {};
   const hooks = settings.hooks && typeof settings.hooks === "object" && !Array.isArray(settings.hooks) ? settings.hooks : {};
+  const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env) ? settings.env : {};
   const gate = { matcher: GATED_TOOLS.join("|"), hooks: [{ type: "command", command: hookCommand, timeout: 30 }] };
   const preToolUse = [gate, ...(Array.isArray(hooks.PreToolUse) ? hooks.PreToolUse : [])];
-  return JSON.stringify({ ...settings, hooks: { ...hooks, PreToolUse: preToolUse }, permissions: { allow } });
+  return JSON.stringify({ ...settings, env: { ...env, ...HOOK_ENV }, disableAllHooks: false, hooks: { ...hooks, PreToolUse: preToolUse }, permissions: { allow } });
 }
 
 /**
@@ -102,17 +118,21 @@ export function buildClaudeSettings(allow, extras = {}, hookCommand = gateHookCo
  * that was, before a turn starts. Claude Code runs the call when a hook fails, so a hook that
  * cannot start or answers wrongly stops the turn here instead.
  */
-export function checkGate(node = process.execPath, gate = GATE_FILE) {
-  const ask = (allow, command) =>
-    spawnSync(node, [gate, HOOK_FLAG], {
+export function checkGate(listFile, node = process.execPath, gate = GATE_FILE) {
+  if (!isListFile(listFile)) throw new Error("The Claude Code approval hook needs its list file.");
+  const ask = (approved, command) => {
+    writeFileSync(listFile, JSON.stringify(approved));
+    return spawnSync(node, [gate, HOOK_FLAG, listFile], {
       input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command } }),
-      env: { ...process.env, [ALLOW_ENV]: JSON.stringify(allow) },
+      env: { ...process.env, ...HOOK_ENV },
       encoding: "utf8",
       timeout: 15_000,
       windowsHide: true,
     });
+  };
   const refused = ask([], "cat sandbench-gate-check.txt");
   const passed = ask(["Bash(cat sandbench-gate-check.txt)"], "cat sandbench-gate-check.txt");
+  writeFileSync(listFile, "[]");
   let answer = null;
   try {
     answer = JSON.parse(refused.stdout);
@@ -171,7 +191,8 @@ export async function available() {
 function denialCommand(denial) {
   const input = denial?.tool_input ?? {};
   if (denial?.tool_name === "Bash" || denial?.tool_name === "PowerShell") return String(input.command ?? "").trim();
-  const target = input.file_path ?? input.path ?? input.url ?? "";
+  // Another tool that runs a command (Monitor) shows the command on its card.
+  const target = (typeof input.command === "string" ? input.command : "") || input.file_path || input.path || input.url || "";
   return `${denial?.tool_name ?? "Tool"}${target ? ` ${target}` : ""}`;
 }
 
@@ -194,7 +215,7 @@ export function normalizeEvent(raw) {
       if (part.type === "tool_use") {
         return [
           { type: "thinking", text: `Claude wants ${part.name}${part.input?.command ? `: ${part.input.command}` : ""}.` },
-          { type: "tool_use", toolUseId: part.id, tool: part.name, label: denialCommand({ tool_name: part.name, tool_input: part.input }), rule: allowRule({ tool_name: part.name, tool_input: part.input }) },
+          { type: "tool_use", toolUseId: part.id, tool: part.name, label: denialCommand({ tool_name: part.name, tool_input: part.input }), gated: GATED_TOOLS.includes(part.name) || typeof part.input?.command === "string", key: gateKey(part.name, part.input) },
         ];
       }
       return [];
@@ -217,10 +238,10 @@ export function normalizeEvent(raw) {
 }
 
 // `onEvent` returns false to stop the CLI at once.
-function runOnce(bin, args, stdin, cwd, io, onEvent, env) {
+function runOnce(bin, args, stdin, cwd, io, onEvent) {
   return new Promise((resolve, reject) => {
     const windowsScript = process.platform === "win32" && bin.toLowerCase().endsWith(".cmd");
-    const child = spawn(bin, args, { cwd, env, windowsHide: true, shell: windowsScript, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(bin, args, { cwd, windowsHide: true, shell: windowsScript, stdio: ["pipe", "pipe", "pipe"] });
     const stop = () => child.kill();
     io.signal.addEventListener("abort", stop, { once: true });
     let buffer = "";
@@ -256,6 +277,8 @@ function runOnce(bin, args, stdin, cwd, io, onEvent, env) {
       if (code !== 0 && code !== null) return reject(new Error(stderr.trim() || `claude exited with ${code}.`));
       resolve();
     });
+    // A CLI that exits before reading its prompt must not take the harness down with EPIPE.
+    child.stdin.on("error", () => undefined);
     child.stdin.end(stdin);
   });
 }
@@ -265,26 +288,34 @@ export function startTurn(turn, io, checks = { checkGate }) {
   const bin = findBinary();
   mkdirSync(SETTINGS_DIR, { recursive: true });
   const settingsFile = path.join(SETTINGS_DIR, `${turn.id}.json`);
+  const listFile = path.join(SETTINGS_DIR, `${turn.id}.approved.json`);
   const done = (async () => {
     if (!bin) throw new Error("Claude Code is not installed on this computer.");
     if (!SAFE_ARG.test(settingsFile)) throw new Error("The settings path has characters the CLI cannot take.");
-    checks.checkGate();
-    await converse(bin, settingsFile, turn, io);
-  })().finally(() => rmSync(settingsFile, { force: true }));
+    checks.checkGate(listFile);
+    await converse(bin, settingsFile, listFile, turn, io);
+  })().finally(() => {
+    rmSync(settingsFile, { force: true });
+    rmSync(listFile, { force: true });
+  });
   return { done, interrupt: () => undefined };
 }
 
-async function converse(bin, settingsFile, turn, io) {
+async function converse(bin, settingsFile, listFile, turn, io) {
   const allow = [];
+  // What the hook lets through: one key per approved call (see gateKey).
+  const approvedKeys = [];
+  const hookCommand = gateHookCommand(listFile);
   const approvedIds = new Map();
   const toolLabels = new Map();
-  const toolRules = new Map();
+  const gatedKeys = new Map();
   // A resumed session (extras.resume) starts the first round; later rounds resume the live one.
   const { resume, ...extras } = turn.extras ?? {};
   let sessionId = resume ?? "";
   let prompt = [turn.system, ...turn.history.map((item) => `${item.role === "user" ? "User" : "You"}: ${item.content}`), `User: ${turn.prompt}`].filter(Boolean).join("\n\n");
   for (let round = 0; round < MAX_ROUNDS; round += 1) {
-    writeFileSync(settingsFile, buildClaudeSettings(allow, extras));
+    writeFileSync(listFile, JSON.stringify(approvedKeys));
+    writeFileSync(settingsFile, buildClaudeSettings(allow, extras, hookCommand));
     // Map API / retired ids (e.g. claude-3-5-haiku-latest) onto Claude Code aliases.
     // Non-Claude ids from other test profiles are skipped so the CLI uses its default.
     const cliModel = mapCliModel(turn.model);
@@ -294,20 +325,24 @@ async function converse(bin, settingsFile, turn, io) {
     const args = buildClaudeArgs({ settingsFile, model: cliModel, sessionId, extras });
     let result = null;
     let unapproved = "";
-    const env = { ...process.env, [ALLOW_ENV]: JSON.stringify(allow) };
     await runOnce(bin, args, prompt, turn.cwd, io, (event) => {
       if (event.type === "session" && /^[\w-]{8,80}$/.test(event.sessionId || "")) sessionId = event.sessionId;
       else if (event.type === "result") result = event;
       else if (event.type === "tool_use") {
         toolLabels.set(event.toolUseId, event.label);
-        if (GATED_TOOLS.includes(event.tool)) toolRules.set(event.toolUseId, event.rule);
+        if (event.gated) gatedKeys.set(event.toolUseId, event.key);
       } else if (event.type === "tool_result") {
-        // A shell command that ran without the user's approval means the hook did not run
-        // (for example, hooks are turned off in Claude Code's own settings): stop the turn.
-        const rule = toolRules.get(event.toolUseId);
-        if (rule !== undefined && !event.isError && !allow.includes(rule)) {
-          unapproved = toolLabels.get(event.toolUseId) ?? rule;
-          return false;
+        // A call nobody approved should only ever come back as the hook's own refusal. Any
+        // other outcome, an error included (`cat notes.txt missing.txt` exits 1 after printing
+        // the file), means it ran or the hook did not answer (it crashed or timed out, or hooks
+        // are off in managed settings): stop the turn before the model reads more.
+        if (gatedKeys.has(event.toolUseId)) {
+          const key = gatedKeys.get(event.toolUseId);
+          const refused = event.isError && event.output.trim() === REASON;
+          if (!refused && !(key !== null && approvedKeys.includes(key))) {
+            unapproved = toolLabels.get(event.toolUseId) || String(key ?? "a tool call");
+            return false;
+          }
         }
         const permissionId = approvedIds.get(toolLabels.get(event.toolUseId));
         if (permissionId && !event.isError) {
@@ -316,8 +351,8 @@ async function converse(bin, settingsFile, turn, io) {
         }
       } else io.emit(event);
       return true;
-    }, env);
-    if (unapproved) throw new Error(`Claude Code ran a shell command nobody approved (${unapproved.slice(0, 120)}), so the turn was stopped. Check that hooks are not turned off in Claude Code's own settings.`);
+    });
+    if (unapproved) throw new Error(`Claude Code ran a command nobody approved (${unapproved.slice(0, 120)}), or the approval hook did not answer, so the turn was stopped.`);
     if (!result) throw new Error("Claude Code ended without a result.");
     if (result.isError) throw new Error(result.text || "Claude Code reported an error.");
     const denials = result.denials.filter((item) => !allow.includes(allowRule(item)));
@@ -332,6 +367,7 @@ async function converse(bin, settingsFile, turn, io) {
     }
     if (approved.length === 0 || !sessionId) return;
     allow.push(...approved.map(allowRule));
+    approvedKeys.push(...approved.map((denial) => gateKey(denial.tool_name, denial.tool_input)).filter((key) => key !== null));
     io.emit({ type: "thinking", text: "Resume the session with the approved tools." });
     prompt = `The user approved: ${approved.map(denialCommand).join("; ")}. Run ${approved.length === 1 ? "it" : "them"} now and continue.`;
   }
