@@ -20,11 +20,23 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
   const turns = new Map();
   const permissions = new Map();
   let seq = 0;
+  // For each turn, the newest of its events that fell out of the replay buffer, and the turns
+  // that ended. A page resuming from before an evicted event is told there is a gap instead of
+  // silently missing it, and a finished turn stays "finished" after its last event is evicted.
+  const evicted = new Map();
+  const ended = new Set();
+  const remember = (collection, add) => {
+    add();
+    if (collection.size > 1000) collection.delete(collection.keys().next().value);
+  };
 
   function publish(turnId, event) {
     const entry = { ...event, turnId, seq: ++seq, at: Date.now() };
     events.push(entry);
-    if (events.length > BUFFER) events.splice(0, events.length - BUFFER);
+    if (events.length > BUFFER) {
+      for (const old of events.splice(0, events.length - BUFFER)) remember(evicted, () => evicted.set(old.turnId, old.seq));
+    }
+    if (event.type === "done" || event.type === "error") remember(ended, () => ended.add(turnId));
     for (const sub of subscribers) {
       if (!sub.turn || sub.turn === turnId) sub.write(entry);
     }
@@ -169,6 +181,14 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
     return true;
   }
 
+  // "running" while the driver works, "finished" once it ended (the last 1000 turns), "unknown"
+  // otherwise (a restarted harness, or a turn long gone). The page uses it to tell a dropped
+  // event stream it can resume from a turn that is gone.
+  function state(id) {
+    if (turns.has(id)) return "running";
+    return ended.has(id) ? "finished" : "unknown";
+  }
+
   function permit(permissionId, allow) {
     const pending = permissions.get(permissionId);
     if (!pending) return false;
@@ -181,6 +201,8 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
     const turn = url.searchParams.get("turn") || "";
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
     const sub = { turn, write: (entry) => res.write(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`) };
+    // Some of this turn's events after `after` are no longer in the buffer: say so first.
+    if (turn && (evicted.get(turn) ?? 0) > after) res.write(`data: ${JSON.stringify({ type: "gap", turnId: turn })}\n\n`);
     for (const entry of events) {
       if (entry.seq > after && (!turn || entry.turnId === turn)) sub.write(entry);
     }
@@ -192,5 +214,5 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
     });
   }
 
-  return { start, interrupt, permit, subscribe };
+  return { start, interrupt, permit, subscribe, state };
 }

@@ -45,6 +45,7 @@ const en = {
   you: "You",
   assistant: "Assistant",
   receiving: "Receiving",
+  interrupted: "Interrupted",
   offline: "Offline",
   online: "Online",
   account: "Account",
