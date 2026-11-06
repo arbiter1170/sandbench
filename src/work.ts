@@ -47,6 +47,15 @@ export function proposeTrigger(text: string): TriggerDraft | undefined {
   return title ? { kind: "routine", title: title.slice(0, 240), schedule: schedule.trim() } : undefined;
 }
 
+/**
+ * Whether the person's own message asks for something that repeats or reacts to deliveries. A
+ * routine or webhook the model proposes is created (enabled, with no card) only then, so text the
+ * model read elsewhere (a saved memory note, a file, a command's output) cannot set one up.
+ */
+export function requestAsksForTrigger(text: string): boolean {
+  return /\b(?:every|each|daily|hourly|weekly|monthly|weekdays?|weekends?|nightly|mornings?|evenings?|repeat(?:ing|edly)?|recurring|routine|schedule[ds]?|webhooks?|whenever|remind)\b/i.test(text);
+}
+
 function taskTitle(text: string): string {
   const trimmed = text.trim().replace(/\s+/g, " ").replace(/[?.!,]+$/, "");
   return `${trimmed.charAt(0).toUpperCase()}${trimmed.slice(1)}`;

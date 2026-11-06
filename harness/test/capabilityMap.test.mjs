@@ -227,8 +227,8 @@ test("the teammates row says which turns read MEMORY.md, as the code does", () =
   const { web, needs } = row("Bot teammates");
   assert.equal(needs, "harness", "MEMORY.md is read through the harness");
   assert.match(read("src/work.ts"), /input\.memoryDoc\?\.trim\(\) \? `\$\{MEMORY_HEADING\}/, "the planner decision prompt carries the memory document");
-  assert.match(read("src/App.tsx"), /decisionPrompt\(\{[\s\S]{0,400}memoryDoc: await memoryDocFor\(bot\.id\)/, "the step after a result gets it");
-  assert.match(read("src/App.tsx"), /decisionPrompt\(\{[\s\S]{0,400}\bmemoryDoc,\n/, "the first step gets it");
+  assert.match(read("src/App.tsx"), /Promise\.all\(\[readLibrary\(bot\.id\), memoryDocFor\(bot\.id\)\]\)[\s\S]{0,600}decisionPrompt\(\{[\s\S]{0,400}\bmemoryDoc,\n/, "the step after a result gets it");
+  assert.equal([...read("src/App.tsx").matchAll(/decisionPrompt\(\{[\s\S]{0,400}?\bmemoryDoc,\n/g)].length, 2, "both decision steps get it");
   assert.match(read("src/App.tsx"), /system: assembleBotSystem\(\{[\s\S]{0,300}memoryDoc,/, "driver turns get the memory document");
   assert.doesNotMatch(web, /on every turn/);
   assert.match(web, /Without a key or a signed-in CLI driver, replies are local stand-ins/);

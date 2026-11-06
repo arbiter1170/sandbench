@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { assembleBotSystem, MEMORY_HEADING, memoryDocument } from "./prompt";
 import type { Approval, Bot } from "./types";
-import { actionForText, approvalFields, continuationText, decisionPrompt, holdForPerson, memoryStep, parseModelDecision, proposeMemory } from "./work";
+import { actionForText, approvalFields, continuationText, decisionPrompt, holdForPerson, memoryStep, parseModelDecision, proposeMemory, requestAsksForTrigger } from "./work";
 
 const DAY = new Date(2026, 10, 5, 15, 0, 0);
 
@@ -103,8 +103,21 @@ describe("bot memory saves", () => {
     const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
     const calls = [...app.matchAll(/decisionPrompt\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
     expect(calls).toHaveLength(2);
-    expect(calls[0]).toMatch(/memoryDoc: await memoryDocFor\(bot\.id\)/);
-    expect(calls[1]).toMatch(/\bmemoryDoc,/);
+    for (const call of calls) expect(call).toMatch(/\bmemoryDoc,/);
+    expect(app).toMatch(/const \[library, memoryDoc\] = await Promise\.all\(\[readLibrary\(bot\.id\), memoryDocFor\(bot\.id\)\]\);/);
+  });
+
+  it("a routine or webhook the model proposes is created only when the person's message asks for one", () => {
+    // Saved notes, files and command output reach the decision prompt; a schedule written there
+    // must not become an enabled routine with no card.
+    for (const asked of ["check the build every 30 minutes", "Remind me weekdays at 9:00 to stretch", "set up a webhook for deploys", "do this daily", "Make it a routine", "whenever a PR opens, summarise it"]) {
+      expect(requestAsksForTrigger(asked), asked).toBe(true);
+    }
+    for (const plain of ["hi", "what's the build status?", "summarise my notes", "run the tests", "everything ok?"]) {
+      expect(requestAsksForTrigger(plain), plain).toBe(false);
+    }
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    expect(app).toMatch(/modelTrigger = decision\.trigger && requestAsksForTrigger\(cleaned\) \? decision\.trigger : undefined;/);
   });
 
   it("today's log reaches the prompt even when older logs and topic files would fill the 8 slots", () => {
