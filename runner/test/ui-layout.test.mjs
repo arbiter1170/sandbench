@@ -217,3 +217,66 @@ describe("chat context line", () => {
     });
   }
 });
+
+describe("chat context sheet", () => {
+  for (const viewport of [VIEWPORTS[0], VIEWPORTS[3]]) {
+    test(`${viewport.name}: the sheet keeps focus, Esc closes it from anywhere, focus returns to the line`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      await page.goto(base, { waitUntil: "load", timeout: 20_000 });
+      await page.click(".chat-context");
+      await page.waitForSelector(".ctx-sheet");
+      const active = () => page.evaluate(() => ({ inSheet: Boolean(document.activeElement?.closest(".ctx-sheet")), cls: document.activeElement?.className || document.activeElement?.tagName }));
+      assert.equal((await active()).inSheet, true, "opening the sheet moves focus into it");
+      assert.equal(await page.locator(".ctx-sheet input, .ctx-sheet select, .ctx-sheet textarea").count(), 0, "the sheet has no inputs");
+      // The rest of the page is inert while the sheet is open.
+      assert.equal(await page.evaluate(() => document.querySelector(".chat-context").closest("[inert]") !== null), true, "the page behind is not inert");
+      // A click on a row's text, then Esc: still closes, and focus goes back to the line.
+      await page.click(".ctx-row dd");
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator(".ctx-sheet").count(), 0, "Esc after a click on the text left the sheet open");
+      assert.match((await active()).cls, /chat-context/);
+      assert.equal(await page.evaluate(() => document.querySelector(".chat-context").closest("[inert]")), null, "the page stays inert after closing");
+      // Tab never leaves the sheet, including while "Check again" is busy.
+      await page.click(".chat-context");
+      await page.waitForSelector(".ctx-sheet");
+      await page.getByRole("button", { name: "Check again" }).focus();
+      await page.keyboard.press("Enter");
+      // Once the check is running (busy, or disabled if someone changes that), focus is still on the button.
+      await page.waitForFunction(() => [...document.querySelectorAll(".ctx-sheet footer button")].some((node) => node.textContent === "Check again" && (node.getAttribute("aria-busy") === "true" || node.disabled)));
+      assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check again", "focus left the busy button");
+      assert.equal((await active()).inSheet, true, "focus left the sheet while busy");
+      for (let index = 0; index < 6; index += 1) {
+        await page.keyboard.press("Tab");
+        assert.equal((await active()).inSheet, true, `Tab ${index + 1} left the sheet`);
+      }
+      await page.getByText("Still not reachable").waitFor({ timeout: 5_000 });
+      await page.keyboard.press("Escape");
+      assert.equal(await page.locator(".ctx-sheet").count(), 0);
+      await context.close();
+    });
+  }
+
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name}: a group chat's line keeps the agent readable and the connection word whole`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      await page.goto(`${base}?scenario=channel`, { waitUntil: "load", timeout: 20_000 });
+      await page.waitForSelector(".chat-context");
+      await page.evaluate(() => document.fonts.ready);
+      const line = await page.evaluate(() => {
+        const button = document.querySelector(".chat-context");
+        const shown = [...button.querySelectorAll(".ctx-agent")].find((node) => getComputedStyle(node).display !== "none");
+        const word = button.querySelector(".ctx-conn");
+        return { agent: shown?.textContent, agentWidth: shown?.getBoundingClientRect().width ?? 0, conn: word.textContent, cut: word.scrollWidth > word.clientWidth + 1, pageWidth: document.documentElement.scrollWidth };
+      });
+      await context.close();
+      assert.match(line.conn, /Connected/);
+      assert.equal(line.cut, false, "the connection word is truncated");
+      assert.ok(line.agentWidth >= 40, `the agent text is ${line.agentWidth}px wide`);
+      assert.ok(line.pageWidth <= viewport.width, "the page scrolls sideways");
+      // The chat column is under 700 px at every width here, so the short form shows.
+      assert.equal(line.agent, "Mixed agents");
+    });
+  }
+});

@@ -487,12 +487,23 @@ export function App({ user }: { user: User }) {
 
   // When the health poll last answered and when the harness was last reachable, so the chat's
   // context line can say "Checking…" before the first answer and never show old values as current.
-  const [healthLog, setHealthLog] = useState<{ checkedAt?: number; lastOkAt?: number }>({});
+  // The times live in a ref (the context sheet reads them while it is open), so a poll that
+  // changes nothing does not re-render the page; `healthChecked` flips once.
+  const healthLog = useRef<{ checkedAt?: number; lastOkAt?: number }>({});
+  const [healthChecked, setHealthChecked] = useState(false);
+  const healthSeq = useRef({ sent: 0, applied: 0 });
   const checkHealth = useCallback(async () => {
+    const seq = ++healthSeq.current.sent;
     const next = await harnessHealth();
+    // A slower, older request (the 8 s poll racing "Check again") never overwrites a newer answer.
+    if (seq < healthSeq.current.applied) return next;
+    healthSeq.current.applied = seq;
     const at = Date.now();
-    setHarness((prev) => (Boolean(prev) === Boolean(next) && prev?.host === next?.host ? prev : next));
-    setHealthLog((prev) => ({ checkedAt: at, lastOkAt: next ? at : prev.lastOkAt }));
+    setHarness((prev) =>
+      Boolean(prev) === Boolean(next) && prev?.host === next?.host && prev?.workspace === next?.workspace && prev?.platform === next?.platform ? prev : next,
+    );
+    healthLog.current = { checkedAt: at, lastOkAt: next ? at : healthLog.current.lastOkAt };
+    setHealthChecked(true);
     return next;
   }, []);
   useEffect(() => {
@@ -2585,7 +2596,8 @@ export function App({ user }: { user: User }) {
         workingBotId={workingBotId}
         studio={studio}
         harness={harness}
-        healthLog={healthLog}
+        healthLog={healthLog.current}
+        healthChecked={healthChecked}
         onRecheckHarness={recheckHarness}
         runner={runnerMode}
         callActive={callActive}

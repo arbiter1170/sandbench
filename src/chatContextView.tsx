@@ -1,10 +1,11 @@
 // The context line under the chat header and its read-only "How this chat runs" sheet (UX P1).
 // The sheet has no inputs: it reports, and links to the bot's settings for changes.
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
+import { createPortal } from "react-dom";
 import { contextLine, sheetRows, type Connection, type ContextKey, type MemberAgent, type SheetRow } from "./chatContext";
 import type { Thread } from "./types";
 
-type Copy = (key: ContextKey | "ctxDetails" | "ctxSheetTitle" | "ctxOpenSettings" | "ctxCheckAgain" | "ctxRecheckOk" | "ctxRecheckFail" | "ctxClose" | "ctxThisChat") => string;
+type Copy = (key: ContextKey | "ctxDetails" | "ctxSheetTitle" | "ctxOpenSettings" | "ctxCheckAgain" | "ctxRecheckOk" | "ctxRecheckFail" | "ctxRecheckRunnerOk" | "ctxRecheckRunnerFail" | "ctxClose" | "ctxThisChat") => string;
 
 export type ContextSection = { title?: string; rows: SheetRow[] };
 type SheetInput = Parameters<typeof sheetRows>[0];
@@ -28,7 +29,8 @@ export function ChatContext(props: {
   t: Copy;
   members: ContextMember[];
   channel?: Thread;
-  connection: Omit<Connection, "now">;
+  /** `log` is the page's live health log; its times are read at each render. */
+  connection: Omit<Connection, "now" | "checkedAt" | "lastOkAt"> & { log: { checkedAt?: number; lastOkAt?: number } };
   onOpenSettings?: () => void;
   onRecheck: () => Promise<boolean>;
 }) {
@@ -41,8 +43,9 @@ export function ChatContext(props: {
     setNow(Date.now());
     const handle = window.setInterval(() => setNow(Date.now()), 5000);
     return () => window.clearInterval(handle);
-  }, [open, props.connection.checkedAt]);
-  const connection: Connection = { ...props.connection, now };
+  }, [open]);
+  const { log, ...rest } = props.connection;
+  const connection: Connection = { ...rest, checkedAt: log.checkedAt, lastOkAt: log.lastOkAt, now };
   const line = contextLine({ members: props.members, channel: props.channel, connection, t });
   const [result, setResult] = useState("");
   const [busy, setBusy] = useState(false);
@@ -50,25 +53,40 @@ export function ChatContext(props: {
   const dialog = useRef<HTMLDivElement>(null);
   const parts = [line.agent, line.folder ? `${line.folderPrefix}${line.folder}` : "", line.connection].filter(Boolean);
 
-  useEffect(() => {
-    if (!open) return;
-    dialog.current?.querySelector<HTMLElement>("button")?.focus();
-  }, [open]);
-
+  // Focus returns to the line in the effect below, once the page is no longer inert.
   const close = () => {
     setOpen(false);
     setResult("");
-    trigger.current?.focus();
   };
-  // Focus stays inside the sheet while it is open; Esc closes it and focus returns to the line.
-  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
-    if (event.key === "Escape") {
+  const closeRef = useRef(close);
+  closeRef.current = close;
+
+  // While the sheet is open: focus moves into it (the user opened it), the rest of the page is
+  // inert, and Esc closes it from anywhere, even after a click on its text. Focus then returns
+  // to the line.
+  useEffect(() => {
+    if (!open) return;
+    dialog.current?.querySelector<HTMLElement>("button")?.focus();
+    const host = dialog.current?.closest(".ctx-backdrop");
+    const others = [...document.body.children].filter((node): node is HTMLElement => node instanceof HTMLElement && node !== host && !node.inert);
+    for (const node of others) node.inert = true;
+    const onEscape = (event: globalThis.KeyboardEvent) => {
+      if (event.key !== "Escape") return;
       event.preventDefault();
-      close();
-      return;
-    }
+      closeRef.current();
+    };
+    document.addEventListener("keydown", onEscape);
+    return () => {
+      document.removeEventListener("keydown", onEscape);
+      for (const node of others) node.inert = false;
+      trigger.current?.focus();
+    };
+  }, [open]);
+
+  // Tab and Shift+Tab stay inside the sheet.
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Tab" || !dialog.current) return;
-    const focusable = [...dialog.current.querySelectorAll<HTMLElement>("button, [href], [tabindex]:not([tabindex='-1'])")];
+    const focusable = [...dialog.current.querySelectorAll<HTMLElement>("button:not(:disabled), [href], [tabindex]:not([tabindex='-1'])")];
     if (focusable.length === 0) return;
     const first = focusable[0];
     const last = focusable[focusable.length - 1];
@@ -89,7 +107,7 @@ export function ChatContext(props: {
         className={`chat-context ${line.tone}`}
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`${t("ctxSheetTitle")}: ${parts.join(", ")}`}
+        aria-label={`${parts.join(", ")}. ${t("ctxDetails")}: ${t("ctxSheetTitle")}`}
         onClick={() => setOpen(true)}
       >
         <span className="ctx-dot" aria-hidden="true">{line.tone === "ok" ? "●" : line.tone === "bad" ? "▲" : "○"}</span>
@@ -99,9 +117,9 @@ export function ChatContext(props: {
         <span className="ctx-conn">· {line.connection}</span>
         <span className="ctx-more"><span className="ctx-more-word">{t("ctxDetails")}</span> ›</span>
       </button>
-      {open ? (
+      {open ? createPortal(
         <div className="ctx-backdrop" onClick={(event) => event.target === event.currentTarget && close()}>
-          <div ref={dialog} className="ctx-sheet" role="dialog" aria-modal="true" aria-labelledby="ctx-sheet-title" onKeyDown={onKeyDown}>
+          <div ref={dialog} className="ctx-sheet" role="dialog" aria-modal="true" aria-labelledby="ctx-sheet-title" tabIndex={-1} onKeyDown={onKeyDown}>
             <header>
               <h2 id="ctx-sheet-title">{t("ctxSheetTitle")}</h2>
               <button type="button" className="text-btn" onClick={close}>{t("ctxClose")}</button>
@@ -128,14 +146,16 @@ export function ChatContext(props: {
               {props.onOpenSettings ? (
                 <button type="button" onClick={() => { const go = props.onOpenSettings!; close(); go(); }}>{t("ctxOpenSettings")}</button>
               ) : null}
+              {/* aria-busy rather than disabled: the button keeps focus while the check runs. */}
               <button
                 type="button"
-                disabled={busy}
+                aria-busy={busy}
                 onClick={() => {
+                  if (busy) return;
                   setBusy(true);
                   setResult("");
                   void props.onRecheck().then((ok) => {
-                    setResult(t(ok ? "ctxRecheckOk" : "ctxRecheckFail"));
+                    setResult(t(props.connection.runner ? (ok ? "ctxRecheckRunnerOk" : "ctxRecheckRunnerFail") : ok ? "ctxRecheckOk" : "ctxRecheckFail"));
                     setBusy(false);
                   });
                 }}
@@ -145,7 +165,8 @@ export function ChatContext(props: {
               <span className="ctx-result" role="status" aria-live="polite">{result}</span>
             </footer>
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </>
   );

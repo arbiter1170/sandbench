@@ -849,14 +849,19 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
 .chat-context .ctx-dot { flex: none; }
 .chat-context.ok .ctx-dot { color: #4fbf7f; }
 .chat-context.bad .ctx-dot { color: var(--danger); }
-.chat-context .ctx-agent { flex: 0 3 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
+.chat-context .ctx-agent { flex: 0 3 auto; min-width: min(8ch, 30%); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink); }
 .chat-context .ctx-folder { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .chat-context .ctx-conn { flex: none; white-space: nowrap; color: var(--ink); }
 .chat-context .ctx-more { flex: none; margin-left: auto; white-space: nowrap; }
 .chat-context .ctx-short { display: none; }
-@media (max-width: 700px) {
+/* By the chat column's width, not the window's: on the desktop the column is much narrower. */
+.stage { container: chat / inline-size; }
+@container chat (max-width: 700px) {
   .chat-context:has(.ctx-short) .ctx-full { display: none; }
   .chat-context .ctx-short { display: inline; }
+}
+@container chat (max-width: 460px) {
+  .chat-context .ctx-more-word { display: none; }
 }
 .ctx-backdrop {
   position: fixed;
@@ -895,7 +900,6 @@ figure.screen figcaption { font-size: 0.75rem; color: var(--muted); padding: 0.3
 .ctx-result { color: var(--muted); }
 @media (max-width: 460px) {
   .ctx-row { grid-template-columns: 1fr; gap: 0.15rem; }
-  .chat-context .ctx-more-word { display: none; }
 }
 
 @media (max-width: 899px) {

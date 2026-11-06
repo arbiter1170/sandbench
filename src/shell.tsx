@@ -38,8 +38,10 @@ export function Workspace(props: {
   workingBotId: string | null;
   studio: Studio;
   harness: HarnessHealth | null;
-  /** When the health poll last answered, and when the harness was last reachable (context line). */
+  /** When the health poll last answered, and when the harness was last reachable (context sheet). A live object: read it at render. */
   healthLog: { checkedAt?: number; lastOkAt?: number };
+  /** The health poll has answered at least once. */
+  healthChecked: boolean;
   /** "Check again" in the context sheet: re-reads /health and /drivers; true when reachable. */
   onRecheckHarness: () => Promise<boolean>;
   runner: boolean;
@@ -134,11 +136,12 @@ export function Workspace(props: {
       sheet: { bot: member, route, messages: own },
     };
   };
+  // "Checking…" until the first health answer, and while a reachable harness has not listed its
+  // drivers yet (it always lists them), so no agent reads "not available" before anyone looked.
   const connection = {
-    state: props.healthLog.checkedAt === undefined ? ("checking" as const) : props.harness ? ("connected" as const) : ("offline" as const),
+    state: !props.healthChecked || (props.harness && props.drivers.length === 0) ? ("checking" as const) : props.harness ? ("connected" as const) : ("offline" as const),
     runner: props.runner,
-    checkedAt: props.healthLog.checkedAt,
-    lastOkAt: props.healthLog.lastOkAt,
+    log: props.healthLog,
     platform: props.harness?.platform,
     workspace: props.harness?.workspace,
   };

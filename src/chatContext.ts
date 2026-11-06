@@ -74,6 +74,7 @@ export type ContextKey =
   | "ctxRunnerReachable" | "ctxRunnerNotReachable"
   | "ctxRowRunsOn" | "ctxRowAgent" | "ctxRowModel" | "ctxRowFolder" | "ctxRowTools" | "ctxRowConnectors" | "ctxRowMemory" | "ctxRowSkills" | "ctxRowClosed"
   | "ctxRunsOnHarness" | "ctxRunsOnPlanner" | "ctxRunsOnOffline" | "ctxRunsOnPlannerOffline" | "ctxRunsOnRunner" | "ctxChecked" | "ctxLastConnected" | "ctxNeverConnected"
+  | "ctxReachable" | "ctxUnreachable" | "ctxRunnerOffline" | "ctxAgentUnavailableRunner" | "ctxToolsCli" | "ctxConnectorsRunner"
   | "ctxBadgeBot" | "ctxBadgeSettings" | "ctxBadgeProvider"
   | "ctxAgentClaude" | "ctxAgentOther" | "ctxAgentUnavailable" | "ctxAgentUnavailableOffline" | "ctxAgentPlanner"
   | "ctxUnknownOffline" | "ctxModelAfterReply" | "ctxModelLast" | "ctxModelPlanner" | "ctxModelStandIn"
@@ -82,7 +83,7 @@ export type ContextKey =
   | "ctxConnectorsClaude" | "ctxConnectorsNone" | "ctxConnectorsOther" | "ctxConnectorsPlanner"
   | "ctxMemoryDriver" | "ctxMemoryPlanner" | "ctxMemoryStandIn" | "ctxMemoryRunner"
   | "ctxSkills" | "ctxSkillsNone"
-  | "ctxClosedLocal" | "ctxClosedRunner";
+  | "ctxClosedLocal" | "ctxClosedNoHarness" | "ctxClosedRunner";
 
 const fill = (text: string, values: Record<string, string | number>) => text.replace(/\{(\w+)\}/g, (_, key: string) => String(values[key] ?? ""));
 
@@ -102,8 +103,10 @@ export function connectionWord(connection: Connection, t: Translate): string {
 
 export type MemberAgent = { name: string; agent: ChatAgent };
 
-const agentText = (agent: ChatAgent, t: Translate) =>
-  agent.kind === "planner" ? t("ctxPlanner") : agent.kind === "unavailable" ? `${agent.name} (${t("ctxNotAvailable")})` : agent.name;
+// Before the first health answer, or before /drivers answered, a chosen driver is not yet known
+// to be unavailable: the line shows its name only.
+const agentText = (agent: ChatAgent, t: Translate, checking: boolean) =>
+  agent.kind === "planner" ? t("ctxPlanner") : agent.kind === "unavailable" && !checking ? `${agent.name} (${t("ctxNotAvailable")})` : agent.name;
 
 export type ContextLine = {
   /** The full agent part; `short` replaces it on narrow screens (several agents in a group chat). */
@@ -121,7 +124,7 @@ export function contextLine(input: { members: MemberAgent[]; channel?: Thread; c
   const { connection, t } = input;
   const groups = new Map<string, string[]>();
   for (const member of input.members) {
-    const key = agentText(member.agent, t);
+    const key = agentText(member.agent, t, connection.state === "checking");
     groups.set(key, [...(groups.get(key) ?? []), member.name]);
   }
   const keys = [...groups.keys()];
@@ -138,15 +141,14 @@ export function contextLine(input: { members: MemberAgent[]; channel?: Thread; c
 
 export type SheetRow = { id: string; label: string; value: string; detail?: string; badge?: string };
 
-/** The latest model named in a reply's trace ("Claude Code session started on X." / "Using Claude Code model X"). */
+/** The model named in the newest reply's trace ("Claude Code session started on X." / "Using Claude Code model X"). An older reply's model is not this chat's current one. */
 export function lastModel(messages: Message[]): string | undefined {
-  for (const message of [...messages].reverse()) {
-    for (const line of [...(message.thinking ?? [])].reverse()) {
-      const started = /session started on (.+?)\.?$/.exec(line);
-      if (started) return started[1];
-      const using = /^Using .+ model (\S+)/.exec(line);
-      if (using) return using[1];
-    }
+  const newest = [...messages].reverse().find((message) => message.role === "assistant");
+  for (const line of [...(newest?.thinking ?? [])].reverse()) {
+    const started = /session started on (.+?)\.?$/.exec(line);
+    if (started) return started[1];
+    const using = /^Using .+ model (\S+)/.exec(line);
+    if (using) return using[1];
   }
   return undefined;
 }
@@ -173,8 +175,8 @@ export function sheetRows(input: {
   const { agent, connection, t, route } = input;
   const offline = connection.state === "offline";
   const checking = connection.state === "checking";
-  const unknown = t("ctxUnknownOffline");
-  const usesHarness = !connection.runner;
+  // Rows that only the harness or runner can answer are unknown while it is not reachable.
+  const unknown = t(connection.runner ? "ctxRunnerOffline" : "ctxUnknownOffline");
   const checked = connection.checkedAt ? fill(t("ctxChecked"), { age: ago(connection.now, connection.checkedAt) }) : "";
   const isDriver = agent.kind === "driver";
   const name = agent.kind === "planner" ? t("ctxPlanner") : agent.name;
@@ -182,7 +184,7 @@ export function sheetRows(input: {
   const runsOn = checking
     ? t("ctxChecking")
     : connection.runner
-      ? fill(t("ctxRunsOnRunner"), { state: connectionWord(connection, t) })
+      ? fill(t("ctxRunsOnRunner"), { state: t(connection.state === "connected" ? "ctxReachable" : "ctxUnreachable") })
       : offline
         ? agent.kind === "planner"
           ? t("ctxRunsOnPlannerOffline")
@@ -193,18 +195,21 @@ export function sheetRows(input: {
   const agentValue =
     agent.kind === "planner"
       ? t("ctxAgentPlanner")
-      : agent.kind === "unavailable"
-        ? fill(t(offline ? "ctxAgentUnavailableOffline" : "ctxAgentUnavailable"), { name: agent.name, detail: agent.detail ? `: ${agent.detail}` : "" })
+      : agent.kind === "unavailable" && checking
+        ? `${agent.name} · ${t("ctxChecking")}`
+        : agent.kind === "unavailable"
+        ? fill(t(offline ? (connection.runner ? "ctxAgentUnavailableRunner" : "ctxAgentUnavailableOffline") : "ctxAgentUnavailable"), { name: agent.name, detail: agent.detail ? `: ${agent.detail}` : "" })
         : fill(t(agent.id === "claude" ? "ctxAgentClaude" : "ctxAgentOther"), { name: agent.name });
 
-  const model =
-    agent.kind === "planner"
+  // Offline, nothing is known (the stored keys are read through the harness too). A chosen driver
+  // that can't run now: the planner answers, with the planner's model.
+  const model = offline
+    ? unknown
+    : agent.kind === "planner" || (agent.kind === "unavailable" && !checking)
       ? route.ready
         ? fill(t("ctxModelPlanner"), { model: route.model })
         : t("ctxModelStandIn")
-      : offline && usesHarness
-        ? unknown
-        : (() => {
+      : (() => {
             const seen = lastModel(input.messages);
             return seen ? fill(t("ctxModelLast"), { model: seen }) : fill(t("ctxModelAfterReply"), { name });
           })();
@@ -215,13 +220,24 @@ export function sheetRows(input: {
     : fill(t("ctxFolderBot"), { path: offline || !connection.workspace ? unknown : connection.workspace });
   const reported = lastFolder(input.messages);
 
-  const tools = agent.kind === "planner" || agent.kind === "unavailable" ? t("ctxToolsPlanner") : agent.id === "claude" ? t("ctxToolsClaude") : t("ctxToolsDriver");
+  // Codex and Grok run their own commands; what they send to Sandbench always asks (autoReview.mjs).
+  const tools =
+    agent.kind === "planner" || agent.kind === "unavailable"
+      ? t("ctxToolsPlanner")
+      : agent.id === "claude"
+        ? t("ctxToolsClaude")
+        : agent.id === "codex" || agent.id === "grok"
+          ? fill(t("ctxToolsCli"), { name })
+          : t("ctxToolsDriver");
 
   const assigned = (input.bot.connectorIds ?? []).length;
+  // The runner passes no connector registry, so runner turns get none (harness/connectors.mjs).
   const connectors =
-    offline && usesHarness
+    offline
       ? unknown
-      : isDriver && agent.id === "claude"
+      : connection.runner && isDriver
+        ? t("ctxConnectorsRunner")
+        : isDriver && agent.id === "claude"
         ? assigned
           ? fill(t("ctxConnectorsClaude"), { count: assigned })
           : t("ctxConnectorsNone")
@@ -244,7 +260,7 @@ export function sheetRows(input: {
   const library = (input.bot.librarySkillIds ?? []).length;
   const skills =
     input.bot.skills.length || library
-      ? fill(t("ctxSkills"), { builtIn: input.bot.skills.join(", ") || "0", library: offline && usesHarness && library ? `${library} (${unknown})` : library })
+      ? fill(t("ctxSkills"), { builtIn: input.bot.skills.join(", ") || "0", library: offline && library ? `${library} (${unknown})` : library })
       : t("ctxSkillsNone");
 
   return [
@@ -256,6 +272,6 @@ export function sheetRows(input: {
     { id: "connectors", label: t("ctxRowConnectors"), value: connectors },
     { id: "memory", label: t("ctxRowMemory"), value: memory },
     { id: "skills", label: t("ctxRowSkills"), value: skills },
-    { id: "closed", label: t("ctxRowClosed"), value: t(connection.runner ? "ctxClosedRunner" : "ctxClosedLocal") },
+    { id: "closed", label: t("ctxRowClosed"), value: t(connection.runner ? "ctxClosedRunner" : offline ? "ctxClosedNoHarness" : "ctxClosedLocal") },
   ];
 }
