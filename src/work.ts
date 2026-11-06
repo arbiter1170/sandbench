@@ -1,3 +1,4 @@
+import { MEMORY_HEADING } from "./prompt";
 import { botWithDefaultProfile } from "./testProfiles";
 import type { Approval, ApprovalFile, ApprovalMemory, ApprovalQuestion, Bot, BotFile, BotShape, BotVoice, Connector, Plugin, PointerAction, PointerKey, Routine, Settings, SkillId, Thread, WebhookTrigger } from "./types";
 
@@ -44,6 +45,15 @@ export function proposeTrigger(text: string): TriggerDraft | undefined {
   if (!schedule || !task || !parseSchedule(schedule)) return undefined;
   const title = taskTitle(task.replace(/^(?:please\s+)?(?:can you\s+)?/i, ""));
   return title ? { kind: "routine", title: title.slice(0, 240), schedule: schedule.trim() } : undefined;
+}
+
+/**
+ * Whether the person's own message asks for something that repeats or reacts to deliveries. A
+ * routine or webhook the model proposes is created (enabled, with no card) only then, so text the
+ * model read elsewhere (a saved memory note, a file, a command's output) cannot set one up.
+ */
+export function requestAsksForTrigger(text: string): boolean {
+  return /\b(?:every|each|daily|hourly|weekly|monthly|weekdays?|weekends?|nightly|mornings?|evenings?|repeat(?:ing|edly)?|recurring|routine|schedule[ds]?|webhooks?|whenever|remind)\b/i.test(text);
 }
 
 function taskTitle(text: string): string {
@@ -814,6 +824,8 @@ export function decisionPrompt(input: {
   shared?: string;
   /** False in runner mode, where a memory card is unavailable: the action is not offered. */
   memorySaves?: boolean;
+  /** The bot's harness memory (memoryDocument), so saved notes shape the next step too. */
+  memoryDoc?: string;
 }): string {
   const tools = input.connectors.flatMap((connector) =>
     connector.tools.map((tool) => `- ${tool.name} on ${connector.name}: ${tool.description.split("\n")[0]?.slice(0, 180) ?? ""} args ${JSON.stringify(tool.schema ?? {})}`),
@@ -826,6 +838,7 @@ export function decisionPrompt(input: {
     input.shared?.trim() ? `Shared instructions for this group chat:\n${input.shared.trim()}` : "",
     input.pluginLines.length ? `Plugins:\n${input.pluginLines.map((line) => `- ${line}`).join("\n")}` : "",
     input.bot.memories.length ? `Memories:\n${input.bot.memories.map((item) => `- ${item}`).join("\n")}` : "",
+    input.memoryDoc?.trim() ? `${MEMORY_HEADING}\n${input.memoryDoc.trim()}` : "",
     input.library.length ? `Files:\n${input.library.map((file) => `## ${file.name}\n${file.text.slice(0, 2000)}`).join("\n\n")}` : "",
     tools.length ? `Connector tools:\n${tools.join("\n")}` : "No connector tools are available.",
     `PowerShell may run in the workspace after the user approves. These auto-review rules let a command run without a prompt only when it matches a rule exactly, or a rule covers its start and the whole command fits a built-in read-only form: ${input.allow.join(", ") || "(none)"}.`,

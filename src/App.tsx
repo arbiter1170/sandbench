@@ -111,6 +111,7 @@ import {
   continuationText,
   decisionPrompt,
   guardAction,
+  requestAsksForTrigger,
   holdForPerson,
   inFolder,
   interpretResult,
@@ -1408,6 +1409,7 @@ export function App({ user }: { user: User }) {
     const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
     if (!capped && route.ready) {
       try {
+        const [library, memoryDoc] = await Promise.all([readLibrary(bot.id), memoryDocFor(bot.id)]);
         const raw = await completeText({
           messages: [
             {
@@ -1417,11 +1419,12 @@ export function App({ user }: { user: User }) {
                 request,
                 connectors,
                 allow: studioRef.current.autoApprove,
-                library: await readLibrary(bot.id),
+                library,
                 pluginLines: pluginLinesFor(bot),
                 finished,
                 shared: room?.memberIds ? room.sharedInstructions : undefined,
                 memorySaves: !runnerMode,
+                memoryDoc,
               }),
             },
           ],
@@ -2205,6 +2208,7 @@ export function App({ user }: { user: User }) {
                   finished: [],
                   shared,
                   memorySaves: !runnerMode,
+                  memoryDoc,
                 }),
               },
             ],
@@ -2217,7 +2221,9 @@ export function App({ user }: { user: User }) {
           const decision = parseModelDecision(raw, botConnectors);
           if (decision && genRef.current === generation) {
             modelAnswer = decision.answer;
-            modelTrigger = decision.trigger;
+            // A routine or webhook only when the person asked for one (see requestAsksForTrigger).
+            modelTrigger = decision.trigger && requestAsksForTrigger(cleaned) ? decision.trigger : undefined;
+            if (decision.trigger && !modelTrigger) appendThinking("The model proposed a routine or webhook, but your message did not ask for one, so none was created.");
             chosen = guardAction(bot, decision.action);
             appendThinking(chosen ? `The model chose ${actionLabel(chosen)}.` : "The model answered without a computer action.");
           }

@@ -1,7 +1,8 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { assembleBotSystem, memoryDocument } from "./prompt";
+import { assembleBotSystem, MEMORY_HEADING, memoryDocument } from "./prompt";
 import type { Approval, Bot } from "./types";
-import { actionForText, approvalFields, continuationText, decisionPrompt, holdForPerson, memoryStep, parseModelDecision, proposeMemory } from "./work";
+import { actionForText, approvalFields, continuationText, decisionPrompt, holdForPerson, memoryStep, parseModelDecision, proposeMemory, requestAsksForTrigger } from "./work";
 
 const DAY = new Date(2026, 10, 5, 15, 0, 0);
 
@@ -89,6 +90,34 @@ describe("bot memory saves", () => {
     const input = { bot, request: "hi", connectors: [], allow: [], library: [], pluginLines: [], finished: [] };
     expect(decisionPrompt(input)).toContain('"kind":"memory"');
     expect(decisionPrompt({ ...input, memorySaves: false })).not.toContain('"kind":"memory"');
+  });
+
+  it("the step that picks the next action reads the bot's saved notes, labelled as information", () => {
+    const input = { bot, request: "hi", connectors: [], allow: [], library: [], pluginLines: [], finished: [] };
+    const doc = memoryDocument([{ path: "memory/log/2026-11-05.md", content: "- The demo builds with npm run build. <!-- save:33333333-cccc -->" }]);
+    const prompt = decisionPrompt({ ...input, memoryDoc: doc });
+    expect(prompt).toContain(`${MEMORY_HEADING}\n## memory/log/2026-11-05.md\n- The demo builds with npm run build.`);
+    expect(decisionPrompt(input)).not.toContain(MEMORY_HEADING);
+    expect(decisionPrompt({ ...input, memoryDoc: "  " })).not.toContain(MEMORY_HEADING);
+    // Both the first step and each step after a result pass it in.
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    const calls = [...app.matchAll(/decisionPrompt\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
+    expect(calls).toHaveLength(2);
+    for (const call of calls) expect(call).toMatch(/\bmemoryDoc,/);
+    expect(app).toMatch(/const \[library, memoryDoc\] = await Promise\.all\(\[readLibrary\(bot\.id\), memoryDocFor\(bot\.id\)\]\);/);
+  });
+
+  it("a routine or webhook the model proposes is created only when the person's message asks for one", () => {
+    // Saved notes, files and command output reach the decision prompt; a schedule written there
+    // must not become an enabled routine with no card.
+    for (const asked of ["check the build every 30 minutes", "Remind me weekdays at 9:00 to stretch", "set up a webhook for deploys", "do this daily", "Make it a routine", "whenever a PR opens, summarise it"]) {
+      expect(requestAsksForTrigger(asked), asked).toBe(true);
+    }
+    for (const plain of ["hi", "what's the build status?", "summarise my notes", "run the tests", "everything ok?"]) {
+      expect(requestAsksForTrigger(plain), plain).toBe(false);
+    }
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    expect(app).toMatch(/modelTrigger = decision\.trigger && requestAsksForTrigger\(cleaned\) \? decision\.trigger : undefined;/);
   });
 
   it("today's log reaches the prompt even when older logs and topic files would fill the 8 slots", () => {
