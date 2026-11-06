@@ -130,7 +130,14 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets, w
       current: "",
     };
     publish(id, { type: "turn_start", driver: driver.id, ...(where ? { cwd } : {}) });
-    const handle = driver.startTurn(turn, io);
+    let handle;
+    try {
+      handle = driver.startTurn(turn, io);
+    } catch (error) {
+      // The turn never started, so its done promise will never remove the connector file.
+      mcp?.release();
+      throw error;
+    }
     turns.set(id, { controller, handle });
     if (mcp?.servers.length) {
       publish(id, { type: "thinking", text: `Connectors for this turn: ${mcp.servers.map((item) => item.connector).join(", ")}. Each tool asks for approval.` });

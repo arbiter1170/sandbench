@@ -113,6 +113,39 @@ test("untested, secret-bearing, off-machine and malformed connectors fail closed
   }
 });
 
+test("a $ in a url or header value fails closed, because Claude Code fills ${NAME} from the harness's environment", () => {
+  const registry = createConnectorRegistry({ dir });
+  registry.sync({
+    connectors: [
+      connector("env-url", { url: "http://127.0.0.1:9/mcp/${FAKE_SECRET}" }),
+      connector("env-query", { url: "https://mcp.example.test/x?k=$FAKE_SECRET" }),
+      connector("env-host", { url: "https://${FAKE_SECRET}.example.test/" }),
+      connector("env-header", { headers: [{ key: "Authorization", value: "Bearer ${FAKE_SECRET:-x}" }] }),
+      connector("plain", { headers: [{ key: "X-Client", value: "sandbench" }] }),
+    ],
+    bots: { "bot-a": ["env-url", "env-query", "env-host", "env-header", "plain"] },
+  });
+  const attached = registry.attach({ turnId: "ccccccccccccccc3", botId: "bot-a" });
+  try {
+    assert.deepEqual(attached.servers.map((item) => item.connector), ["Notes plain"]);
+    assert.deepEqual(attached.skipped.map((item) => item.name), ["Notes env-url", "Notes env-query", "Notes env-host", "Notes env-header"]);
+    for (const item of attached.skipped) assert.match(item.reason, /\$ in it/);
+    assert.equal(readFileSync(attached.file, "utf8").includes("$"), false);
+  } finally {
+    attached.release();
+  }
+});
+
+test("files left by a harness that stopped mid-turn are removed when the next one starts", () => {
+  const leftovers = mkdtempSync(path.join(tmp, "leftovers-"));
+  writeFileSync(path.join(leftovers, "aaaaaaaaaaaaaaa1.mcp.json"), "{}");
+  writeFileSync(path.join(leftovers, "turn.approved.json"), "[]");
+  createConnectorRegistry({ dir: leftovers });
+  assert.deepEqual(readdirSync(leftovers), ["turn.approved.json"]);
+  // A folder that does not exist yet is fine.
+  createConnectorRegistry({ dir: path.join(leftovers, "missing") });
+});
+
 test("sync answers with counts only, never urls or headers", () => {
   const registry = createConnectorRegistry({ dir });
   const reply = JSON.stringify(registry.sync({ connectors: [connector("c-a", { headers: [{ key: "Authorization", value: "Bearer {{NOTES_TOKEN}}" }] })], bots: { "bot-a": ["c-a"] } }));
@@ -166,6 +199,26 @@ test("the engine hands the bot's config to Claude turns only, and ignores extras
     feed.close();
   });
   assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith(".mcp.json")), []);
+});
+
+test("a Claude turn that fails to start leaves no connector file behind", () => {
+  const registry = createConnectorRegistry({ dir });
+  registry.sync({ connectors: [connector("c-a", { headers: [{ key: "X-Token", value: "pasted-fake-token" }] })], bots: { "bot-a": ["c-a"] } });
+  const index = DRIVERS.findIndex((item) => item.id === "claude");
+  const original = DRIVERS[index];
+  DRIVERS[index] = {
+    ...original,
+    startTurn: () => {
+      throw new Error("no CLI here");
+    },
+  };
+  try {
+    const turns = createTurns({ runShell: async () => ({ code: 0, stdout: "", stderr: "" }), resolveFolder: () => tmp });
+    assert.throws(() => turns.start({ driver: "claude", prompt: "hi", botId: "bot-a" }, { connectors: registry }), /no CLI here/);
+    assert.deepEqual(readdirSync(dir).filter((name) => name.endsWith(".mcp.json")), []);
+  } finally {
+    DRIVERS[index] = original;
+  }
 });
 
 test("non-Claude drivers never get a connector config", async () => {

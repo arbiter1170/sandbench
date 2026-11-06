@@ -6,8 +6,10 @@
 // Header secrets ({{NAME}} values from the secret store) are never resolved here: the CLI
 // would read them from that file on disk. A connector whose headers need one is left out of
 // Claude turns, with the reason shown, until there is a decided way to hand secrets to the CLI.
+// The CLI itself fills `${NAME}` in that file from the harness's environment, where stored
+// keys can be too, so a `$` anywhere in a url or header value leaves the connector out as well.
 // The runner passes no registry, so runner turns get no connectors from this module.
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 const MAX_CONNECTORS = 50;
@@ -15,7 +17,10 @@ const MAX_HEADERS = 20;
 const ID = /^[\w-]{1,80}$/;
 const HEADER_NAME = /^[A-Za-z0-9-]{1,64}$/;
 const SECRET_REF = /\{\{/;
+// The CLI expands ${NAME} and ${NAME:-default} in --mcp-config values; any `$` fails closed.
+const ENV_REF = /\$/;
 const SAFE_PATH = /^[\w.:\\/@-]+$/;
+const STALE = /^[\w-]{1,80}\.mcp\.json$/;
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]"]);
 
 /** Why a connector url can't go to the CLI, or "" when it can (https, or http on this computer). */
@@ -28,6 +33,7 @@ export function urlProblem(raw) {
     return "The url is not valid.";
   }
   if (url.username || url.password) return "The url has a user name or password in it.";
+  if (ENV_REF.test(raw)) return "The url has a $ in it, which Claude Code would fill from this computer's environment.";
   if (url.protocol === "https:") return "";
   if (url.protocol === "http:" && LOOPBACK.has(url.hostname)) return "";
   return "Only https urls, or http on this computer, can be used.";
@@ -55,6 +61,10 @@ function readConnector(item) {
       entry.skip = "A header name or value is not valid.";
       continue;
     }
+    if (ENV_REF.test(value)) {
+      entry.skip ||= "A header value has a $ in it, which Claude Code would fill from this computer's environment.";
+      continue;
+    }
     if (SECRET_REF.test(value)) {
       entry.skip ||= "It needs a stored secret, and local Claude turns don't pass secrets to the CLI yet.";
       continue;
@@ -66,6 +76,13 @@ function readConnector(item) {
 }
 
 export function createConnectorRegistry({ dir }) {
+  // A turn's file is removed when it ends; one left by a harness that was killed mid-turn may
+  // hold a pasted header value, so files from before this start are removed now.
+  try {
+    for (const name of readdirSync(dir)) if (STALE.test(name)) rmSync(path.join(dir, name), { force: true });
+  } catch {
+    // No folder yet.
+  }
   let connectors = new Map();
   let bots = new Map();
 
