@@ -8,7 +8,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { translate, type Key } from "../i18n";
 import { Workspace } from "../shell";
-import { defaultSettings, defaultStudio, type Bot, type Message, type Thread } from "../types";
+import { recordDeny } from "../approvalView";
+import { DROPPED, IN_FLIGHT, REFUSED_ELSEWHERE, settleMessage, stoppedCard } from "../turnRecovery";
+import { defaultSettings, defaultStudio, type Approval, type Bot, type Message, type Thread } from "../types";
 import { blankBot } from "../work";
 import "../styles.css";
 
@@ -17,6 +19,8 @@ const bot: Bot = { ...blankBot("North", "General", true), id: "north", createdAt
 // ?scenario=channel: a group chat with mixed agents, a long folder name and a reachable harness
 // (synthetic), for the context line's layout. The default page has no harness.
 const channelScenario = new URLSearchParams(location.search).get("scenario") === "channel";
+// ?scenario=cards: one approval card per ending (UX P3), for the card layout and contrast checks.
+const cardsScenario = new URLSearchParams(location.search).get("scenario") === "cards";
 const members: Bot[] = [
   { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
   { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
@@ -66,7 +70,7 @@ const messages: Message[] = [
     role: "assistant",
     text: "",
     approval: {
-      command: "WebSearch",
+      command: "WebSearch Sandbench sandboxed agent workbench",
       reason: "Claude Code asked to use WebSearch.",
       status: "approved",
       permissionId: "p1",
@@ -102,6 +106,26 @@ const messages: Message[] = [
     },
   }),
 ];
+
+// Synthetic cards, one per ending the page can tell apart. The texts the harness or the page's
+// turn recovery would leave on a card come from turnRecovery.ts, so they match the real ones.
+const claude = (tool: string, command: string, patch: Partial<Approval>): Approval => ({ command, reason: `Claude Code asked to use ${tool}.`, status: "pending", permissionId: `p-${tool}-${at}`, ...patch });
+const cardApprovals: Approval[] = [
+  claude("WebFetch", "WebFetch https://example.org/guide", {}),
+  claude("Bash", `Get-ChildItem -Force "${WIN_PATH}\\walklings-team"`, { status: "approved", exitCode: 0, output: `${WIDE_LINE}\nnotes.md` }),
+  claude("Bash", "Get-ChildItem notes -Filter *.md", { status: "approved", output: "The agent ran this step itself; its result is in the reply." }),
+  claude("Bash", "npm test", { status: "approved", output: IN_FLIGHT }),
+  claude("Bash", "npm run lint", { status: "approved", exitCode: 2, output: "2 problems" }),
+  claude("WebSearch", "WebSearch sandboxed agent workbench", { status: "denied" }),
+  stoppedCard(claude("Write", "Write notes/today.md", {}), true),
+  stoppedCard(claude("Edit", "Edit notes/today.md", {}), false),
+  claude("mcp__docs__search", 'mcp__docs__search {"q":"agent sandbox"}', { status: "failed", output: REFUSED_ELSEWHERE }),
+  settleMessage({ ...message({ role: "assistant", text: "" }), approval: claude("PowerShell", "Remove-Item notes\\old.md", {}) }, DROPPED).approval!,
+  { command: "Write notes/plan.md", reason: "Save the plan.", status: "unavailable", file: { path: "notes/plan.md", op: "write", preview: "# Plan" } },
+];
+const cardMessages: Message[] = cardApprovals.map((approval) => message({ role: "assistant", text: "", approval }));
+// This card's Deny was pressed in this tab, so it reads "Denied by you".
+recordDeny(cardMessages[5].id, at);
 
 const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages, botId: bot.id };
 const channel: Thread = { id: "channel-1", title: "walklings-team", updatedAt: at, messages: [], memberIds: members.map((item) => item.id), workingFolder: "walklings-team/a-rather-long-project-folder-name" };
@@ -139,7 +163,7 @@ function Fixture() {
       onRecheckHarness={() => new Promise((resolve) => setTimeout(() => resolve(false), 300))}
       runner={false}
       callActive={false}
-      messages={channelScenario ? [] : messages}
+      messages={channelScenario ? [] : cardsScenario ? cardMessages : messages}
       onApproval={noop}
       onCreateChannel={noop}
       onSendChannel={noop}

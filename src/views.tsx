@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { approvalView, deniedAt, recordDeny, type CardIcon } from "./approvalView";
 import { CAPABILITIES, needsLabel, type CapabilityState } from "./capabilities";
 import { getBlob } from "./db";
 import { fromDateTimeLocal, toDateTimeLocal } from "./device";
@@ -178,6 +179,7 @@ export function BlobMedia({ id, name, kind }: { id: string; name: string; kind: 
 
 function QuestionCard({ approval, t, onDecide }: { approval: Approval; t: Copy; onDecide?: (approve: boolean, answer?: string) => void }) {
   const question = approval.question!;
+  const titleId = useId();
   const [picked, setPicked] = useState<string[]>([]);
   const [typed, setTyped] = useState("");
   const options = question.options ?? [];
@@ -188,9 +190,9 @@ function QuestionCard({ approval, t, onDecide }: { approval: Approval; t: Copy; 
   const label =
     approval.status === "pending" ? t("questionPending") : approval.status === "approved" ? t("questionAnswered") : t("questionDismissed");
   return (
-    <section className={`approval question ${approval.status}`} aria-label={t("question")}>
+    <section className={`approval question ${approval.status}`} role="group" aria-labelledby={`${titleId}-q`}>
       <header>
-        <strong>{t("question")}</strong>
+        <strong id={`${titleId}-q`}>{t("question")}</strong>
         <span>{label}</span>
       </header>
       <p className="question-prompt">{question.prompt}</p>
@@ -265,42 +267,89 @@ function FilePreview({ approval, t }: { approval: Approval; t: Copy }) {
   );
 }
 
-function ApprovalCard({ approval, t, onDecide }: { approval: Approval; t: Copy; onDecide?: (approve: boolean, answer?: string) => void }) {
-  if (approval.question) return <QuestionCard approval={approval} t={t} onDecide={onDecide} />;
-  const label =
-    approval.status === "pending"
-      ? t("approvalPending")
-      : approval.status === "approved"
-        ? approval.auto
-          ? t("approvalAuto")
-          : t("approvalApproved")
-        : approval.status === "denied"
-          ? t("approvalDenied")
-          : approval.status === "failed"
-            ? t("approvalFailed")
-            : t("harnessOff");
+const CARD_ICON_PATHS: Record<CardIcon, string> = {
+  clock: "M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13M8 4.5V8l2.5 1.8",
+  check: "M2.5 8.5l3.5 3.5l7.5-8",
+  dots: "M3 8h.01M8 8h.01M13 8h.01",
+  cross: "M3.5 3.5l9 9M12.5 3.5l-9 9",
+  slash: "M8 1.5a6.5 6.5 0 1 0 0 13a6.5 6.5 0 1 0 0-13M3.4 12.6l9.2-9.2",
+  stop: "M3.5 3.5h9v9h-9z",
+  question: "M5.8 5.8a2.3 2.3 0 1 1 3.2 2.1c-.6.3-1 .8-1 1.5v.6M8 12.5h.01",
+  unlink: "M6.5 9.5l-2 2a2.1 2.1 0 0 1-3-3l2-2M9.5 6.5l2-2a2.1 2.1 0 0 1 3 3l-2 2M2 2l12 12",
+  minus: "M3 8h10",
+};
+
+/** A shape for each card ending, beside its word: state is never shown by colour alone. */
+function CardIconShape({ icon }: { icon: CardIcon }) {
   return (
-    <section className={`approval ${approval.status}`} aria-label={t("approval")}>
+    <svg className={`approval-icon icon-${icon}`} viewBox="0 0 16 16" width="16" height="16" aria-hidden="true" focusable="false">
+      <path d={CARD_ICON_PATHS[icon]} fill="none" stroke="currentColor" strokeWidth={icon === "dots" ? 3 : 1.6} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function ApprovalCard({ approval, cardId, t, onDecide }: { approval: Approval; cardId: string; t: Copy; onDecide?: (approve: boolean, answer?: string) => void }) {
+  const ids = useId();
+  if (approval.question) return <QuestionCard approval={approval} t={t} onDecide={onDecide} />;
+  const view = approvalView(approval, t, { deniedAt: deniedAt(cardId) });
+  const titleId = `${ids}-title`;
+  const stateId = `${ids}-state`;
+  const scopeId = `${ids}-scope`;
+  // A group named by its title; the ending and what an approval covers are its description.
+  // Nothing here takes focus: a new card waits for the person to reach it.
+  return (
+    <section
+      className={`approval ${approval.status} ending-${view.ending}`}
+      role="group"
+      aria-labelledby={titleId}
+      aria-describedby={`${stateId} ${scopeId}`}
+      data-ending={view.ending}
+    >
       <header>
-        <strong>{t("approval")}</strong>
-        <span>{label}</span>
+        <strong id={titleId}>{view.title}</strong>
+        <span className="approval-state" id={stateId}>
+          <CardIconShape icon={view.icon} />
+          <span>{view.label}</span>
+        </span>
       </header>
-      <code>{approval.command}</code>
-      <p>{approval.reason}</p>
+      <dl className="approval-fields">
+        {view.fields.map((item) => (
+          <div key={item.id} className={`approval-field field-${item.id}`}>
+            <dt>{item.label}</dt>
+            <dd>
+              {item.code ? <code>{item.value}</code> : item.value}
+              {item.note ? <small className="hint"> {item.note}</small> : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {view.detail ? <p className="approval-detail">{view.detail}</p> : null}
+      <p className="approval-scope" id={scopeId}>
+        <strong>{view.scopeLabel}</strong> {view.scope}
+      </p>
       {approval.file ? <FilePreview approval={approval} t={t} /> : null}
       {approval.memory ? (
         <details open={approval.status === "pending"}>
-          <summary>{t("memorySavePreview").replace("{path}", approval.memory.destination)}</summary>
+          <summary>{t("acNotePreview")}</summary>
           <pre className="wrap">{approval.memory.note}</pre>
         </details>
       ) : null}
-      {approval.status === "pending" && onDecide ? (
-        <div className="approval-actions">
-          <button type="button" className="primary" onClick={() => onDecide(true)}>{t("approve")}</button>
-          <button type="button" onClick={() => onDecide(false)}>{t("deny")}</button>
+      {view.timeout ? <p className="approval-timeout">{view.timeout}</p> : null}
+      {view.decidable && onDecide ? (
+        <div className="approval-actions decide">
+          <button type="button" className="primary" onClick={() => onDecide(true)}>{view.approveLabel}</button>
+          <button
+            type="button"
+            onClick={() => {
+              recordDeny(cardId);
+              onDecide(false);
+            }}
+          >
+            {view.denyLabel}
+          </button>
         </div>
       ) : null}
-      {approval.output !== undefined ? (
+      {view.showOutput ? (
         <details open>
           <summary>{t("output")}{approval.exitCode !== undefined ? ` · ${t("exitCode")} ${approval.exitCode}` : ""}</summary>
           <pre className={approval.tool ? "wrap" : undefined}>{approval.output || t("noOutput")}</pre>
@@ -411,7 +460,7 @@ export function MessageBody({
         </details>
       ) : null}
       {message.text ? <MarkdownView text={message.text} t={t} streaming={message.status === "streaming"} /> : null}
-      {message.approval ? <ApprovalCard approval={message.approval} t={t} onDecide={onApproval} /> : null}
+      {message.approval ? <ApprovalCard approval={message.approval} cardId={message.id} t={t} onDecide={onApproval} /> : null}
       {message.trigger && trigger !== undefined ? (
         <TriggerCard info={trigger} t={t} onPatch={(patch) => onTriggerPatch?.(patch)} onUndo={() => onTriggerUndo?.()} />
       ) : null}
