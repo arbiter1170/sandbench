@@ -26,6 +26,17 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 9 · 2026-11-05 · Claude Code gate: one approval per exact call (sixth review) · review fix
+- **Branch / PR / head sha:** `claude/claude-gate-hardening` · no PR yet · code head `2add037` (final head after this log commit is in the session summary)
+- **Checks on the head:** not run in CI yet (no PR).
+- **What was done:** a sixth independent review (live Claude Code 2.1.318 turns against a fake model, fake key, scratch HOME) found the shell gate held, plus: (1) one approved WebFetch let every later WebFetch in the turn run with no card (Claude Code's rule was the bare name), and the same for WebSearch, NotebookEdit and MCP tools; (2) an approved Write or Edit never ran (`Write(/abs/path)` does not match); (3) a subagent's refused call never becomes a card (fails closed); (4) Windows hook quoting unverified. Fixed (1) and (2): the hook now also sees WebFetch, WebSearch, Write, Edit, MultiEdit, NotebookEdit and `mcp__` tools and keys each approval to the exact URL, query, file or arguments; Claude Code's rule for these is the bare name. The hook has `onFailure: "block"`, so a hook that crashes or times out blocks its call. (3) and (4) are documented.
+- **Tests run (real results):** `npm run typecheck` clean; vitest 52 passed; `node --test harness/test/*.test.mjs` 139 pass, 0 fail. Driver and hook mutations: 31, all caught. Live: approve WebFetch one, then WebFetch one runs and WebFetch two gets its own card; approved Write creates the file, denied Write does not; a hook made to sleep past a 1 s timeout blocks the call and the model saw only the hook error; Bash approve, deny and Monitor unchanged.
+- **Not run / could not run:** DB tests, compose, gitleaks, a real Windows run, a live MCP server.
+- **Decisions made and why:** a Write or Edit approval covers that file for the rest of the turn (the card shows the path, not the content), rather than the exact content, which the model may not repeat byte for byte.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** 1. Open this branch as a PR. 2. Read, Grep and Glob are still outside the gate.
+- **Next step:** PR and CI once Vincent agrees.
+
 ### Session 9 · 2026-11-05 20:05 ET · Claude Code gate hardening, missed by the #29 merge · review fix
 - **Branch / PR / head sha:** `claude/claude-gate-hardening` · no PR yet · code head `4b66da0` (final head after this log commit is in the session summary)
 - **Checks on the head:** not run yet.
