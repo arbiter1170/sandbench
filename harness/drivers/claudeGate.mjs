@@ -40,6 +40,10 @@ export const ASK = { hookSpecificOutput: { hookEventName: "PreToolUse", permissi
  */
 export function gateKey(tool, input) {
   if (typeof tool !== "string" || !tool) return null;
+  // A connector (MCP) tool is keyed on its whole input, even when one of its arguments is named
+  // `command`: keyed as Bash(<command>), one approval would let the same tool run with any other
+  // arguments, and a Bash approval for that command would let the connector through.
+  if (/^mcp__.+/.test(tool)) return input && typeof input === "object" && !Array.isArray(input) ? `${tool}(${stable(input)})` : null;
   const command = input?.command;
   if (typeof command === "string") return command ? `${tool === "PowerShell" ? "PowerShell" : "Bash"}(${command})` : null;
   if (GATED_TOOLS.includes(tool)) return null;
@@ -47,7 +51,6 @@ export function gateKey(tool, input) {
   if (tool === "WebFetch") return named(input?.url);
   if (tool === "WebSearch") return named(input?.query);
   if (["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(tool)) return named(input?.file_path ?? input?.notebook_path);
-  if (/^mcp__.+/.test(tool)) return input && typeof input === "object" && !Array.isArray(input) ? `${tool}(${stable(input)})` : null;
   const target = input?.file_path ?? input?.path;
   return typeof target === "string" && target ? `${tool}(${target})` : tool;
 }
