@@ -3,6 +3,7 @@ import { routeFor } from "./assistant";
 import { BotMark } from "./bots";
 import { chatAgent } from "./chatContext";
 import { ChatContext, type ContextMember } from "./chatContextView";
+import { coarsePointer, enterSends } from "./composerKeys";
 import { defaultAgentOption, setupRows, type MemoryState, type SetupLink, type SkillsOnDisk } from "./effectiveSetup";
 import { harnessBotMemory, harnessSkills, harnessWriteBotMemory, harnessWriteBotSoul, type AgentDriver, type HarnessHealth } from "./harness";
 import type { Key } from "./i18n";
@@ -602,8 +603,10 @@ export function Workspace(props: {
                   value={draft}
                   placeholder={t("messageBot")}
                   onChange={(event) => props.onDraft(event.target.value)}
+                  enterKeyHint="enter"
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    // UX P4: phones and tablets get a newline (Send sends); never send mid-IME.
+                    if (enterSends({ key: event.key, shiftKey: event.shiftKey, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode, coarse: coarsePointer() })) {
                       event.preventDefault();
                       send(draft);
                     }

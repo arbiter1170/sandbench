@@ -7,7 +7,9 @@
 // What it asserts, at phone widths and on the desktop with the side panel: the page and the
 // message list never scroll sideways, every bubble holds its own content (long inline Windows
 // paths, separators, links), approval cards stay inside their bubble with their buttons on
-// screen, and only the preformatted tool output scrolls, inside its own panel.
+// screen, and only the preformatted tool output scrolls, inside its own panel. UX P1 adds the
+// context line and its sheet; UX P4 adds touch targets, primary-button contrast, reflow at 320 px
+// and 200% zoom, the composer's Enter key and the soft-keyboard inset (see "phone basics").
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, statSync } from "node:fs";
 import { createServer } from "node:http";
@@ -279,4 +281,328 @@ describe("chat context sheet", () => {
       assert.equal(line.agent, "Mixed agents");
     });
   }
+});
+
+// UX P4: phone basics (spec §6 P4, §11). Touch contexts emulate a phone: `(pointer: coarse)` and
+// `(hover: none)` match, as on a real one. Soft keyboards, IME and real zoom stay manual (§9).
+const TOUCH = { hasTouch: true, isMobile: true };
+const PHONES = VIEWPORTS.filter((viewport) => !viewport.wide);
+const NARROW = { name: "phone-320", width: 320, height: 640, wide: false };
+// 1280 x 800 at 200% browser zoom lays out as 640 x 400 CSS px.
+const ZOOM_200 = { name: "zoom-200", width: 640, height: 400, wide: false };
+
+async function openPage(viewport, { touch = false, query = "" } = {}) {
+  const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1, ...(touch ? TOUCH : {}) });
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", (error) => errors.push(String(error)));
+  await page.goto(`${base}${query}`, { waitUntil: "load", timeout: 20_000 });
+  await page.waitForSelector(".chat-context", { timeout: 10_000 });
+  await page.evaluate(() => document.fonts.ready);
+  return { context, page, errors };
+}
+
+// Runs in the page: every visible control under 44 x 44 CSS px, or drawn nearly invisible.
+function smallTargets() {
+  const controls = 'button, a[href], select, input:not([type="hidden"]), textarea, summary, [role="tab"], [tabindex]:not([tabindex="-1"])';
+  const label = (el) => `${el.tagName.toLowerCase()}${el.className && typeof el.className === "string" ? `.${el.className.trim().split(/\s+/).join(".")}` : ""}${el.getAttribute("aria-label") ? `[${el.getAttribute("aria-label")}]` : el.textContent?.trim() ? ` "${el.textContent.trim().slice(0, 24)}"` : ""}`;
+  const bad = [];
+  let checked = 0;
+  for (const el of document.querySelectorAll(controls)) {
+    if (el.closest(".skip, .sr-only, [hidden]")) continue;
+    // Inline links inside message text are exempt (WCAG 2.5.5 "inline").
+    if (el.matches(".markdown a")) continue;
+    const target = (el.matches('input[type="checkbox"], input[type="radio"]') && el.closest("label")) || el;
+    const box = target.getBoundingClientRect();
+    if (box.width < 2 || box.height < 2) continue;
+    let opacity = 1;
+    let shown = true;
+    for (let node = el; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden") shown = false;
+      opacity *= Number(style.opacity);
+    }
+    if (!shown) continue;
+    checked += 1;
+    if (opacity < 0.5) bad.push(`${label(el)} is nearly invisible (opacity ${opacity})`);
+    else if (box.width < 43.5 || box.height < 43.5) bad.push(`${label(el)} is ${Math.round(box.width)}x${Math.round(box.height)}`);
+  }
+  return { checked, bad };
+}
+
+function luminance([r, g, b]) {
+  const channel = (value) => {
+    const c = value / 255;
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+  };
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+function contrast(a, b) {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+// Runs in the page: the computed colours of a button and of the surface it sits on.
+function buttonColours(selector) {
+  const rgb = (value) => {
+    const parts = value.match(/[\d.]+/g)?.map(Number) ?? [];
+    return { rgb: parts.slice(0, 3), alpha: parts.length > 3 ? parts[3] : 1 };
+  };
+  const button = document.querySelector(selector);
+  let surface = button.parentElement;
+  while (surface && rgb(getComputedStyle(surface).backgroundColor).alpha === 0) surface = surface.parentElement;
+  const style = getComputedStyle(button);
+  return {
+    text: rgb(style.color),
+    fill: rgb(style.backgroundColor),
+    border: rgb(style.borderTopColor),
+    outline: { colour: rgb(style.outlineColor), style: style.outlineStyle, width: parseFloat(style.outlineWidth), offset: parseFloat(style.outlineOffset) },
+    opacity: Number(style.opacity),
+    surface: rgb(surface ? getComputedStyle(surface).backgroundColor : "rgb(0,0,0)"),
+    surfaceName: surface?.className || surface?.tagName,
+    focusVisible: button.matches(":focus-visible"),
+  };
+}
+
+describe("phone basics (UX P4)", () => {
+  for (const viewport of PHONES) {
+    test(`${viewport.name}: on a coarse pointer every control in the chat, composer, dock, sheet, rail and side panel is at least 44x44 (P4-AC2, AC4)`, async () => {
+      const { context, page, errors } = await openPage(viewport, { touch: true });
+      const report = {};
+      assert.equal(await page.evaluate(() => matchMedia("(pointer: coarse)").matches), true, "the context has a coarse pointer");
+      report.chat = await page.evaluate(smallTargets);
+      // The composer's attach row.
+      await page.tap('.composer-bar .icon-btn[aria-expanded="false"]');
+      await page.waitForSelector(".plus-row");
+      report.attach = await page.evaluate(smallTargets);
+      // The "How this chat runs" sheet.
+      await page.tap(".chat-context");
+      await page.waitForSelector(".ctx-sheet");
+      report.sheet = await page.evaluate(smallTargets);
+      await page.keyboard.press("Escape");
+      // The rail, through the dock. The bot menu button is shown without hover.
+      await page.tap(".dock button >> nth=0");
+      await page.waitForSelector(".rail .bot-link");
+      report.rail = await page.evaluate(smallTargets);
+      const menu = await page.evaluate(() => {
+        const button = document.querySelector(".bot-menu-btn");
+        const box = button.getBoundingClientRect();
+        return { opacity: Number(getComputedStyle(button).opacity), width: box.width, height: box.height, right: box.right };
+      });
+      assert.equal(menu.opacity, 1, "the bot menu button is hidden until hover on touch");
+      assert.ok(menu.right <= viewport.width + 0.5, "the bot menu button is off screen");
+      await page.tap(".bot-menu-btn");
+      await page.waitForSelector(".bot-menu");
+      report.botMenu = await page.evaluate(smallTargets);
+      await page.tap(".bot-menu-btn");
+      // The side panel, each tab.
+      await page.tap(".dock button >> nth=2");
+      for (const tab of ["model", "customize", "work"]) {
+        await page.tap(`#panel-tab-${tab}`);
+        await page.waitForSelector(`#panel-${tab}`);
+        report[tab] = await page.evaluate(smallTargets);
+      }
+      await context.close();
+      assert.deepEqual(errors, [], "the fixture page threw");
+      for (const [view, { checked, bad }] of Object.entries(report)) {
+        assert.ok(checked > 0, `no controls measured in ${view}`);
+        assert.deepEqual(bad, [], `${view}: controls under 44x44 on a coarse pointer`);
+      }
+    });
+  }
+
+  test("phone-390: on a coarse pointer the pending card's buttons are at least 44x44", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true });
+    await page.evaluate(() => document.querySelector(".approval.pending").scrollIntoView({ block: "center" }));
+    const boxes = await page.evaluate(() => [...document.querySelectorAll(".approval.pending button")].map((button) => button.getBoundingClientRect().toJSON()));
+    await context.close();
+    assert.equal(boxes.length, 2);
+    for (const box of boxes) assert.ok(box.width >= 43.5 && box.height >= 43.5, `a card button is ${box.width}x${box.height}`);
+  });
+
+  test("a fine pointer keeps the desktop sizes (the 44 px rules are coarse-only)", async () => {
+    const { context, page } = await openPage(PHONES[1]);
+    const sizes = await page.evaluate(() => ({
+      icon: document.querySelector(".composer-bar .icon-btn").getBoundingClientRect().height,
+      menuOpacity: Number(getComputedStyle(document.querySelector(".bot-menu-btn")).opacity),
+    }));
+    await context.close();
+    assert.ok(Math.abs(sizes.icon - 2.2 * 16) < 0.5, `the icon button is ${sizes.icon}px on a fine pointer`);
+    assert.equal(sizes.menuOpacity, 0, "the bot menu button still appears on hover on a fine pointer");
+  });
+
+  for (const viewport of [PHONES[1], VIEWPORTS[3]]) {
+    test(`${viewport.name}: the primary fill passes 4.5:1 at rest and on hover; its edge and focus ring pass 3:1 (P4-AC5)`, async () => {
+      const { context, page } = await openPage(viewport);
+      const results = [];
+      for (const selector of [".approval.pending button.primary", ".composer .send-orb"]) {
+        await page.evaluate((sel) => document.querySelector(sel).scrollIntoView({ block: "center" }), selector);
+        await page.mouse.move(0, 0);
+        const rest = await page.evaluate(buttonColours, selector);
+        await page.hover(selector);
+        const hover = await page.evaluate(buttonColours, selector);
+        await page.mouse.move(0, 0);
+        // Keyboard focus, so :focus-visible applies as it would for a keyboard user.
+        await page.evaluate((sel) => document.querySelector(sel).focus(), selector);
+        const focus = await page.evaluate(buttonColours, selector);
+        results.push({ selector, rest, hover, focus });
+      }
+      await context.close();
+      for (const { selector, rest, hover, focus } of results) {
+        assert.equal(rest.opacity, 1, `${selector} is dimmed`);
+        assert.deepEqual(rest.fill.rgb, [0xc8, 0x3a, 0x3a], `${selector} rest fill is --accent-fill`);
+        assert.deepEqual(hover.fill.rgb, [0xb8, 0x32, 0x32], `${selector} hover fill is --accent-fill-hover`);
+        const restText = contrast(rest.text.rgb, rest.fill.rgb);
+        const hoverText = contrast(hover.text.rgb, hover.fill.rgb);
+        assert.ok(restText >= 4.5, `${selector} text at rest is ${restText.toFixed(2)}:1`);
+        assert.ok(hoverText >= 4.5, `${selector} text on hover is ${hoverText.toFixed(2)}:1`);
+        // The border, not the darker fill, is the edge on hover (WCAG 1.4.11).
+        const edge = contrast(hover.border.rgb, hover.surface.rgb);
+        assert.ok(edge >= 3, `${selector} hover border on ${hover.surfaceName} is ${edge.toFixed(2)}:1`);
+        assert.equal(focus.focusVisible, true, `${selector} does not match :focus-visible`);
+        assert.equal(focus.outline.style, "solid");
+        assert.ok(focus.outline.width >= 2 && focus.outline.offset > 0, `${selector} focus ring is ${focus.outline.width}px at offset ${focus.outline.offset}`);
+        // The offset puts the ring on the surface around the button.
+        const ring = contrast(focus.outline.colour.rgb, focus.surface.rgb);
+        assert.ok(ring >= 3, `${selector} focus ring on ${focus.surfaceName} is ${ring.toFixed(2)}:1`);
+      }
+    });
+  }
+
+  for (const viewport of [NARROW, ...PHONES, ZOOM_200]) {
+    for (const scenario of ["", "?scenario=long", "?scenario=channel"]) {
+      test(`${viewport.name}${scenario ? ` ${scenario.slice(1)}` : ""}: no horizontal page scroll; the long command and path wrap inside their bubble and card (P4-AC1, AC6)`, async () => {
+        const { context, page, errors } = await openPage(viewport, { touch: true, query: scenario });
+        const facts = await page.evaluate(() => {
+          const rect = (el) => el.getBoundingClientRect();
+          const scroll = document.querySelector(".scroll");
+          const card = document.querySelector(".approval.pending");
+          return {
+            innerWidth,
+            scrollWidth: document.scrollingElement.scrollWidth,
+            list: { scrollWidth: scroll.scrollWidth, clientWidth: scroll.clientWidth },
+            composerRight: rect(document.querySelector(".composer")).right,
+            card: card ? { right: rect(card).right, code: rect(card.querySelector("code")).right, codeText: card.querySelector("code").textContent, buttons: [...card.querySelectorAll("button")].map((button) => rect(button).right) } : null,
+            msgs: [...document.querySelectorAll(".msg")].map((msg) => ({ scrollWidth: msg.scrollWidth, clientWidth: msg.clientWidth })),
+          };
+        });
+        await context.close();
+        assert.deepEqual(errors, []);
+        assert.ok(facts.scrollWidth <= facts.innerWidth, `the page scrolls sideways: ${facts.scrollWidth} > ${facts.innerWidth}`);
+        assert.ok(facts.list.scrollWidth <= facts.list.clientWidth, "the message list scrolls sideways");
+        assert.ok(facts.composerRight <= viewport.width + 0.5, "the composer runs past the window");
+        for (const msg of facts.msgs) assert.ok(msg.scrollWidth <= msg.clientWidth, "a bubble's content is wider than the bubble");
+        if (scenario === "?scenario=long") {
+          assert.ok(facts.card.codeText.length >= 120 && !/\s/.test(facts.card.codeText), "F-P4-a is a 120+ character run with no spaces");
+          assert.ok(facts.card.code <= facts.card.right + 0.5, "the long command runs past its card");
+          assert.equal(facts.card.buttons.length, 2);
+          for (const right of facts.card.buttons) assert.ok(right <= Math.min(facts.card.right, viewport.width) + 0.5, "a card button is off screen");
+        }
+      });
+    }
+  }
+
+  for (const scenario of ["", "?scenario=channel"]) {
+    test(`phone-320${scenario ? " channel" : ""}: the context line wraps to two rows and keeps the connection word whole`, async () => {
+      const lines = {};
+      for (const viewport of [NARROW, PHONES[0]]) {
+        const { context, page } = await openPage(viewport, { touch: true, query: scenario });
+        lines[viewport.name] = await page.evaluate(() => {
+          const button = document.querySelector(".chat-context");
+          const agent = [...button.querySelectorAll(".ctx-agent")].find((node) => getComputedStyle(node).display !== "none");
+          const word = button.querySelector(".ctx-conn");
+          const box = button.getBoundingClientRect();
+          const wordBox = word.getBoundingClientRect();
+          return {
+            height: box.height,
+            right: box.right,
+            buttonScroll: button.scrollWidth - button.clientWidth,
+            text: word.textContent,
+            cut: word.scrollWidth > word.clientWidth + 1,
+            wordRight: wordBox.right,
+            wordLeft: wordBox.left,
+            sameRow: Math.abs(wordBox.top - agent.getBoundingClientRect().top) < 2,
+            agentWidth: agent.getBoundingClientRect().width,
+            pageWidth: document.scrollingElement.scrollWidth,
+          };
+        });
+        await context.close();
+      }
+      const narrow = lines["phone-320"];
+      assert.match(narrow.text, scenario ? /Connected/ : /Local harness not reachable/);
+      assert.equal(narrow.cut, false, "the connection word is truncated at 320 px");
+      assert.equal(narrow.sameRow, false, "the connection word did not move to a second row at 320 px");
+      assert.ok(narrow.wordLeft >= 0 && narrow.wordRight <= narrow.right + 0.5, "the connection word runs past the line");
+      assert.ok(narrow.buttonScroll <= 1, "the line's content is wider than the line");
+      assert.ok(narrow.right <= 320.5, "the line runs past the window");
+      assert.ok(narrow.agentWidth >= 40, `the agent text is ${narrow.agentWidth}px wide`);
+      assert.ok(narrow.height >= 44, `the line is ${narrow.height}px tall`);
+      assert.ok(narrow.pageWidth <= 320, "the page scrolls sideways");
+      // P1's single row is unchanged from 360 px up.
+      assert.equal(lines["phone-360"].sameRow, true, "the line wrapped at 360 px");
+      assert.equal(lines["phone-360"].cut, false);
+    });
+  }
+
+  test("coarse pointer: Enter inserts a newline and only the Send button sends (P4-AC3)", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true });
+    await page.tap("#composer");
+    await page.keyboard.type("hello");
+    await page.keyboard.press("Enter");
+    await page.keyboard.type("there");
+    const typed = await page.evaluate(() => ({ value: document.querySelector("#composer").value, sent: [...window.__sent] }));
+    assert.equal(typed.value, "hello\nthere", "Enter did not insert a newline");
+    assert.deepEqual(typed.sent, [], "Enter sent the draft on a coarse pointer");
+    await page.tap(".composer .send-orb");
+    const after = await page.evaluate(() => ({ value: document.querySelector("#composer").value, sent: [...window.__sent] }));
+    await context.close();
+    assert.deepEqual(after.sent, ["hello\nthere"], "the Send button did not send");
+    assert.equal(after.value, "");
+  });
+
+  test("fine pointer: Enter sends, Shift+Enter inserts a newline, and Enter during IME composition never sends (P4-AC3)", async () => {
+    const { context, page } = await openPage(VIEWPORTS[3]);
+    await page.click("#composer");
+    await page.keyboard.type("hi");
+    await page.keyboard.press("Shift+Enter");
+    await page.keyboard.type("you");
+    assert.equal(await page.evaluate(() => document.querySelector("#composer").value), "hi\nyou");
+    assert.deepEqual(await page.evaluate(() => [...window.__sent]), [], "Shift+Enter sent");
+    // An Enter that commits an IME composition.
+    await page.evaluate(() => document.querySelector("#composer").dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", isComposing: true, bubbles: true, cancelable: true })));
+    assert.deepEqual(await page.evaluate(() => [...window.__sent]), [], "Enter during composition sent");
+    await page.keyboard.press("Enter");
+    const sent = await page.evaluate(() => [...window.__sent]);
+    await context.close();
+    assert.deepEqual(sent, ["hi\nyou"], "Enter did not send on a fine pointer");
+  });
+
+  test("phone-390: with the soft keyboard open the composer ends above it and the dock steps aside", async () => {
+    const { context, page } = await openPage(PHONES[1], { touch: true });
+    const measure = () => page.evaluate(() => ({
+      composerBottom: document.querySelector(".composer").getBoundingClientRect().bottom,
+      composerTop: document.querySelector(".composer").getBoundingClientRect().top,
+      dock: getComputedStyle(document.querySelector(".dock")).display,
+      innerHeight,
+    }));
+    const closed = await measure();
+    // What src/viewportFit.ts publishes for a 300 px keyboard (it is unit-tested on its own).
+    await page.evaluate(() => {
+      document.documentElement.style.setProperty("--keyboard-inset", "300px");
+      document.documentElement.dataset.keyboard = "open";
+    });
+    const open = await measure();
+    await page.evaluate(() => {
+      document.documentElement.style.removeProperty("--keyboard-inset");
+      delete document.documentElement.dataset.keyboard;
+    });
+    const again = await measure();
+    await context.close();
+    assert.equal(closed.dock, "grid");
+    assert.ok(closed.composerBottom <= closed.innerHeight + 0.5);
+    assert.equal(open.dock, "none", "the dock stays up while typing");
+    assert.ok(open.composerBottom <= open.innerHeight - 300 + 0.5, `the composer ends at ${open.composerBottom}, under the keyboard`);
+    assert.ok(open.composerTop >= 0, "the composer is pushed off the top");
+    assert.deepEqual(again, closed, "closing the keyboard did not restore the layout");
+  });
 });

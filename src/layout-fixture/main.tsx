@@ -4,11 +4,11 @@
 // preformatted tool output, and a pending approval. Nothing here is live data: no harness, no
 // sign-in, no real machine path. Not part of the app bundle (only this folder's index.html
 // imports it).
-import { StrictMode } from "react";
+import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { translate, type Key } from "../i18n";
 import { Workspace } from "../shell";
-import { defaultSettings, defaultStudio, type Bot, type Message, type Thread } from "../types";
+import { defaultSettings, defaultStudio, type Bot, type BotTask, type Message, type Reminder, type Routine, type Thread } from "../types";
 import { blankBot } from "../work";
 import "../styles.css";
 
@@ -17,6 +17,9 @@ const bot: Bot = { ...blankBot("North", "General", true), id: "north", createdAt
 // ?scenario=channel: a group chat with mixed agents, a long folder name and a reachable harness
 // (synthetic), for the context line's layout. The default page has no harness.
 const channelScenario = new URLSearchParams(location.search).get("scenario") === "channel";
+// ?scenario=long (UX P4): F-P4-a, a pending card whose command is one 175-character run with no
+// spaces, and F-P4-b, a 60-character Windows path under C:\Users\<you>\. Synthetic.
+const longScenario = new URLSearchParams(location.search).get("scenario") === "long";
 const members: Bot[] = [
   { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
   { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
@@ -103,30 +106,52 @@ const messages: Message[] = [
   }),
 ];
 
+const P4_COMMAND = `curl.exe--fail--silent--output=C:/Users/you/.sandbench/workspace/${"a".repeat(40)}/download.bin--url=https://example.test/${"b".repeat(30)}`;
+const P4_PATH = "C:\\Users\\<you>\\.sandbench\\workspace\\walkling-team\\notes\\a.md";
+const longMessages: Message[] = [
+  message({ role: "user", text: `Open \`${P4_PATH}\` and fetch the file` }),
+  message({ role: "assistant", text: `Reading ${P4_PATH} first.` }),
+  message({ role: "assistant", text: "", approval: { command: P4_COMMAND, reason: "Download the file.", status: "pending", permissionId: "p4" } }),
+];
+
 const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages, botId: bot.id };
 const channel: Thread = { id: "channel-1", title: "walklings-team", updatedAt: at, messages: [], memberIds: members.map((item) => item.id), workingFolder: "walklings-team/a-rather-long-project-folder-name" };
 const health = { ok: true, platform: "win32", host: "fixture", workspace: "C:\\Users\\<you>\\.sandbench\\workspace" };
 const drivers = [{ id: "claude", label: "Claude Code (local CLI)", ok: true, detail: "" }];
+// Work-tab rows (UX P4 measures their switches, checkboxes and buttons on touch).
+const routines: Routine[] = [
+  { id: "r1", botId: bot.id, title: "Morning summary", schedule: "daily 09:00", enabled: true },
+  { id: "r2", botId: bot.id, title: "Weekly tidy", schedule: "weekly mon 10:00", enabled: false },
+];
+const tasks: BotTask[] = [{ id: "k1", botId: bot.id, title: "Draft the notes", status: "queued", thinking: [], createdAt: 1 }];
+const reminders: Reminder[] = [{ id: "n1", title: "Water the plants", at: 1_700_000_600_000, done: false, botId: bot.id }];
 const settings = defaultSettings();
 const studio = { ...defaultStudio(), onboarded: true };
 const noop = () => undefined;
 
+// What the composer sent, for the UX P4 key checks (read by the layout test).
+const sent: string[] = [];
+(window as unknown as { __sent: string[] }).__sent = sent;
+
 function Fixture() {
   // The app's own breakpoint (App.tsx) decides rail + stage + inspector versus one pane.
   const wide = window.matchMedia("(min-width: 861px)").matches;
+  // The dock and the composer work, so the test can reach the rail and side panel and type.
+  const [focus, setFocus] = useState<"rail" | "chat" | "side">("chat");
+  const [draft, setDraft] = useState("");
   return (
     <Workspace
       t={t}
       wide={wide}
       inert={false}
-      focus="chat"
+      focus={focus}
       overlay={null}
       createNonce={0}
       bots={channelScenario ? [bot, ...members] : [bot]}
-      tasks={[]}
-      routines={[]}
+      tasks={tasks}
+      routines={routines}
       computer={[]}
-      reminders={[]}
+      reminders={reminders}
       threads={channelScenario ? [thread, channel] : [thread]}
       selectedId={bot.id}
       openThreadId={thread.id}
@@ -139,7 +164,7 @@ function Fixture() {
       onRecheckHarness={() => new Promise((resolve) => setTimeout(() => resolve(false), 300))}
       runner={false}
       callActive={false}
-      messages={channelScenario ? [] : messages}
+      messages={channelScenario ? [] : longScenario ? longMessages : messages}
       onApproval={noop}
       onCreateChannel={noop}
       onSendChannel={noop}
@@ -150,7 +175,7 @@ function Fixture() {
       onAddFiles={noop}
       onRemoveFile={noop}
       hub={null}
-      draft=""
+      draft={draft}
       hasPending={false}
       recording={false}
       listening={false}
@@ -163,7 +188,7 @@ function Fixture() {
       banner=""
       tools={null}
       settingsPanel={null}
-      onFocus={noop}
+      onFocus={setFocus}
       onOverlay={noop}
       onSelect={noop}
       onSelectThread={noop}
@@ -174,8 +199,11 @@ function Fixture() {
       onApplyTestProfile={noop}
       onDelete={noop}
       onDuplicate={noop}
-      onDraft={noop}
-      onSend={noop}
+      onDraft={setDraft}
+      onSend={(_botId, text) => {
+        sent.push(text);
+        setDraft("");
+      }}
       onStop={noop}
       onAddSection={noop}
       onPatchSettings={noop}
