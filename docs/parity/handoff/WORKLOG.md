@@ -48,6 +48,28 @@ ENTRIES START BELOW
 - **Open questions for Vincent or the Supervisor:** 1. `claude/claude-gate-hardening` (pushed, no PR) carries #29's last review round, which the squash merge missed; open it as a PR and merge before this one? 2. The time on that branch's WORKLOG entry says 20:05 ET; it was written at about 19:47 ET.
 - **Next step:** CI and an independent review of this PR, then the #27 carry-over.
 
+### Session 9 · 2026-11-05 · Claude Code gate: one approval per exact call (sixth review) · review fix
+- **Branch / PR / head sha:** `claude/claude-gate-hardening` · no PR yet · code head `2add037` (final head after this log commit is in the session summary)
+- **Checks on the head:** not run in CI yet (no PR).
+- **What was done:** a sixth independent review (live Claude Code 2.1.318 turns against a fake model, fake key, scratch HOME) found the shell gate held, plus: (1) one approved WebFetch let every later WebFetch in the turn run with no card (Claude Code's rule was the bare name), and the same for WebSearch, NotebookEdit and MCP tools; (2) an approved Write or Edit never ran (`Write(/abs/path)` does not match); (3) a subagent's refused call never becomes a card (fails closed); (4) Windows hook quoting unverified. Fixed (1) and (2): the hook now also sees WebFetch, WebSearch, Write, Edit, MultiEdit, NotebookEdit and `mcp__` tools and keys each approval to the exact URL, query, file or arguments; Claude Code's rule for these is the bare name. The hook has `onFailure: "block"`, so a hook that crashes or times out blocks its call. (3) and (4) are documented.
+- **Tests run (real results):** `npm run typecheck` clean; vitest 52 passed; `node --test harness/test/*.test.mjs` 139 pass, 0 fail. Driver and hook mutations: 31, all caught. Live: approve WebFetch one, then WebFetch one runs and WebFetch two gets its own card; approved Write creates the file, denied Write does not; a hook made to sleep past a 1 s timeout blocks the call and the model saw only the hook error; Bash approve, deny and Monitor unchanged.
+- **Not run / could not run:** DB tests, compose, gitleaks, a real Windows run, a live MCP server.
+- **Decisions made and why:** a Write or Edit approval covers that file for the rest of the turn (the card shows the path, not the content), rather than the exact content, which the model may not repeat byte for byte.
+- **Deviations from the plan:** none.
+- **Open questions for Vincent or the Supervisor:** 1. Open this branch as a PR. 2. Read, Grep and Glob are still outside the gate.
+- **Next step:** PR and CI once Vincent agrees.
+
+### Session 9 · 2026-11-05 20:05 ET · Claude Code gate hardening, missed by the #29 merge · review fix
+- **Branch / PR / head sha:** `claude/claude-gate-hardening` · no PR yet · code head `4b66da0` (final head after this log commit is in the session summary)
+- **Checks on the head:** not run yet.
+- **What was done:** #29 was squash-merged at `3d49fea`, so its fifth-review round (`2e8ab6a` on `claude/approval-rule-safety`, logged there) never reached `deploy/vercel`. On `912cefb` an unapproved Claude Code command that exits non-zero is not caught, and a `.claude/settings.json` in the turn folder can turn the approval hook off or replace its allow list. This branch carries `2e8ab6a` onto `912cefb` unchanged, except that the README keeps #30's "Limits today" paragraph.
+- **Tests run (real results):** `npm run typecheck` clean. `npm run test:web` → 52 passed. `npm run test:node` → 244 tests, 210 pass, 2 fail (`runner/test/screenshot.test.mjs`, `runner/test/ui-layout.test.mjs`: no `playwright` package in this container), 32 skipped. `npm run build` ok. Live Claude Code turn with a fake model, fake key and scratch HOME: `cat notes.txt` gets a card and runs after approval; with `{"disableAllHooks":true}` in the turn folder's `.claude/settings.json`, an unapproved `cat notes.txt missing.txt` still gets a card and does not run.
+- **Not run / could not run:** Postgres DB tests, compose + image, gitleaks (left to CI). No real Windows run.
+- **Decisions made and why:** a separate small PR rather than folding it into the #25 carry-over, so the security fix can merge on its own.
+- **Deviations from the plan:** not in the kickoff's order; it fixes HIGH findings on the merged base.
+- **Open questions for Vincent or the Supervisor:** 1. Open this as a PR now and merge before #25? 2. Claude Code's Read, Grep and Glob still read inside the turn folder without a card (report-only).
+- **Next step:** PR into `deploy/vercel` once Vincent agrees; CI and review.
+
 ### Session 9 · 2026-11-05 19:10 ET · capability map labels: fixes from the fourth independent review (#30) · review fix
 - **Branch / PR / head sha:** `claude/capability-map-labels` · https://github.com/arbiter1170/sandbench/pull/30 · code head `5d6457e` (final head after this log commit is in the session summary)
 - **Checks on the head:** pending at the time of writing. The previous head is `5501b4d`.
