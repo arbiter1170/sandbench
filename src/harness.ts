@@ -1,5 +1,6 @@
 import { getFirebaseAuth } from "./firebase";
 import type { Connector, PointerAction, TriggerRun, WebhookTrigger } from "./types";
+import { DROPPED, followTurn, GAP, HARNESS_RESTARTED } from "./turnRecovery";
 
 const HEADERS = { "x-sandbench-client": "1" };
 // Runner mode (SB-01): VITE_RUNNER_URL (e.g. "/api") points at the hosted runner, and each
@@ -162,6 +163,14 @@ export function harnessWriteBotMemory(botId: string, pathName: string, content: 
   });
 }
 
+/** Append one approved note to this bot's memory log. `saveId` makes a retry a no-op. */
+export function harnessSaveBotMemory(botId: string, saveId: string, note: string) {
+  return call<{ ok: boolean; path: string; duplicate: boolean; bytes: number }>(`/bots/${encodeURIComponent(botId)}/memory/save`, {
+    method: "POST",
+    body: JSON.stringify({ saveId, note, approved: true }),
+  });
+}
+
 export function harnessWriteFile(file: { path: string; op: "write" | "delete"; content?: string }): Promise<{ ok: boolean; path: string; bytes: number }> {
   return call("/workspace/write", { method: "POST", body: JSON.stringify({ ...file, approved: true }) });
 }
@@ -181,6 +190,17 @@ export function harnessCallTool(url: string, headers: Record<string, string>, to
 /** Header templates as stored; the harness or runner fills {{NAME}} from its secret store. */
 export function connectorHeaders(connector: Connector): Record<string, string> {
   return Object.fromEntries(connector.headers.filter((item) => item.key.trim()).map((item) => [item.key.trim(), item.value]));
+}
+
+/** Which tested connectors each bot may hand to a local Claude Code turn. Header values stay templates. */
+export function harnessSyncConnectors(connectors: Connector[], bots: { id: string; connectorIds?: string[] }[]): Promise<{ ok: boolean }> {
+  return call("/connectors/sync", {
+    method: "POST",
+    body: JSON.stringify({
+      connectors: connectors.map(({ id, name, url, headers, status }) => ({ id, name, url, headers, status })),
+      bots: Object.fromEntries(bots.map((bot) => [bot.id, bot.connectorIds ?? []])),
+    }),
+  });
 }
 
 export function harnessSyncSchedules(routines: { id: string; botId: string; title: string; schedule: string; enabled: boolean }[]): Promise<{ ok: boolean }> {
@@ -230,6 +250,16 @@ export type AgentEvent = {
   message?: string;
   stopped?: boolean;
   screenThumb?: string;
+  /** On turn_start from the local harness: the resolved folder the driver runs in. */
+  cwd?: string;
+  /** On a Claude driver `thinking` event: every approval round was used with approved steps still waiting (UX P2 S7). */
+  roundsExhausted?: number;
+  /** On a Claude driver `tool_end`: the step was approved but never handed to the agent (rounds ran out), so it did not run. */
+  undelivered?: boolean;
+  /** On a permission_request: the harness's own tool name for the request (Claude Code's, "codex", "grok"). */
+  tool?: string;
+  /** On a Claude Code connector (MCP) permission_request: whether the card text shows every argument or a cut. */
+  argsShown?: "all" | "cut";
 };
 export type TurnRequest = {
   driver: string;
@@ -244,6 +274,8 @@ export type TurnRequest = {
   allow: string[];
   unattendedDeny: boolean;
   captureScreen?: boolean;
+  /** The harness looks up this bot's synced connectors itself (local Claude Code turns only). */
+  botId?: string;
 };
 
 export function harnessDrivers(): Promise<{ drivers: AgentDriver[] }> {
@@ -258,11 +290,40 @@ export function harnessInterrupt(turnId: string): Promise<{ ok: boolean }> {
   return call(`/turns/${turnId}/interrupt`, { method: "POST", body: "{}" });
 }
 
+export type TurnState = "running" | "finished" | "unknown";
+
+export function harnessTurnState(turnId: string): Promise<{ state: TurnState }> {
+  return call(`/turns/${turnId}`);
+}
+
 export function harnessPermit(permissionId: string, allow: boolean): Promise<{ ok: boolean }> {
   return call(`/permissions/${permissionId}`, { method: "POST", body: JSON.stringify({ allow }) });
 }
 
+/** A local turn whose events stopped reaching the page for good; the message says why. */
+export class TurnLostError extends Error {}
+
+/**
+ * Follow a turn's events until `onEvent` returns true (done or error). A dropped stream is
+ * resumed from the last event seen; throws TurnLostError when the harness restarted or stays
+ * unreachable (src/turnRecovery.ts).
+ */
 export async function harnessEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
+  // The runner keeps a turn going without the tab and has no GET /turns/<id>: one stream, as before.
+  if (runnerMode) return streamEvents(turnId, after, signal, onEvent);
+  const result = await followTurn<AgentEvent>({
+    after,
+    signal,
+    subscribe: (from, handle) => streamEvents(turnId, from, signal, handle),
+    state: async () => (await harnessTurnState(turnId)).state,
+    onEvent,
+  });
+  if (result === "gone") throw new TurnLostError(HARNESS_RESTARTED);
+  if (result === "dropped") throw new TurnLostError(DROPPED);
+  if (result === "gap") throw new TurnLostError(GAP);
+}
+
+async function streamEvents(turnId: string, after: number, signal: AbortSignal, onEvent: (event: AgentEvent) => boolean | void): Promise<void> {
   const response = await fetch(`${BASE}/events?turn=${turnId}&after=${after}`, { headers: await authHeaders(), signal });
   if (!response.ok || !response.body) throw new Error(`The event stream returned ${response.status}.`);
   const reader = response.body.getReader();
@@ -286,9 +347,4 @@ export async function harnessEvents(turnId: string, after: number, signal: Abort
   }
 }
 
-export function autoApproved(command: string, rules: string[]): boolean {
-  const trimmed = command.trim();
-  if (/[;&|>`]|\$\(/.test(trimmed)) return false;
-  const head = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
-  return rules.some((rule) => rule.trim().toLowerCase() === head);
-}
+export { autoApproved } from "./approvalPolicy";

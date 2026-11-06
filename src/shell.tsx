@@ -1,10 +1,16 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { routeFor } from "./assistant";
 import { BotMark } from "./bots";
+import { chatAgent } from "./chatContext";
+import { ChatContext, type ContextMember } from "./chatContextView";
+import { coarsePointer, enterSends } from "./composerKeys";
+import { defaultAgentOption, setupRows, type MemoryState, type SetupLink, type SkillsOnDisk } from "./effectiveSetup";
 import { harnessBotMemory, harnessSkills, harnessWriteBotMemory, harnessWriteBotSoul, type AgentDriver, type HarnessHealth } from "./harness";
 import type { Key } from "./i18n";
 import { AvatarEditor, ComputerPanel, LibraryPanel } from "./studio";
 import type { ApprovalMode, Bot, BotTask, BotVisibility, ComputerEvent, Message, Reminder, Routine, Settings, SkillId, Studio, TestProfileId, Thread, TriggerRef, TriggerRun } from "./types";
 import { inferProfileFromBot, modelsForProfile, profileLabelKey, profileReadiness, profileTouchesCompatBase, TEST_PROFILE_IDS } from "./testProfiles";
+import { continuedIds, runningMessageId } from "./turnStatus";
 import { MessageBody, type TriggerInfo, type TriggerPatch } from "./views";
 import { applyReaModelChoice, BUILTIN_PLUGINS, COLORS, parseSchedule, REA_GROK_MODEL, REA_OPUS_MODEL, safeWorkspacePath, SHAPES, SKILLS, VOICES } from "./work";
 
@@ -35,6 +41,20 @@ export function Workspace(props: {
   workingBotId: string | null;
   studio: Studio;
   harness: HarnessHealth | null;
+  /** When the health poll last answered, and when the harness was last reachable (context sheet). A live object: read it at render. */
+  healthLog: { checkedAt?: number; lastOkAt?: number };
+  /** The health poll has answered at least once. */
+  healthChecked: boolean;
+  /** "Check again" in the context sheet: re-reads /health and /drivers; true when reachable. */
+  onRecheckHarness: () => Promise<boolean>;
+  /** UX P2: "Ask again…" on a message (refills the composer, never sends) and the one-time planner answer on a Couldn't start message. */
+  onAskAgain: (messageId: string) => void;
+  onPlannerAnswer: (messageId: string) => void;
+  /** UX P2 S11: shown under the composer when a send is refused because a turn is running (or "Ask again…" kept a draft). */
+  busyNote: string;
+  /** The chat the running turn writes to (with workingBotId): its newest reply reads Working. */
+  workingThreadId: string | null;
+  runner: boolean;
   callActive: boolean;
   hub: ReactNode;
   onApproval: (messageId: string, approve: boolean, answer?: string) => void;
@@ -117,6 +137,29 @@ export function Workspace(props: {
   const [channelMembers, setChannelMembers] = useState<string[]>([]);
   const channels = props.threads.filter((thread) => thread.memberIds);
   const names = useMemo(() => new Map(bots.map((item) => [item.id, item.name])), [bots]);
+  const continued = useMemo(() => continuedIds(messages), [messages]);
+  const running = props.workingThreadId && props.workingThreadId === props.openThreadId ? runningMessageId(messages, workingBotId) : undefined;
+  // Who answers each bot in this chat, and the inputs of its sheet rows (src/chatContext.ts).
+  const contextMember = (member: Bot, own: Message[]): ContextMember => {
+    const route = routeFor(member, settings, props.keys);
+    return {
+      name: member.name,
+      agent: chatAgent({ bot: member, defaultDriver: settings.defaultAgentDriver, route, drivers: props.drivers, harnessUp: Boolean(props.harness) }),
+      sheet: { bot: member, route, messages: own },
+    };
+  };
+  // "Checking…" until the first health answer, and while a reachable harness has not listed its
+  // drivers yet (it always lists them), so no agent reads "not available" before anyone looked.
+  const connection = {
+    state: !props.healthChecked || (props.harness && props.drivers.length === 0) ? ("checking" as const) : props.harness ? ("connected" as const) : ("offline" as const),
+    runner: props.runner,
+    log: props.healthLog,
+    platform: props.harness?.platform,
+    workspace: props.harness?.workspace,
+  };
+  // The orb records a voice note only with nothing to send: no text and no attachment (or while
+  // a recording runs, to stop it). With a photo attached it sends, since on a phone Enter doesn't.
+  const voiceOrb = !draft.trim() && (!props.hasPending || recording);
   const send = (text: string) => {
     if (!text.trim() && !props.hasPending) return;
     if (channel) props.onSendChannel(channel.id, text);
@@ -170,6 +213,44 @@ export function Workspace(props: {
   useEffect(() => {
     if (createNonce > 0) setCreating(true);
   }, [createNonce]);
+
+  // Effective setup (UX P5): which library skills the harness has and whether the bot's memory
+  // reads, for counts only. Display only: a failure here never blocks a send.
+  // Each result is tagged with its bot, so another bot's counts never show while a new read runs.
+  const [skillsOnDisk, setSkillsOnDisk] = useState<{ botId?: string; value: SkillsOnDisk }>({ value: { state: "loading" } });
+  const [memoryState, setMemoryState] = useState<{ botId?: string; value: MemoryState }>({ value: { state: "loading" } });
+  const setupBotId = panel === "model" ? bot?.id : undefined;
+  useEffect(() => {
+    if (!setupBotId || !props.healthChecked) return;
+    if (props.runner) {
+      setSkillsOnDisk({ botId: setupBotId, value: { state: "runner" } });
+      setMemoryState({ botId: setupBotId, value: { state: "offline" } });
+      return;
+    }
+    if (!props.harness) {
+      setSkillsOnDisk({ botId: setupBotId, value: { state: "offline" } });
+      setMemoryState({ botId: setupBotId, value: { state: "offline" } });
+      return;
+    }
+    let active = true;
+    void harnessSkills()
+      .then((result) => active && setSkillsOnDisk({ botId: setupBotId, value: { state: "loaded", ids: result.skills.map((skill) => skill.id) } }))
+      .catch(() => active && setSkillsOnDisk({ botId: setupBotId, value: { state: "failed" } }));
+    void harnessBotMemory(setupBotId)
+      .then((result) => active && setMemoryState({ botId: setupBotId, value: { state: "loaded", hasIndex: result.files.some((file) => file.path === "MEMORY.md"), files: result.files.length } }))
+      .catch(() => active && setMemoryState({ botId: setupBotId, value: { state: "failed" } }));
+    return () => {
+      active = false;
+    };
+  }, [setupBotId, props.harness, props.runner, props.healthChecked]);
+  const openSetupLink = (link: SetupLink) => {
+    if (link.to === "here") document.getElementById(link.id)?.focus();
+    else if (link.to === "customize" || link.to === "work") setPanel(link.to);
+    else {
+      props.onOverlay(link.to === "team" ? "hub" : "settings");
+      props.onFocus("chat");
+    }
+  };
 
   const needle = query.trim().toLowerCase();
   const visible = bots
@@ -453,6 +534,15 @@ export function Workspace(props: {
                 </div>
                 <button type="button" className="text-btn" onClick={() => { if (window.confirm(t("remove"))) props.onRemoveChannel(channel.id); }}>{t("remove")}</button>
               </header>
+            ) : null}
+            {channel ? (
+              <ChatContext
+                t={t}
+                channel={channel}
+                connection={connection}
+                members={bots.filter((member) => channel.memberIds?.includes(member.id)).map((member) => contextMember(member, messages.filter((message) => message.authorBotId === member.id)))}
+                onRecheck={props.onRecheckHarness}
+              />
             ) : bot ? (
               <header className="chat-head">
                 <BotMark bot={bot} size="1.7rem" />
@@ -465,6 +555,18 @@ export function Workspace(props: {
                   {props.callActive ? t("endCall") : t("call")}
                 </button>
               </header>
+            ) : null}
+            {!channel && bot ? (
+              <ChatContext
+                t={t}
+                connection={connection}
+                members={[contextMember(bot, messages)]}
+                onOpenSettings={() => {
+                  setPanel("model");
+                  props.onFocus("side");
+                }}
+                onRecheck={props.onRecheckHarness}
+              />
             ) : null}
             <div className="scroll">
               {messages.length === 0 ? (
@@ -484,6 +586,15 @@ export function Workspace(props: {
                     trigger={message.trigger ? triggerInfo(message.trigger) : undefined}
                     onTriggerPatch={(patch) => message.trigger && props.onPatchTrigger(message.trigger, patch)}
                     onTriggerUndo={() => message.trigger && props.onRemoveTrigger(message.trigger)}
+                    turn={{
+                      runner: props.runner,
+                      busy: workingBotId !== null,
+                      continued: continued.has(message.id),
+                      running: message.id === running,
+                      onCheckConnection: props.onRecheckHarness,
+                      onAskAgain: () => props.onAskAgain(message.id),
+                      onPlannerAnswer: () => props.onPlannerAnswer(message.id),
+                    }}
                   />
                 ))
               )}
@@ -514,8 +625,10 @@ export function Workspace(props: {
                   value={draft}
                   placeholder={t("messageBot")}
                   onChange={(event) => props.onDraft(event.target.value)}
+                  enterKeyHint="enter"
                   onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
+                    // UX P4: phones and tablets get a newline (Send sends); never send mid-IME.
+                    if (enterSends({ key: event.key, shiftKey: event.shiftKey, ctrlKey: event.ctrlKey, metaKey: event.metaKey, isComposing: event.nativeEvent.isComposing, keyCode: event.keyCode, coarse: coarsePointer() })) {
                       event.preventDefault();
                       send(draft);
                     }
@@ -525,16 +638,18 @@ export function Workspace(props: {
                 {(streaming || bots.find((item) => item.id === workingBotId)?.driver) && workingBotId !== null && (channel ? channel.memberIds?.includes(workingBotId) : workingBotId === bot?.id) ? (
                   <button type="button" className="send-orb" onClick={props.onStop}>{t("stop")}</button>
                 ) : (
-                  <button type="submit" className="send-orb" aria-label={draft.trim() ? t("send") : t("voice")} onClick={(event) => {
-                    if (!draft.trim()) {
+                  <button type="submit" className="send-orb" aria-label={voiceOrb ? t("voice") : t("send")} onClick={(event) => {
+                    if (voiceOrb) {
                       event.preventDefault();
                       props.onVoice();
                     }
                   }}>
-                    {recording ? "Stop" : draft.trim() ? t("send") : "Rec"}
+                    {recording ? "Stop" : voiceOrb ? "Rec" : t("send")}
                   </button>
                 )}
               </div>
+              {/* Always in the page, so the note is announced when it appears (S11). */}
+              <p className="busy-note" role="status" aria-live="polite">{props.busyNote}</p>
               {plusOpen ? (
                 <div className="plus-row">
                   <button type="button" onClick={props.onPhoto}>{t("photo")}</button>
@@ -597,6 +712,50 @@ export function Workspace(props: {
             <div className="inspector-scroll">
               {panel === "model" ? (
           <div className="model-row" role="tabpanel" id="panel-model" aria-labelledby="panel-tab-model">
+            {(() => {
+              const agentSelect = props.drivers.length > 0 || Boolean(bot.driver);
+              const rows = setupRows({
+                bot,
+                settings,
+                route: routeFor(bot, settings, props.keys),
+                drivers: props.drivers,
+                harnessUp: Boolean(props.harness),
+                runner: props.runner,
+                channel,
+                autoApprove: studio.autoApprove,
+                connectors: studio.connectors,
+                skills: skillsOnDisk.botId === bot.id ? skillsOnDisk.value : { state: "loading" },
+                memory: memoryState.botId === bot.id ? memoryState.value : { state: "loading" },
+                checking: !props.healthChecked,
+                t,
+              });
+              const linkLabel = (link: SetupLink) => t(link.to === "here" ? "esLinkHere" : link.to === "customize" ? "esLinkCustomize" : link.to === "work" ? "esLinkWork" : link.to === "team" ? "esLinkTeam" : "esLinkSettings");
+              return (
+                <section className="effective-setup" aria-labelledby="effective-setup-title">
+                  <h3 id="effective-setup-title">{t("esTitle")}</h3>
+                  <dl>
+                    {rows.map((row) => {
+                      // The Agent select below needs drivers; without it the default agent is changed in Settings.
+                      const link: SetupLink | undefined = row.link?.to === "here" && row.link.id === "bot-agent-select" && !agentSelect ? { to: "settings" } : row.link;
+                      return (
+                        <div key={row.id} className="es-row">
+                          <dt id={`es-${row.id}`}>{row.label}</dt>
+                          <dd>
+                            <span className="es-value">{row.value}</span>
+                            {row.badge ? <span className="ctx-badge">{row.badge}</span> : null}
+                            {link ? (
+                              <button type="button" className="text-btn es-link" aria-describedby={`es-${row.id}`} onClick={() => openSetupLink(link)}>
+                                {linkLabel(link)} ›
+                              </button>
+                            ) : null}
+                          </dd>
+                        </div>
+                      );
+                    })}
+                  </dl>
+                </section>
+              );
+            })()}
             {bot.preset === "rea" ? (
               <div className="rea-chips" role="group" aria-label={t("reaModelChips")}>
                 {(
@@ -625,6 +784,7 @@ export function Workspace(props: {
             <label>
               {t("botModel")}
               <select
+                id="bot-model-select"
                 value={
                   bot.modelChoice === "composer"
                     ? ""
@@ -686,8 +846,9 @@ export function Workspace(props: {
             {props.drivers.length > 0 || bot.driver ? (
               <label>
                 {t("agentDriver")}
-                <select value={bot.driver ?? ""} onChange={(event) => props.onPatch(bot.id, { driver: event.target.value || undefined })}>
-                  <option value="">{t("builtinPlanner")}</option>
+                <select id="bot-agent-select" value={bot.driver ?? ""} onChange={(event) => props.onPatch(bot.id, { driver: event.target.value || undefined })}>
+                  {/* The empty value still means "use the default"; the label says what that is now. */}
+                  <option value="">{defaultAgentOption({ bot, settings, route: routeFor(bot, settings, props.keys), drivers: props.drivers, harnessUp: Boolean(props.harness), t })}</option>
                   {props.drivers.map((driver) => (
                     <option key={driver.id} value={driver.id} disabled={!driver.ok && bot.driver !== driver.id}>
                       {driver.label}{driver.ok ? "" : ` · ${t("notInstalled")}`}
@@ -911,6 +1072,7 @@ export function Workspace(props: {
                         {routine.schedule}
                         {parseSchedule(routine.schedule) ? "" : ` · ${t("badSchedule")}`}
                         {routine.lastRunAt ? ` · ${t("routineRan")} ${new Date(routine.lastRunAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}
+                        {routine.lastNote ? ` · ${routine.lastNote}` : ""}
                       </small>
                     </div>
                     <button type="button" className={routine.enabled ? "switch on" : "switch"} aria-pressed={routine.enabled} onClick={() => props.onToggleRoutine(routine.id)}>
@@ -998,6 +1160,7 @@ export function Workspace(props: {
                       <small>
                         {run.kind === "webhook" ? t("webhooks") : t("schedulesHeading")} · {new Date(run.at).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" })}
                         {run.ms !== undefined ? ` · ${(run.ms / 1000).toFixed(1)} s` : ""}
+                        {run.detail ? ` · ${run.detail}` : ""}
                       </small>
                     </li>
                   ))}

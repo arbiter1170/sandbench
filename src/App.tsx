@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { User } from "firebase/auth";
 import { completeText, routeFor, streamReply, streamText } from "./assistant";
 import { SignOutButton } from "./AuthGate";
@@ -33,8 +33,10 @@ import {
   harnessPermit,
   harnessReadFile,
   harnessRecordRun,
+  harnessSaveBotMemory,
   harnessScreen,
   harnessStartTurn,
+  harnessSyncConnectors,
   harnessSyncSchedules,
   harnessSyncWebhooks,
   harnessTriggers,
@@ -47,8 +49,13 @@ import {
   type HarnessHealth,
   runnerFetch,
   runnerMode,
+  TurnLostError,
 } from "./harness";
+import { initialApprovalStatus } from "./approvalPolicy";
 import { pickWithDecisionModel } from "./decision";
+import { agentName, chatAgent, effectiveDriver } from "./chatContext";
+import { REFUSED_ELSEWHERE, settleEndedMessage, settleLoadedThreads, STOP_GRACE_MS, stoppedCard } from "./turnRecovery";
+import { askAgainDraft, claimPlannerAnswer, classifyStartError, decideStart, promptFor, startFailureFor, startFailureSummary, startPlannerAnswer, TurnStartError } from "./turnStatus";
 import { applyFields, applyMessageChange, applyThreadChange, RecordSync, upsertByTime, upsertItem, type BaseRecord, type Data, type RemoteRecord } from "./recordSync";
 import { extractLegacySecrets, listSecrets, moveLegacySecrets, removeSecret, saveSecret, secureLegacySecrets, type LegacySecret, type SecretInfo } from "./secrets";
 import { HubPanel, Onboarding } from "./studio";
@@ -61,7 +68,7 @@ import {
   verifyPasskey,
 } from "./device";
 import { translate } from "./i18n";
-import { assembleBotSystem } from "./prompt";
+import { assembleBotSystem, memoryDocument } from "./prompt";
 import { speakable } from "./speech";
 import {
   applyProfileToSettings,
@@ -94,7 +101,7 @@ import {
   type TriggerRun,
   type WebhookTrigger,
 } from "./types";
-import { LockScreen, SettingsPanel, ToolsPanel } from "./views";
+import { focusComposer, LockScreen, SettingsPanel, ToolsPanel } from "./views";
 import {
   actionLabel,
   approvalFields,
@@ -106,10 +113,11 @@ import {
   continuationText,
   decisionPrompt,
   guardAction,
+  requestAsksForTrigger,
+  holdForPerson,
   inFolder,
   interpretResult,
   MAX_ACTIONS,
-  needsHarness,
   nextLocalAction,
   parseModelDecision,
   parseRoute,
@@ -134,7 +142,17 @@ function roomFolder(room: Thread | undefined): string | undefined {
 }
 
 type Receipt = { kind: "routine" | "webhook"; triggerId: string; title: string };
-type AskOptions = { threadId?: string; skipUser?: boolean; unattended?: boolean; receipt?: Receipt; routed?: string };
+type AskOptions = {
+  threadId?: string;
+  skipUser?: boolean;
+  unattended?: boolean;
+  receipt?: Receipt;
+  routed?: string;
+  /** UX P2 S12: the one-time planner answer claimed on a Couldn't start message (I-3). */
+  plannerOnce?: { replyId: string; sourceId: string; agent: string };
+  /** A routine's own run: its row says why when the run couldn't start (M4). */
+  routineId?: string;
+};
 
 
 function migrateDrafts(drafts: Record<string, string>, all: Thread[]): Record<string, string> {
@@ -200,6 +218,12 @@ export function App({ user }: { user: User }) {
     "Notification" in window ? Notification.permission : "unknown",
   );
   const sendingRef = useRef(false);
+  // The bot whose turn holds sendingRef, for the busy note (UX P2 S11).
+  const workingRef = useRef<string | null>(null);
+  // The note under the composer: a send refused while a turn runs (S11), or a draft "Ask again…" kept.
+  const [composerNote, setComposerNote] = useState<{ kind: "busy" | "kept"; text: string } | null>(null);
+  // The chat the running turn writes to, so only its newest reply reads "Working" (M1).
+  const [workingThreadId, setWorkingThreadId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const genRef = useRef(0);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -270,7 +294,8 @@ export function App({ user }: { user: User }) {
         skills: bot.skills ?? [],
       }));
       const nextBots = loaded.some((bot) => bot.id === REA_BOT_ID) ? loaded : [...loaded, createReaBot()];
-      setThreads(snapshot.threads);
+      // A local turn cannot outlive the page that drove it; a runner turn can, so runner data is left alone.
+      setThreads(runnerMode ? snapshot.threads : settleLoadedThreads(snapshot.threads));
       setReminders(snapshot.reminders);
       setEvents(snapshot.events);
       setContacts(snapshot.contacts);
@@ -477,12 +502,31 @@ export function App({ user }: { user: User }) {
     return () => window.clearTimeout(handle);
   }, [hydrated, persist, threads, reminders, events, contacts, settings, logs, bots, tasks, routines, computer, studio, draft, user.uid]);
 
+  // When the health poll last answered and when the harness was last reachable, so the chat's
+  // context line can say "Checking…" before the first answer and never show old values as current.
+  // The times live in a ref (the context sheet reads them while it is open), so a poll that
+  // changes nothing does not re-render the page; `healthChecked` flips once.
+  const healthLog = useRef<{ checkedAt?: number; lastOkAt?: number }>({});
+  const [healthChecked, setHealthChecked] = useState(false);
+  const healthSeq = useRef({ sent: 0, applied: 0 });
+  const checkHealth = useCallback(async () => {
+    const seq = ++healthSeq.current.sent;
+    const next = await harnessHealth();
+    // A slower, older request (the 8 s poll racing "Check again") never overwrites a newer answer.
+    if (seq < healthSeq.current.applied) return next;
+    healthSeq.current.applied = seq;
+    const at = Date.now();
+    setHarness((prev) =>
+      Boolean(prev) === Boolean(next) && prev?.host === next?.host && prev?.workspace === next?.workspace && prev?.platform === next?.platform ? prev : next,
+    );
+    healthLog.current = { checkedAt: at, lastOkAt: next ? at : healthLog.current.lastOkAt };
+    setHealthChecked(true);
+    return next;
+  }, []);
   useEffect(() => {
     let active = true;
     const check = () => {
-      void harnessHealth().then((next) => {
-        if (active) setHarness((prev) => (Boolean(prev) === Boolean(next) && prev?.host === next?.host ? prev : next));
-      });
+      if (active) void checkHealth();
     };
     check();
     const handle = window.setInterval(check, 8000);
@@ -490,7 +534,27 @@ export function App({ user }: { user: User }) {
       active = false;
       window.clearInterval(handle);
     };
-  }, []);
+  }, [checkHealth]);
+  /**
+   * "Check again" in the chat's context sheet and "Check connection" on a turn's status line:
+   * re-reads /health and /drivers. It sends nothing. The refs are updated at once too, so a send
+   * that checks first (askBot) reads the fresh answer before the next render.
+   */
+  const recheckHarness = useCallback(async () => {
+    const next = await checkHealth();
+    harnessRef.current = next;
+    let list: AgentDriver[] = [];
+    if (next) {
+      try {
+        list = (await harnessDrivers()).drivers;
+      } catch {
+        list = [];
+      }
+    }
+    driversRef.current = list;
+    setDrivers(list);
+    return Boolean(next);
+  }, [checkHealth]);
 
   useEffect(() => {
     void refreshKeys().then(flushPendingSecrets);
@@ -539,7 +603,7 @@ export function App({ user }: { user: User }) {
       if (!due) return;
       setRoutines((prev) => prev.map((item) => (item.id === due.id ? { ...item, lastRunAt: now.getTime() } : item)));
       routinesRef.current = routinesRef.current.map((item) => (item.id === due.id ? { ...item, lastRunAt: now.getTime() } : item));
-      void askBot(due.botId, due.title, { unattended: true });
+      void askBot(due.botId, due.title, { unattended: true, routineId: due.id });
     }, 20_000);
     return () => window.clearInterval(handle);
   }, [hydrated]);
@@ -556,6 +620,13 @@ export function App({ user }: { user: User }) {
       })),
     ).catch(() => undefined);
   }, [hydrated, harness, routines]);
+
+  const connectorAssignments = JSON.stringify(bots.map((bot) => [bot.id, bot.connectorIds ?? []]));
+  useEffect(() => {
+    if (!hydrated || !harness || runnerMode) return;
+    const assigned = (JSON.parse(connectorAssignments) as [string, string[]][]).map(([id, connectorIds]) => ({ id, connectorIds }));
+    void harnessSyncConnectors(studio.connectors, assigned).catch(() => undefined);
+  }, [hydrated, harness, studio.connectors, connectorAssignments]);
 
   useEffect(() => {
     if (!hydrated || !harness) return;
@@ -586,7 +657,7 @@ export function App({ user }: { user: User }) {
           if (sendingRef.current) return;
           const thread = latestBotThread(threadsRef.current, item.botId);
           const prompt = item.webhookId ? `${item.title}\n\nWebhook delivery:\n${item.payload?.trim() || "(empty body)"}` : item.title;
-          await askBot(item.botId, prompt, { unattended: true, threadId: thread?.id, receipt: { kind, triggerId, title: item.title } });
+          await askBot(item.botId, prompt, { unattended: true, threadId: thread?.id, receipt: { kind, triggerId, title: item.title }, ...(item.routineId ? { routineId: item.routineId } : {}) });
           await harnessAck([item.id]);
           if (item.routineId) setRoutines((prev) => prev.map((routine) => (routine.id === item.routineId ? { ...routine, lastRunAt: item.at } : routine)));
         }
@@ -1004,7 +1075,11 @@ export function App({ user }: { user: User }) {
 
   async function sendToChannel(channelId: string, text: string) {
     const channel = threadsRef.current.find((thread) => thread.id === channelId);
-    if (!channel?.memberIds || sendingRef.current) return;
+    if (!channel?.memberIds) return;
+    if (sendingRef.current) {
+      noteBusy();
+      return;
+    }
     const members = botsRef.current.filter((bot) => channel.memberIds?.includes(bot.id));
     const lower = text.toLowerCase();
     const mentioned = members.filter((bot) => lower.includes(`@${bot.name.toLowerCase()}`));
@@ -1283,11 +1358,7 @@ export function App({ user }: { user: User }) {
   async function memoryDocFor(botId: string): Promise<string> {
     try {
       const { files } = await harnessBotMemory(botId);
-      return files
-        .slice(0, 8)
-        .map((file) => `## ${file.path}\n${file.content.slice(0, 6000)}`)
-        .join("\n\n")
-        .slice(0, 24_000);
+      return memoryDocument(files);
     } catch {
       return "";
     }
@@ -1338,20 +1409,19 @@ export function App({ user }: { user: User }) {
   }
 
   function makeApproval(action: StepAction, unattended: boolean, bot?: Bot): Approval {
-    const auto = action.kind === "command" && autoApproved(action.command, studioRef.current.autoApprove);
-    const mode = bot?.approvalMode ?? "ask";
-    const autoOk = mode === "auto" || mode === "full" ? auto || mode === "full" : auto;
-    return {
+    const approval: Approval = {
       ...approvalFields(action),
-      status:
-        needsHarness(action) && !harnessRef.current
-          ? "unavailable"
-          : autoOk
-            ? "approved"
-            : unattended && !auto && studioRef.current.unattended === "skip"
-              ? "denied"
-              : "pending",
+      status: initialApprovalStatus({
+        action,
+        rules: studioRef.current.autoApprove,
+        mode: bot?.approvalMode,
+        harness: Boolean(harnessRef.current),
+        unattended,
+        unattendedPolicy: studioRef.current.unattended,
+      }),
     };
+    // A card that starts denied was denied by the unattended "skip" setting (approvalPolicy.ts).
+    return approval.status === "denied" ? { ...approval, autoDenied: true } : approval;
   }
 
   function attachPrevious(threadId: string, messageId: string, approval: Approval | undefined) {
@@ -1402,6 +1472,7 @@ export function App({ user }: { user: User }) {
     const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
     if (!capped && route.ready) {
       try {
+        const [library, memoryDoc] = await Promise.all([readLibrary(bot.id), memoryDocFor(bot.id)]);
         const raw = await completeText({
           messages: [
             {
@@ -1411,10 +1482,12 @@ export function App({ user }: { user: User }) {
                 request,
                 connectors,
                 allow: studioRef.current.autoApprove,
-                library: await readLibrary(bot.id),
+                library,
                 pluginLines: pluginLinesFor(bot),
                 finished,
                 shared: room?.memberIds ? room.sharedInstructions : undefined,
+                memorySaves: !runnerMode,
+                memoryDoc,
               }),
             },
           ],
@@ -1451,7 +1524,7 @@ export function App({ user }: { user: User }) {
       if (error instanceof DOMException && error.name === "AbortError") throw error;
       if (!text) onDelta(prose);
     }
-    const approval = follow ? makeApproval(follow, unattended, bot) : undefined;
+    const approval = follow ? holdForPerson(follow, makeApproval(follow, unattended, bot), !runnerMode) : undefined;
     patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
     attachPrevious(threadId, id, approval);
     bumpUsage({ charsOut: text.length });
@@ -1509,6 +1582,20 @@ export function App({ user }: { user: User }) {
       if (approval.question) {
         const author = threadsRef.current.find((thread) => thread.id === threadId)?.messages.find((message) => message.id === messageId)?.authorBotId ?? "";
         await answerFromResult(threadId, author, approval.command, answer ?? "", undefined, false, unattended, signal);
+        return;
+      }
+      if (approval.memory) {
+        if (auto) throw new Error("A memory save waits for you to approve it.");
+        const author = threadsRef.current.find((thread) => thread.id === threadId)?.messages.find((message) => message.id === messageId)?.authorBotId ?? "";
+        if (!author) throw new Error("This card has no bot to save the note for.");
+        const started = performance.now();
+        const result = await harnessSaveBotMemory(author, messageId, approval.memory.note);
+        const output = result.duplicate ? `Already in ${result.path}; nothing was added.` : `Saved to ${result.path}.`;
+        patchMessage(threadId, messageId, (message) =>
+          message.approval ? { ...message, approval: { ...message.approval, output, exitCode: 0 } } : message,
+        );
+        addActivity(threadId, messageId, `Remembered in ${result.path}`, performance.now() - started);
+        await answerFromResult(threadId, author, approval.command, output, 0, false, unattended, signal);
         return;
       }
       if (approval.file) {
@@ -1628,6 +1715,8 @@ export function App({ user }: { user: User }) {
   async function driveTurn(args: {
     bot: Bot;
     driver: string;
+    /** The agent's name for the status line (S1, S2). */
+    agentName: string;
     threadId: string;
     assistantId: string;
     prompt: string;
@@ -1640,8 +1729,11 @@ export function App({ user }: { user: User }) {
   }): Promise<string> {
     const { bot, threadId } = args;
     const route = routeFor(bot, settingsRef.current, keyNamesRef.current);
+    // UX P2: only the harness's own pre-start refusals prove no turn exists (S9); a network
+    // failure or any other error during the start is "Start status unknown" (S10, I-4).
     const { id: turnId, after } = await harnessStartTurn({
       driver: args.driver,
+      botId: bot.id,
       prompt: args.prompt,
       system: args.system,
       history: args.history,
@@ -1655,23 +1747,45 @@ export function App({ user }: { user: User }) {
       allow: studioRef.current.autoApprove,
       unattendedDeny: args.unattended && studioRef.current.unattended === "skip",
       captureScreen: settingsRef.current.attachWorkScreenshots !== false,
+    }).catch((error: unknown) => {
+      throw classifyStartError(error);
     });
-    const stop = () => void harnessInterrupt(turnId).catch(() => undefined);
-    args.signal.addEventListener("abort", stop, { once: true });
+    // S1 → S2: the harness returned a turn id, so this turn has started (I-5).
+    patchMessage(threadId, args.assistantId, (message) => ({ ...message, driverTurn: { agent: args.agentName, id: turnId } }));
+    // Stop asks the harness to interrupt and keeps reading for a moment: only its
+    // done{stopped:true} proves the turn stopped (U-7). The stream closes after STOP_GRACE_MS.
+    const stream = new AbortController();
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const stop = () => {
+      void harnessInterrupt(turnId).catch(() => undefined);
+      grace = setTimeout(() => stream.abort(), STOP_GRACE_MS);
+    };
+    // A Stop pressed while the start was still on its way is sent now.
+    if (args.signal.aborted) stop();
+    else args.signal.addEventListener("abort", stop, { once: true });
     let current: string | null = args.assistantId;
+    const created = [args.assistantId];
+    let lost: string | undefined;
+    let stopConfirmed = false;
     let reply = "";
     let failure: string | undefined;
+    // S7: the Claude driver ran out of approval rounds with approved steps still waiting.
+    let rounds: number | undefined;
     const cards = new Map<string, { id: string; command: string }>();
     const target = () => {
       if (current) return current;
       const id = beginAssistant(threadId, bot.id);
-      patchMessage(threadId, id, (message) => ({ ...message, localStandIn: false }));
+      created.push(id);
+      patchMessage(threadId, id, (message) => ({ ...message, localStandIn: false, driverTurn: { agent: args.agentName, id: turnId } }));
       current = id;
       return id;
     };
     try {
-      await harnessEvents(turnId, after, args.signal, (event) => {
+      await harnessEvents(turnId, after, stream.signal, (event) => {
+        // The harness's resolved folder, shown so a path the agent uses can be checked against it.
+        if (event.type === "turn_start" && event.cwd) args.appendThinking(`Working folder: ${event.cwd}`);
         if (event.type === "thinking" && event.text) args.appendThinking(event.text);
+        if (event.type === "thinking" && typeof event.roundsExhausted === "number") rounds = event.roundsExhausted;
         if (event.type === "message_delta" && event.text) {
           const chunk = event.text;
           reply += chunk;
@@ -1687,6 +1801,11 @@ export function App({ user }: { user: User }) {
             status,
             permissionId: event.permissionId,
             ...(event.auto ? { auto: true, output: "…" } : {}),
+            ...(event.denied ? { autoDenied: true } : {}),
+            // The harness's own tool name for the request: the card trusts it over the reason text.
+            ...(typeof event.tool === "string" ? { agentTool: event.tool } : {}),
+            // How much of a connector call the card text shows, when the harness says (claude.mjs).
+            ...(event.argsShown === "all" || event.argsShown === "cut" ? { argsShown: event.argsShown } : {}),
           };
           patchMessage(threadId, id, (message) => ({ ...message, status: "done", approval }));
           current = null;
@@ -1694,8 +1813,16 @@ export function App({ user }: { user: User }) {
         if (event.type === "permission_resolved" && event.permissionId) {
           const id = cards.get(event.permissionId)?.id;
           if (id) {
+            // This page's own Deny click already left "pending", so a refusal that finds the card
+            // still waiting is not a Deny: Stop (stoppedCard), or an expiry or another tab.
             patchMessage(threadId, id, (message) =>
-              message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: event.allow ? "approved" : "denied" } } : message,
+              message.approval?.status !== "pending"
+                ? message
+                : event.allow
+                  ? { ...message, approval: { ...message.approval, status: "approved" } }
+                  : args.signal.aborted
+                    ? { ...message, approval: stoppedCard(message.approval, false) }
+                    : { ...message, approval: { ...message.approval, status: "failed", output: REFUSED_ELSEWHERE } },
             );
           }
         }
@@ -1708,25 +1835,49 @@ export function App({ user }: { user: User }) {
               message.approval
                 ? {
                     ...message,
-                    approval: { ...message.approval, output: event.output ?? "", ...(event.code !== undefined ? { exitCode: event.code } : {}) },
+                    // A card that had failed (its answer could not be confirmed) keeps that text apart from the result.
+                    approval: {
+                      ...message.approval,
+                      ...(message.approval.status === "failed" ? { status: "approved" as const, answerError: message.approval.output ?? "" } : {}),
+                      output: event.output ?? "",
+                      ...(event.code !== undefined ? { exitCode: event.code } : {}),
+                      // The harness never handed this approved step to the agent: it did not run.
+                      ...(event.undelivered === true ? { notRun: true } : {}),
+                    },
                     ...(thumb && thumb.length < 200_000 ? { screenThumb: thumb } : {}),
                   }
                 : message,
             );
-            addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
-            bumpUsage({ commands: 1 });
+            // A step the driver never handed to the agent did not run: no "ran" chip, no count.
+            if (!event.undelivered) {
+              addActivity(threadId, id, event.code !== undefined ? `Ran ${command} · exit ${event.code}` : `Agent ran ${command}`, event.ms);
+              bumpUsage({ commands: 1 });
+            }
           }
         }
         if (event.type === "error") failure = event.message || "The agent stopped with an error.";
+        if (event.type === "done" && event.stopped === true) stopConfirmed = true;
         return event.type === "done" || event.type === "error";
       });
+    } catch (error) {
+      // The stream closed after Stop's grace period without a confirmation: settled below.
+      const closedAfterStop = error instanceof DOMException && error.name === "AbortError" && args.signal.aborted;
+      if (!(error instanceof TurnLostError) && !closedAfterStop) throw error;
+      if (error instanceof TurnLostError) lost = error.message;
     } finally {
+      clearTimeout(grace);
       args.signal.removeEventListener("abort", stop);
-      for (const { id } of cards.values()) {
-        patchMessage(threadId, id, (message) => (message.approval?.status === "pending" ? { ...message, approval: { ...message.approval, status: "denied" } } : message));
+      // Lost: nothing reaches this page any more, so nothing is answered or re-run from here.
+      // Stop or end: a card nobody answered never says "denied" (turnRecovery.ts).
+      const end = { lost, stopRequested: args.signal.aborted, stopConfirmed, failed: Boolean(failure) };
+      created.forEach((id, index) => patchMessage(threadId, id, (message) => settleEndedMessage(message, { ...end, last: index === created.length - 1 })));
+      // UX P2: the turn's last message keeps the full error (S6) or the rounds signal (S7).
+      if (!lost && !end.stopRequested && (failure || rounds)) {
+        patchMessage(threadId, created[created.length - 1], (message) => ({ ...message, ...(failure ? { failure } : { roundsExhausted: rounds }) }));
       }
     }
-    if (current) patchMessage(threadId, current, (message) => ({ ...message, status: "done" }));
+    if (args.signal.aborted) throw new DOMException("Stopped.", "AbortError");
+    if (lost) throw new Error(lost);
     if (failure) throw new Error(failure);
     return reply;
   }
@@ -1867,9 +2018,9 @@ export function App({ user }: { user: User }) {
     }
   }
 
-  function receiptDone(receipt: Receipt | undefined, botId: string, started: number, status: "ok" | "failed") {
+  function receiptDone(receipt: Receipt | undefined, botId: string, started: number, status: "ok" | "failed", detail?: string) {
     if (!receipt || !harnessRef.current) return;
-    void harnessRecordRun({ ...receipt, botId, status, ms: Date.now() - started })
+    void harnessRecordRun({ ...receipt, botId, status, ms: Date.now() - started, ...(detail ? { detail } : {}) })
       .then(() => refreshTriggers())
       .catch(() => undefined);
   }
@@ -1932,30 +2083,45 @@ export function App({ user }: { user: User }) {
     if (freshSecret?.id === ref.id) setFreshSecret(null);
   }
 
+  // The same derivation the chat's context line uses (src/chatContext.ts), so they always agree.
   function resolveAgentDriver(bot: Bot): AgentDriver | undefined {
-    if (!harnessRef.current) return undefined;
-    const list = driversRef.current;
-    if (bot.driver) {
-      const chosen = list.find((item) => item.id === bot.driver);
-      return chosen?.ok ? chosen : undefined;
-    }
     const settings = settingsRef.current;
-    const route = routeFor(bot, settings, keyNamesRef.current);
-    const pick = (id: string) => list.find((item) => item.id === id && item.ok);
-    if (settings.defaultAgentDriver) {
-      const chosen = pick(settings.defaultAgentDriver);
-      if (chosen) return chosen;
-    }
-    if (route.provider === "anthropic" && route.ready) return pick("anthropic");
-    if (route.provider === "openai_compat" && route.ready && bot.skills.includes("computer")) return pick("http");
-    return undefined;
+    return effectiveDriver({
+      bot,
+      defaultDriver: settings.defaultAgentDriver,
+      route: routeFor(bot, settings, keyNamesRef.current),
+      drivers: driversRef.current,
+      harnessUp: Boolean(harnessRef.current),
+    });
+  }
+
+  /** Who answers this bot now (the context line's own derivation): a driver, one that can't run, or the planner. */
+  function agentFor(bot: Bot) {
+    const settings = settingsRef.current;
+    return chatAgent({
+      bot,
+      defaultDriver: settings.defaultAgentDriver,
+      route: routeFor(bot, settings, keyNamesRef.current),
+      drivers: driversRef.current,
+      harnessUp: Boolean(harnessRef.current),
+    });
+  }
+
+  /** S11: a send while a turn runs keeps the draft and says why, politely (I-1's guard is unchanged). */
+  function noteBusy() {
+    const locale = settingsRef.current.locale;
+    const name = botsRef.current.find((item) => item.id === workingRef.current)?.name || translate(locale, "assistant");
+    setComposerNote({ kind: "busy", text: translate(locale, "tsBusy").replace("{bot}", name) });
   }
 
   async function askBot(botId: string, text: string, options: AskOptions = {}): Promise<string[]> {
     const bot = botsRef.current.find((item) => item.id === botId);
     const files = options.unattended || options.skipUser ? [] : pendingRef.current;
     const cleaned = text.trim();
-    if (sendingRef.current) return [];
+    if (sendingRef.current) {
+      if (!options.unattended && !options.skipUser) noteBusy();
+      return [];
+    }
     if (!bot || (!cleaned && files.length === 0)) {
       if (callRef.current) scheduleListenForCall();
       return [];
@@ -1966,12 +2132,14 @@ export function App({ user }: { user: User }) {
       return [];
     }
     sendingRef.current = true;
+    workingRef.current = botId;
     const started = Date.now();
     setWorkingBotId(botId);
     try {
       for (const file of files) await saveBlob(file.id, file.blob);
     } catch {
       sendingRef.current = false;
+      workingRef.current = null;
       setWorkingBotId(null);
       setBanner(translate(settingsRef.current.locale, "dbError"));
       if (callRef.current) scheduleListenForCall();
@@ -2005,7 +2173,10 @@ export function App({ user }: { user: User }) {
       : open ?? latestBotThread(threadsRef.current, botId);
     const threadId = existing?.id ?? options.threadId ?? crypto.randomUUID();
     const isChannel = Boolean(existing?.memberIds);
-    const assistantId = crypto.randomUUID();
+    const assistantId = options.plannerOnce?.replyId ?? crypto.randomUUID();
+    setWorkingThreadId(threadId);
+    // Who should answer, as the context line says. A chosen agent starts at S1 ("Starting …").
+    const intended = options.plannerOnce ? undefined : agentFor(bot);
     let replyText = "";
     const userMessage: Message = {
       id: crypto.randomUUID(),
@@ -2028,6 +2199,8 @@ export function App({ user }: { user: User }) {
       fresh: true,
       thinking: [],
       authorBotId: botId,
+      ...(intended && intended.kind !== "planner" ? { driverTurn: { agent: intended.name } } : {}),
+      ...(options.plannerOnce ? { answeredBy: { kind: "planner-once" as const, agent: options.plannerOnce.agent, sourceId: options.plannerOnce.sourceId } } : {}),
     };
     const added = options.skipUser ? [assistantMessage] : [userMessage, assistantMessage];
     const title = cleaned.slice(0, 72);
@@ -2071,18 +2244,57 @@ export function App({ user }: { user: User }) {
       );
     };
     const [skillLines, memoryDoc] = await Promise.all([skillLinesFor(bot), memoryDocFor(botId)]);
+    // The agent a start was asked of, for S9/S10 if POST /turns fails.
+    let startingAgent = "";
     try {
-      const driver = resolveAgentDriver(bot);
-      if ((bot.driver || settingsRef.current.defaultAgentDriver) && !driver) {
-        plan.thinking.unshift("The chosen agent is not available right now, so the built-in planner answers.");
+      // UX P2 (I-2, I-4a): decided once, now, after the reads above: a chosen agent (the bot's or
+      // the Settings default) that can't be resolved is read again once (/health, /drivers) and
+      // is then Couldn't start, with nothing sent. The planner never answers in its place. A Stop
+      // pressed before this point ends the reply here (M3).
+      const decision = await decideStart({
+        plannerOnce: Boolean(options.plannerOnce),
+        chosen: Boolean(bot.driver || settingsRef.current.defaultAgentDriver),
+        resolve: () => resolveAgentDriver(bot),
+        recheck: recheckHarness,
+        aborted: () => controller.signal.aborted,
+      });
+      if (genRef.current !== generation) return shown;
+      if (decision.kind === "stopped") {
+        patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", localStandIn: false, stoppedBeforeStart: true }));
+        receiptDone(options.receipt, botId, started, "failed");
+        return shown;
       }
+      if (decision.kind === "couldntStart") {
+        const now = agentFor(bot);
+        const chosenId = bot.driver || settingsRef.current.defaultAgentDriver || "";
+        const agent = now.kind === "unavailable" ? now : { kind: "unavailable" as const, id: chosenId, name: agentName(chosenId, driversRef.current), source: bot.driver ? ("bot" as const) : ("settings" as const), detail: "" };
+        appendThinking(translate(settingsRef.current.locale, "tsTraceCouldntStart").replace("{agent}", agent.name));
+        const startFailure = {
+          ...startFailureFor(agent, { harnessUp: Boolean(harnessRef.current), runner: runnerMode }),
+          // A scheduled or webhook run: the request wasn't typed here, so no planner choice (M4).
+          ...(options.unattended ? { unattended: true } : {}),
+        };
+        patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", localStandIn: false, driverTurn: { agent: agent.name }, startFailure }));
+        const summary = startFailureSummary(startFailure, (key) => translate(settingsRef.current.locale, key));
+        receiptDone(options.receipt, botId, started, "failed", summary);
+        if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId ? { ...item, lastNote: summary } : item)));
+        if (callRef.current) scheduleListenForCall();
+        return shown;
+      }
+      if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId && item.lastNote ? { ...item, lastNote: undefined } : item)));
+      const driver = decision.kind === "driver" ? decision.driver : undefined;
+      // A bot with no agent chosen whose provider's driver went away: the planner answers, as
+      // before P2, and the reply no longer says it is starting that driver.
+      if (!driver && intended?.kind === "driver") patchMessage(threadId, assistantId, ({ driverTurn: _gone, ...message }) => message);
       if (driver) {
+        startingAgent = agentName(driver.id, driversRef.current);
         if (options.routed) appendThinking(options.routed);
         appendThinking(`Hand the turn to ${driver.label}.`);
         patchMessage(threadId, assistantId, (message) => ({ ...message, localStandIn: false }));
         const reply = await driveTurn({
           bot,
           driver: driver.id,
+          agentName: startingAgent,
           threadId,
           assistantId,
           prompt: noted,
@@ -2152,6 +2364,8 @@ export function App({ user }: { user: User }) {
                   pluginLines: pluginLinesFor(bot),
                   finished: [],
                   shared,
+                  memorySaves: !runnerMode,
+                  memoryDoc,
                 }),
               },
             ],
@@ -2164,7 +2378,9 @@ export function App({ user }: { user: User }) {
           const decision = parseModelDecision(raw, botConnectors);
           if (decision && genRef.current === generation) {
             modelAnswer = decision.answer;
-            modelTrigger = decision.trigger;
+            // A routine or webhook only when the person asked for one (see requestAsksForTrigger).
+            modelTrigger = decision.trigger && requestAsksForTrigger(cleaned) ? decision.trigger : undefined;
+            if (decision.trigger && !modelTrigger) appendThinking("The model proposed a routine or webhook, but your message did not ask for one, so none was created.");
             chosen = guardAction(bot, decision.action);
             appendThinking(chosen ? `The model chose ${actionLabel(chosen)}.` : "The model answered without a computer action.");
           }
@@ -2206,6 +2422,7 @@ export function App({ user }: { user: User }) {
             chosen?.kind === "command" ? `You will ask the user to approve running \`${chosen.command}\` on their computer. Say so briefly.` : "",
             chosen?.kind === "tool" ? `You will ask the user to approve calling ${chosen.label}. ${chosen.why} Say so briefly.` : "",
             chosen?.kind === "pointer" ? `You will ask the user to approve ${chosen.label}. Say so briefly.` : "",
+            chosen?.kind === "memory" ? "You will ask the user to approve saving a note to your memory. Say so briefly." : "",
             cleaned,
           ]
             .filter(Boolean)
@@ -2228,7 +2445,7 @@ export function App({ user }: { user: User }) {
       }
       if (genRef.current === generation) {
         chosen = inFolder(chosen, roomFolder(room));
-        const approval = chosen ? makeApproval(chosen, Boolean(options.unattended), bot) : undefined;
+        const approval = chosen ? holdForPerson(chosen, makeApproval(chosen, Boolean(options.unattended), bot), !runnerMode) : undefined;
         const triggerDraft = options.unattended ? undefined : modelTrigger ?? plan.trigger;
         const trigger = triggerDraft ? createTrigger(triggerDraft, botId) : undefined;
         patchMessage(threadId, assistantId, (message) => ({ ...message, status: "done", approval, ...(trigger ? { trigger } : {}) }));
@@ -2264,8 +2481,23 @@ export function App({ user }: { user: User }) {
       receiptDone(options.receipt, botId, started, "ok");
       return shown;
     } catch (error) {
-      receiptDone(options.receipt, botId, started, "failed");
+      if (!(error instanceof TurnStartError)) receiptDone(options.receipt, botId, started, "failed");
       if (genRef.current !== generation) return shown;
+      if (error instanceof TurnStartError) {
+        // S9 when the harness refused before a turn id existed (I-4b); otherwise S10. No retry.
+        const startFailure = { kind: "refused" as const, agent: startingAgent, detail: error.reason, ...(runnerMode ? { runner: true } : {}), ...(options.unattended ? { unattended: true } : {}) };
+        patchMessage(threadId, assistantId, (message) =>
+          error.kind === "refused"
+            ? { ...message, status: "done", startFailure }
+            : { ...message, status: "error", startUnknown: { agent: startingAgent, reason: error.reason } },
+        );
+        const locale = settingsRef.current.locale;
+        const summary = error.kind === "refused" ? startFailureSummary(startFailure, (key) => translate(locale, key)) : translate(locale, "tsStartUnknown");
+        receiptDone(options.receipt, botId, started, "failed", summary);
+        if (options.routineId) setRoutines((prev) => prev.map((item) => (item.id === options.routineId ? { ...item, lastNote: summary } : item)));
+        if (callRef.current) scheduleListenForCall();
+        return shown;
+      }
       const aborted = error instanceof DOMException && error.name === "AbortError";
       const message = aborted ? translate(settingsRef.current.locale, "stopped") : error instanceof Error ? error.message : translate(settingsRef.current.locale, "dbError");
       setThreads((prev) =>
@@ -2276,8 +2508,9 @@ export function App({ user }: { user: User }) {
                 ...thread,
                 messages: thread.messages.map((item) => {
                   if (item.id !== assistantId) return item;
-                  if (aborted) return { ...item, status: "done", text: item.text || message };
-                  return { ...item, status: "error", text: item.text || message };
+                  // A planner reply stops here in the page; an agent turn's Stop was settled by driveTurn.
+                  if (aborted) return { ...item, status: "done", text: item.text || message, ...(!startingAgent && !item.interrupted ? { stoppedInPage: true } : {}) };
+                  return { ...item, status: "error", text: item.text || message, ...(!item.failure && !item.interrupted ? { failure: message } : {}) };
                 }),
               },
         ),
@@ -2287,8 +2520,63 @@ export function App({ user }: { user: User }) {
       return shown;
     } finally {
       sendingRef.current = false;
+      workingRef.current = null;
       setWorkingBotId(null);
+      setWorkingThreadId(null);
+      setComposerNote((note) => (note?.kind === "busy" ? null : note));
     }
+  }
+
+  /**
+   * "Ask again…": the original message goes back in the composer, focused. It never sends
+   * (P2-AC8). A draft the person is typing is kept, and the note under the composer says so.
+   */
+  function askAgain(messageId: string) {
+    const thread = threadsRef.current.find((item) => item.messages.some((message) => message.id === messageId));
+    if (!thread) return;
+    const next = askAgainDraft(draftRef.current, promptFor(thread.messages, messageId));
+    if (next.kept) setComposerNote({ kind: "kept", text: t("tsAskAgainKept") });
+    else setDraft(next.draft);
+    focusComposer();
+  }
+
+  /**
+   * "Answer with the built-in planner this time" on a Couldn't start message (S9 → S12). One new
+   * planner turn at most (I-3), only when no turn is running (I-1), never in runner mode (W-3) or
+   * for a scheduled run (M4). It changes no bot or Settings value and carries nothing from the
+   * failed start (I-6). The claim is saved at once, not after the usual save delay.
+   */
+  function answerWithPlanner(messageId: string) {
+    startPlannerAnswer({
+      messageId,
+      runner: runnerMode,
+      busy: () => sendingRef.current,
+      onBusy: noteBusy,
+      threads: () => threadsRef.current,
+      write: (claimed, claim) => {
+        threadsRef.current = claimed;
+        setThreads((prev) => claimPlannerAnswer(prev, claim.threadId, claim.sourceId, { messageId: claim.replyId, at: claim.at }) ?? prev);
+        if (hydrated && persist && workspaceRef.current) void saveSnapshot({ ...workspaceRef.current, threads: claimed }).catch(() => undefined);
+      },
+      newId: () => crypto.randomUUID(),
+      now: () => Date.now(),
+      ask: (request) =>
+        askBot(request.botId, request.prompt, {
+          threadId: request.threadId,
+          skipUser: true,
+          plannerOnce: { replyId: request.replyId, sourceId: request.sourceId, agent: request.agent },
+        }),
+      refuse: ({ threadId, sourceId, replyId, reason }) =>
+        setThreads((prev) => {
+          const current = prev.find((item) => item.id === threadId);
+          if (!current || current.messages.some((message) => message.id === replyId)) return prev;
+          const plannerError = t(reason === "noPrompt" ? "tsPlannerNoPrompt" : "tsPlannerNotCreated");
+          const messages = current.messages.map((message) =>
+            message.id === sourceId && message.startFailure ? { ...message, startFailure: { ...message.startFailure, plannerError } } : message,
+          );
+          return prev.map((item) => (item.id === threadId ? { ...current, messages } : item));
+        }),
+    });
   }
 
   async function startTask(taskId: string) {
@@ -2509,6 +2797,14 @@ export function App({ user }: { user: User }) {
         workingBotId={workingBotId}
         studio={studio}
         harness={harness}
+        healthLog={healthLog.current}
+        healthChecked={healthChecked}
+        onRecheckHarness={recheckHarness}
+        onAskAgain={askAgain}
+        onPlannerAnswer={answerWithPlanner}
+        busyNote={composerNote?.text ?? ""}
+        workingThreadId={workingThreadId}
+        runner={runnerMode}
         callActive={callActive}
         messages={activeThread?.messages ?? []}
         onApproval={(messageId, approve, answer) => {
@@ -2653,7 +2949,11 @@ export function App({ user }: { user: User }) {
         onApplyTestProfile={applyTestProfileToBot}
         onDelete={deleteBot}
         onDuplicate={duplicateBot}
-        onDraft={setDraft}
+        onDraft={(value) => {
+          setDraft(value);
+          // The "draft kept" note is about the draft as it was; typing moves on from it.
+          setComposerNote((note) => (note?.kind === "kept" ? null : note));
+        }}
         onSend={(botId, text) => {
           void askBot(botId, text);
         }}

@@ -8,12 +8,15 @@ import { createServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { createBotMemory } from "./botMemory.mjs";
 import { listDrivers } from "./drivers/index.mjs";
 import { listVoices as ttsListVoices, providerMeta, speak as ttsSpeak } from "./tts/index.mjs";
 import { proxyModel } from "./modelProxy.mjs";
+import { createConnectorRegistry } from "./connectors.mjs";
 import { createSecretStore } from "./secrets.mjs";
 import { createTurns } from "./turns.mjs";
 import { parseSkill } from "./skillLibrary.mjs";
+import { POSIX_SHELL, windowsPowerShell } from "./shellPath.mjs";
 
 const PORT = Number(process.env.SANDBENCH_HARNESS_PORT || 8799);
 const HOOK_PORT = Number(process.env.SANDBENCH_WEBHOOK_PORT || 8801);
@@ -30,6 +33,7 @@ const secrets = createSecretStore({ file: path.join(SANDBENCH_HOME, "secrets.jso
 const TTS_SECRETS = { xai: "XAI_API_KEY", elevenlabs: "ELEVENLABS_API_KEY", fish: "FISH_API_KEY" };
 mkdirSync(SKILLS_DIR, { recursive: true });
 mkdirSync(BOTS_DIR, { recursive: true });
+const botMemory = createBotMemory({ botsDir: BOTS_DIR });
 
 function seedSampleSkill() {
   const dir = path.join(SKILLS_DIR, "workspace-notes");
@@ -49,6 +53,7 @@ Prefer MEMORY.md for long-lived facts and keep daily logs under memory/log/.
 seedSampleSkill();
 const MAX_OUTPUT = 64 * 1024;
 const WINDOWS = process.platform === "win32";
+const POWERSHELL = windowsPowerShell();
 const POINTER_VK = { enter: 13, tab: 9, escape: 27, up: 38, down: 40, left: 37, right: 39, space: 32, backspace: 8 };
 const POINTER_CLICK = `
 if (-not ([System.Management.Automation.PSTypeName]'SBPoint').Type) {
@@ -91,8 +96,11 @@ function runShell(command, { timeoutMs = 30_000, cwd = WORKSPACE, maxOutput = MA
   return new Promise((resolve) => {
     const started = Date.now();
     const child = WINDOWS
-      ? spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", command], { cwd, windowsHide: true, env: env ? { ...process.env, ...env } : process.env })
-      : spawn("/bin/sh", ["-c", command], { cwd, env: env ? { ...process.env, ...env } : process.env });
+      ? spawn(POWERSHELL, ["-NoProfile", "-NonInteractive", "-Command", command], { cwd, windowsHide: true, env: env ? { ...process.env, ...env } : process.env })
+      : spawn(POSIX_SHELL, ["-c", command], { cwd, env: env ? { ...process.env, ...env } : process.env });
+    // Nothing types into a command, so a program that reads standard input (`cat` with no file)
+    // sees its end at once instead of waiting for the timeout.
+    child.stdin.end();
     let stdout = "";
     let stderr = "";
     let truncated = false;
@@ -247,54 +255,6 @@ function writeBotSoul(botId, soul) {
   const text = String(soul).slice(0, 24_000);
   writeFileSync(path.join(dir, "SOUL.md"), text, "utf8");
   return { ok: true, bytes: Buffer.byteLength(text, "utf8") };
-}
-
-function memoryAllowlisted(rel) {
-  if (rel === "MEMORY.md") return true;
-  if (/^memory\/[a-zA-Z0-9][\w.-]{0,60}\.md$/.test(rel)) return true;
-  if (/^memory\/log\/\d{4}-\d{2}-\d{2}\.md$/.test(rel)) return true;
-  return false;
-}
-
-function readBotMemory(botId) {
-  const root = botDir(botId);
-  const files = [];
-  const indexPath = path.join(root, "MEMORY.md");
-  if (existsSync(indexPath)) {
-    files.push({ path: "MEMORY.md", content: readFileSync(indexPath, "utf8").slice(0, 64_000) });
-  }
-  const memDir = path.join(root, "memory");
-  if (existsSync(memDir)) {
-    for (const name of readdirSafe(memDir)) {
-      if (!name.endsWith(".md")) continue;
-      const rel = `memory/${name}`;
-      if (!memoryAllowlisted(rel)) continue;
-      files.push({ path: rel, content: readFileSync(path.join(memDir, name), "utf8").slice(0, 32_000) });
-    }
-  }
-  const logDir = path.join(root, "memory", "log");
-  if (existsSync(logDir)) {
-    for (const name of readdirSafe(logDir).slice(-14)) {
-      const rel = `memory/log/${name}`;
-      if (!memoryAllowlisted(rel)) continue;
-      files.push({ path: rel, content: readFileSync(path.join(logDir, name), "utf8").slice(0, 16_000) });
-    }
-  }
-  return { files };
-}
-
-function writeBotMemory(botId, body) {
-  const rel = typeof body.path === "string" ? body.path.replace(/\\/g, "/") : "";
-  if (!memoryAllowlisted(rel)) throw new Error("That memory path is not allowed.");
-  const target = path.join(botDir(botId), ...rel.split("/"));
-  mkdirSync(path.dirname(target), { recursive: true });
-  if (body.op === "delete") {
-    if (existsSync(target)) unlinkSync(target);
-    return { ok: true, path: rel, bytes: 0 };
-  }
-  const content = typeof body.content === "string" ? body.content.slice(0, 64_000) : "";
-  writeFileSync(target, content, "utf8");
-  return { ok: true, path: rel, bytes: Buffer.byteLength(content, "utf8") };
 }
 
 function readdirSafe(dir) {
@@ -516,7 +476,7 @@ function saveSchedules() {
 function notifyRoutine(title) {
   if (!WINDOWS) return;
   const child = spawn(
-    "powershell.exe",
+    POWERSHELL,
     [
       "-NoProfile",
       "-WindowStyle",
@@ -594,6 +554,8 @@ function fillHeaders(headers) {
   return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name, secrets.fill(String(value))]));
 }
 
+const localConnectors = createConnectorRegistry({ dir: path.join(SANDBENCH_HOME, "driver-settings") });
+
 async function readJson(req, limit = 256 * 1024) {
   let raw = "";
   for await (const chunk of req) {
@@ -607,6 +569,8 @@ const agentTurns = createTurns({
   runShell,
   captureScreen,
   secrets,
+  // Every local turn is told its resolved working directory (harness/workingDirectory.mjs).
+  workspaceRoot: WORKSPACE,
   resolveFolder: (folder) => {
     const cwd = folder ? workspacePath(folder) : WORKSPACE;
     if (cwd) mkdirSync(cwd, { recursive: true });
@@ -711,14 +675,23 @@ const server = createServer(async (req, res) => {
     if (req.method === "GET" && url.pathname.startsWith("/bots/") && url.pathname.endsWith("/memory")) {
       const botId = url.pathname.slice("/bots/".length, -"/memory".length);
       if (!/^[-\w]{1,80}$/.test(botId)) return send(res, 400, { error: "Bad bot id." });
-      return send(res, 200, readBotMemory(botId));
+      return send(res, 200, botMemory.read(botId));
+    }
+    const memorySave = /^\/bots\/([-\w]{1,80})\/memory\/save$/.exec(url.pathname);
+    if (req.method === "POST" && memorySave) {
+      const body = await readJson(req, 16 * 1024);
+      try {
+        return send(res, 200, botMemory.save(memorySave[1], body));
+      } catch (error) {
+        return send(res, 400, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
     if (req.method === "POST" && url.pathname.startsWith("/bots/") && url.pathname.endsWith("/memory")) {
       const botId = url.pathname.slice("/bots/".length, -"/memory".length);
       if (!/^[-\w]{1,80}$/.test(botId)) return send(res, 400, { error: "Bad bot id." });
       const body = await readJson(req);
       try {
-        return send(res, 200, writeBotMemory(botId, body));
+        return send(res, 200, botMemory.write(botId, body));
       } catch (error) {
         return send(res, 400, { error: error instanceof Error ? error.message : String(error) });
       }
@@ -789,6 +762,9 @@ const server = createServer(async (req, res) => {
       const headers = fillHeaders(body.headers);
       return send(res, 200, await callMcp(String(body.url || ""), headers, String(body.tool || ""), body.args));
     }
+    if (req.method === "POST" && url.pathname === "/connectors/sync") {
+      return send(res, 200, localConnectors.sync(await readJson(req)));
+    }
     if (req.method === "POST" && url.pathname === "/schedules") {
       const body = await readJson(req);
       const routines = Array.isArray(body.routines) ? body.routines : [];
@@ -847,6 +823,8 @@ const server = createServer(async (req, res) => {
         title: cleanText(body.title, 240),
         status: body.status,
         ms: Number.isFinite(body.ms) ? Math.round(body.ms) : undefined,
+        // Why the run failed, when the page knows (UX P2: "Couldn't start · …").
+        ...(typeof body.detail === "string" && body.detail.trim() ? { detail: cleanText(body.detail, 240) } : {}),
       });
       return send(res, 200, { ok: true });
     }
@@ -880,7 +858,11 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "POST" && url.pathname === "/turns") {
       const body = await readJson(req);
-      return send(res, 200, agentTurns.start(body));
+      return send(res, 200, agentTurns.start(body, { connectors: localConnectors }));
+    }
+    const turnState = /^\/turns\/([a-f0-9]{16})$/.exec(url.pathname);
+    if (req.method === "GET" && turnState) {
+      return send(res, 200, { state: agentTurns.state(turnState[1]) });
     }
     const interrupt = /^\/turns\/([a-f0-9]{16})\/interrupt$/.exec(url.pathname);
     if (req.method === "POST" && interrupt) {

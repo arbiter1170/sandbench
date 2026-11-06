@@ -42,15 +42,15 @@
 
 ```mermaid
 flowchart LR
-  subgraph Client["Browser / PWA (Vercel or same VM)"]
+  subgraph Client["Browser / PWA (Vercel or the runner's own page)"]
     UI["Sandbench UI\n(src/*) — views, approval cards,\nchat, job logs"]
   end
 
   subgraph Edge["Edge"]
-    CF["Cloudflare Tunnel + Access\n(Google IdP, allowlist)"]
+    CF["Tailscale Funnel\n(Firebase sign-in + allowlist)"]
   end
 
-  subgraph VM["Runner VM (Docker compose)"]
+  subgraph VM["Vincent's laptop\n(Docker: runner + Postgres)"]
     API["runner/api\nHTTPS + SSE\nFirebase ID-token verify\n+ server allowlist"]
     Q[("Postgres\nentities + pg-boss queue\n+ FTS memory")]
     W["runner/worker\nturn engine, job supervisor,\nscheduler (cron TZ=America/New_York)"]
@@ -98,22 +98,22 @@ Key choices:
 
 ## Phase 0: Foundation (about 13 days)
 
-**Done when:** the runner is live on a VM behind Cloudflare Access with ID-token sign-in, no keys sit in Firestore or the bundle, data is stored per record and stays in sync across two devices, and CI is green.
+**Done when:** the runner is live in Docker on Vincent's laptop behind Tailscale Funnel with ID-token sign-in and the server-side allowlist (no VM, no Cloudflare Access today), no keys sit in Firestore or the bundle, data is stored per record and stays in sync across two devices, and CI is green.
 
 - [ ] **SB-01 · P0 · Hosted runner service, off localhost and secured remotely · 4 d**
   - **Change:**
     - New package `runner/` (Node 22, ESM).
     - `runner/api/server.mjs`: port the routes from `harness/server.mjs:608-880` and drop the host check at `harness/server.mjs:610`.
     - `runner/api/auth.mjs`: `firebase-admin` `verifyIdToken`, then an email allowlist from a server env var (`SANDBENCH_ALLOWED_EMAILS`), then `req.user`.
-    - `runner/Dockerfile` and `deploy/compose.yml` (runner, postgres, cloudflared).
+    - `runner/Dockerfile` and `deploy/compose.yml` (profile `laptop`: runner, postgres, tailscale sidecar; a `cloudflare` profile with cloudflared is kept, unused).
     - UI: `src/harness.ts:21-31` calls `RUNNER_URL` with `Authorization: Bearer <idToken>` from `getFirebaseAuth().currentUser.getIdToken()`.
     - Keep `vite.config.ts:49-68` for local mode only.
-  - **Approach:**
-    - A small VM (4 vCPU / 16 GB is enough for Chromium, the emulator and two Claude sessions) on Ubuntu 24.04 with Docker.
-    - Cloudflare Tunnel, so no inbound ports are open, plus Cloudflare Access with Google as the identity provider.
-    - CORS allows only the UI origin.
+  - **Approach (what is true today, see `docs/runner.md` "Laptop runner"):**
+    - The runner runs in Docker on Vincent's laptop (Windows, WSL 2 backend). There is no VM and no Cloudflare Access today; the runner is offline when the laptop sleeps.
+    - It is reached through Tailscale Funnel, so no inbound ports are open on the laptop. Funnel has no sign-in screen of its own.
+    - Sign-in is the Firebase ID token plus the server-side email allowlist (`SANDBENCH_ALLOWED_EMAILS`), plus exact-origin CORS (`SANDBENCH_ALLOWED_ORIGINS`). Those checks are the only gate.
   - **Depends on:** nothing.
-  - **Acceptance:** from Vincent's iPhone on cellular, he signs in, opens the QA bot, and the runner health check shows the VM host. A Google account that isn't on the allowlist gets 403 from the **runner**, not just the UI. `curl` with no token gets 401. A port scan of the VM's public IP finds nothing open.
+  - **Acceptance:** from Vincent's iPhone on cellular, he signs in, opens the QA bot, and the runner health check shows the laptop container's host name. A Google account that isn't on the allowlist gets 403 from the **runner**, not just the UI. `curl` with no token gets 401. Nothing but the Funnel address reaches the runner (no published ports).
 
 - [ ] **SB-05 · P0 · Secrets out of Firestore and the page bundle · 2 d**
   - **Change:**
@@ -430,7 +430,7 @@ Key choices:
 
 ## P2: nice to have (about 12 days)
 
-- [ ] **SB-23 · P2 · A headed browser desktop for sign-ins and manual help · 3 d.** An Xvfb + noVNC container behind Cloudflare Access with a shared Chromium profile. *Depends on* SB-13. *Acceptance:* Vincent completes a 2FA sign-in for a bot in the noVNC view.
+- [ ] **SB-23 · P2 · A headed browser desktop for sign-ins and manual help · 3 d.** An Xvfb + noVNC container behind Cloudflare Access (Tailscale Funnel today; Cloudflare Access only if a VM is ever used) with a shared Chromium profile. *Depends on* SB-13. *Acceptance:* Vincent completes a 2FA sign-in for a bot in the noVNC view.
 - [ ] **SB-24 · P2 · Multi-model routing and fallbacks · 2 d.** A primary and a fallback model per agent, for example a small model for QA and the Token Engineer. *Depends on* SB-19. *Acceptance:* QA runs on the small model and falls back to a larger one when tool use fails.
 - [ ] **SB-25 · P2 · Coordination UI (chief of staff, sections, peer allowlists) · 2 d.** Tasks 5-6 of `docs/superpowers/plans/2026-10-23-coord-and-cua.md`, built on SB-07. *Acceptance:* the Supervisor shows as chief of staff and its peers can be edited.
 - [ ] **SB-26 · P2 · Image generation and Markdown pages · 2 d.** Tool wrappers for an image API, with pages stored as attachments. *Depends on* SB-18. *Acceptance:* Sprites gets reference mock-ups in its thread.
@@ -458,7 +458,7 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 ## Top 3 risks
 
 1. **A remotely reachable runner that runs shell commands and holds GitHub write access and API keys.** One auth bug gives an attacker a shell on the VM and push access to the game repo. Today the allowlist is only checked in the browser (`src/firebase.ts:18-30`), and the Firestore rules don't check it.
-   - *Mitigation:* Cloudflare Access plus server-side token checks (SB-01); a least-privilege GitHub App with short-lived tokens; branch protection; no inbound ports; per-agent secret scopes (SB-05); policy tests in CI (SB-21).
+   - *Mitigation:* Cloudflare Access (Tailscale Funnel today; Cloudflare Access only if a VM is ever used) plus server-side token checks (SB-01); a least-privilege GitHub App with short-lived tokens; branch protection; no inbound ports; per-agent secret scopes (SB-05); policy tests in CI (SB-21).
 2. **Scope and schedule.** Rebuilding a durable multi-agent platform alone could stall Walklings for months.
    - *Mitigation:* use Claude Code as the engine instead of writing tool loops; run in parallel with Grok Bot and cut over one bot at a time; stop at the faster option if Phase 1 runs long; keep the team-pack format engine-neutral so nothing is wasted.
 3. **Safety gates slip during the move.** Red decisions going to Vincent, never force-pushing and never sending without approval are partly enforced by the current platform and team habits today. In a home-built runner, one auto-approve rule or unattended routine could merge to the public game, deploy to Pages, write to the production Firebase project, or email an outside contact. Costs can also run away.
@@ -468,7 +468,7 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 
 ## Open questions for Vincent
 
-1. **VM host:** GCE, Hetzner, Fly, or something else? (Budget: roughly $15-40 a month for 4 vCPU / 16 GB.)
+1. **VM host:** GCE, Hetzner, Fly, or something else? (Budget: roughly $15-40 a month for 4 vCPU / 16 GB.) (answered; see "Answers so far")
 2. **Postgres:** run it on the same VM (simplest and cheapest), or use a managed host such as Neon, Supabase or Cloud SQL?
 3. **Model budget:** what monthly limit for API keys, and which models per bot? Claude Code on an API key, or on a subscription login?
 4. **Cloud builds:** use the Cursor Cloud Agents API (needs an API key and plan), Claude Code on the VM, or both?
@@ -476,20 +476,20 @@ Build Phase 0, Phase 1 and Phase 3, and only the parts of Phase 2 that builders 
 6. **Email:** which domain and provider (Postmark, SES or Mailgun) for the bot inboxes? Should outside contacts keep using the current Grok Bot address until cutover?
 7. **Notifications:** is web push to the iPhone PWA enough, or do you also want SMS or email?
 8. **Where the team pack lives:** reuse the existing private team repo, or a new private folder in Sandbench?
-9. **Hosting the UI:** keep it on Vercel, or serve it from the VM behind the same Cloudflare Access?
+9. **Hosting the UI:** keep it on Vercel, or serve it from the VM behind the same Cloudflare Access? (answered; see "Answers so far")
 10. **Full parity or the faster option?** Do you want the full plan (about 84 days) or the QA-and-builders option (about 43 days) first?
 
 ---
 
 ### Answers so far (2026-10-26)
 
-- **Q1 VM host:** the cheapest that fits, so **Hetzner Cloud CX43** (x86, 8 vCPU / 16 GB, an EU location), roughly €10-13 a month. x86 is chosen over the cheaper ARM plans so the Playwright, Chromium and Firebase emulator images run without arm64 surprises. Vincent still creates the account and the server; nothing is bought from this repo.
+- **Q1 VM host:** **Vincent's laptop (Windows)**, running the runner in Docker and reached through Tailscale Funnel. No cloud VM, no Hetzner, nothing bought. Earlier answer (superseded 2026-10-26): the cheapest VM that fits, a Hetzner Cloud CX43 (x86, 8 vCPU / 16 GB, EU), roughly €10-13 a month, x86 so the Playwright, Chromium and Firebase emulator images run without arm64 surprises.
 - **Q2 Postgres:** on the same VM, in `deploy/compose.yml`, with a nightly `pg_dump` backup. No extra cost.
 - **Q5 Firebase:** confirmed: a dedicated Sandbench project, never one of the four off-limits ones. Vincent creates it and shares the project id. Until then tests use the `demo-sandbench` emulator project.
-- **Q9 UI hosting:** serve the built UI **from the runner on the VM**, at the same address as the API, behind one Cloudflare Access app. That is free, needs no CORS, and keeps one sign-in gate. Vercel stays live until cutover.
+- **Q9 UI hosting:** the page **stays on Vercel** and calls the runner over Tailscale Funnel, with exact-origin CORS (`SANDBENCH_ALLOWED_ORIGINS` lists the Vercel origin). The runner also serves its own copy of the page at the Funnel address. Earlier answer (superseded 2026-10-26): serve the built UI from the runner on the VM behind one Cloudflare Access app, so no CORS and one sign-in gate, with Vercel live until cutover.
 - **Allowlist:** `SANDBENCH_ALLOWED_EMAILS` holds one address, Vincent's. It is set in the runner's environment, not in the repo.
 - **Branch protection on `deploy/vercel`:** approved. Vincent turns it on once CI is green (require a PR and the CI checks, block force-pushes).
-- **Still open:** a domain on Cloudflare for the tunnel hostname (a named tunnel with Access needs one; about $10 a year if a new one is bought), and Q3, Q4, Q6, Q7, Q8, Q10.
+- **Still open:** Q3, Q4, Q6, Q7, Q8, Q10.
 
 ## Progress log
 
@@ -509,3 +509,6 @@ Add one line per merged item: `YYYY-MM-DD · SB-xx · PR #n · what changed · a
 - 2026-10-27 · SB-13 · PR #17 · runner image on mcr.microsoft.com/playwright:v1.64.1-noble (Node 22, Chromium) plus Java 21, gh, Python 3 and firebase-tools 14.27.0; SSRF-safe screenshots at 320/375/390 through a checking proxy (every request and redirect hop, connects to the checked address); a saveImage interface for SB-18; a demo-only Firebase emulator wrapper · 6 SSRF tests, 3 screenshot tests in real headless Chromium, 4 emulator tests, 10 mutation checks; live check (QA screenshots the live build and posts it) needs SB-03, SB-06, SB-10 and SB-18, so the box stays unticked
 - 2026-10-27 · SB-29 (decision) · docs PR · agent isolation decided: a `sandbox` compose service (replacing SB-04's planned `jobs` service) run as one non-root user (single-user sandbox, no per-agent users), with no keys, no secrets file and no route to Postgres; model calls through the runner's `/api/model`; SB-04 and SB-10's acting tools wait for it · design only, nothing built, so the box stays unticked
 - 2026-10-27 · SB-03 (PR 1) · PR #18 · contracts (job record and event, turn request, approval, tool descriptor, policy result with the blocked flag) with validators and fixtures; a needs-a-card-for-everything default policy; 003_jobs.sql (jobs, job_events, approvals with every column SB-04 and SB-06 need); a route registry (runner/api/routes/, new routes only, built-in paths reserved); tool discovery (runner/<area>/tools.mjs); claude.mjs extras hook (buildClaudeArgs unchanged with no extras; extras.settings can't widen permissions); secrets.json* in .gitignore · no behaviour change; 6 contract, 4 route, 6 jobs-schema (Postgres), 4 discovery and 4 driver tests; nothing to prove live until the engine (SB-03 PR 2)
+- 2026-11-05 · docs (T05) · PR #20 · PLAN.md host text now says laptop + Tailscale Funnel (no task or estimate changed); STATUS and WORKPLAN refreshed for the merges of #10, #15 and #18 · docs only, nothing to prove live
+- 2026-11-05 · audit batch 1 (not a PLAN item) · approval-rule safety, clean carry-over of #23 · auto-review matches word for word and no mode auto-approves clicks, writes, tools or questions; no PLAN box ticked · pending live: a `git push` under a `git` rule shows a card on Windows in a Claude Code turn
+- 2026-11-05 · audit batch 1 (not a PLAN item) · capability map labels, clean carry-over of #24 · hand-written Needs column and corrected rows, README to match; no PLAN box ticked · pending live: open the Tools panel and read the new column

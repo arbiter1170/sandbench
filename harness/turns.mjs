@@ -1,7 +1,9 @@
 // Agent turns: starts a driver, fans its events out to /events subscribers, and holds
 // each permission request until the page answers it.
+import { reviewPermission } from "./autoReview.mjs";
 import { randomBytes } from "node:crypto";
 import { driverById } from "./drivers/index.mjs";
+import { describeWorkingDirectory } from "./workingDirectory.mjs";
 
 const BUFFER = 500;
 const PERMISSION_TIMEOUT_MS = 30 * 60_000;
@@ -9,28 +11,36 @@ const PERMISSION_TIMEOUT_MS = 30 * 60_000;
 // The page names which stored key a turn should use; the value is looked up here (SB-05).
 const TURN_SECRETS = new Set(["XAI_API_KEY", "ANTHROPIC_API_KEY", "COMPAT_API_KEY"]);
 
-export function createTurns({ runShell, resolveFolder, captureScreen, secrets }) {
+// `workspaceRoot` (the local harness passes it) turns on the working-directory block at the end
+// of every turn's system text and the `cwd` field on `turn_start`. Without it (the runner) the
+// prompt and the events are exactly what they were.
+export function createTurns({ runShell, resolveFolder, captureScreen, secrets, workspaceRoot }) {
   const events = [];
   const subscribers = new Set();
   const turns = new Map();
   const permissions = new Map();
   let seq = 0;
+  // For each turn, the newest of its events that fell out of the replay buffer, and the turns
+  // that ended. A page resuming from before an evicted event is told there is a gap instead of
+  // silently missing it, and a finished turn stays "finished" after its last event is evicted.
+  const evicted = new Map();
+  const ended = new Set();
+  const remember = (collection, add) => {
+    add();
+    if (collection.size > 1000) collection.delete(collection.keys().next().value);
+  };
 
   function publish(turnId, event) {
     const entry = { ...event, turnId, seq: ++seq, at: Date.now() };
     events.push(entry);
-    if (events.length > BUFFER) events.splice(0, events.length - BUFFER);
+    if (events.length > BUFFER) {
+      for (const old of events.splice(0, events.length - BUFFER)) remember(evicted, () => evicted.set(old.turnId, old.seq));
+    }
+    if (event.type === "done" || event.type === "error") remember(ended, () => ended.add(turnId));
     for (const sub of subscribers) {
       if (!sub.turn || sub.turn === turnId) sub.write(entry);
     }
     return entry;
-  }
-
-  function autoAllowed(command, rules) {
-    const trimmed = command.trim();
-    if (/[;&|>`]|\$\(/.test(trimmed)) return false;
-    const head = trimmed.split(/\s+/)[0]?.toLowerCase() ?? "";
-    return rules.some((rule) => String(rule).trim().toLowerCase() === head);
   }
 
   // `ctx` comes from the server (the runner's agent slug, SB-09), never from the request body.
@@ -46,10 +56,13 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     const rules = Array.isArray(body.allow) ? body.allow.filter((item) => typeof item === "string") : [];
     const ran = new Set();
     const granted = new Set();
+    // The block goes after the page's text is cut to size, so a long system prompt can't trim it.
+    const where = workspaceRoot ? describeWorkingDirectory({ cwd, root: workspaceRoot }) : "";
+    const pageSystem = typeof body.system === "string" ? body.system.slice(0, 40_000) : "";
     const turn = {
       id,
       prompt: body.prompt.slice(0, 20_000),
-      system: typeof body.system === "string" ? body.system.slice(0, 40_000) : "",
+      system: where ? [pageSystem, where].filter(Boolean).join("\n\n") : pageSystem,
       history: (Array.isArray(body.history) ? body.history : [])
         .filter((item) => (item?.role === "user" || item?.role === "assistant") && typeof item.content === "string")
         .slice(-20)
@@ -61,25 +74,30 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       // Driver extras (claude.mjs) are set by the engine in later items, never from the request.
       extras: {},
     };
+    // Only the local harness passes `ctx.connectors`: the bot's own synced servers, never the request's.
+    const mcp = driver.id === "claude" && ctx.connectors ? ctx.connectors.attach({ turnId: id, botId: body.botId }) : null;
+    if (mcp?.file) turn.extras = { mcpConfig: mcp.file };
     const io = {
       signal: controller.signal,
       emit: (event) => {
         if (event.type === "tool_end") ran.add(event.permissionId);
         return publish(id, event);
       },
-      requestPermission: ({ command, reason, tool }) => {
+      requestPermission: ({ command, reason, tool, argsShown }) => {
         const permissionId = randomBytes(8).toString("hex");
-        if (autoAllowed(command, rules)) {
-          publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: true });
+        // claude.mjs: how much of a connector call the card's text shows. Only its two values pass.
+        const shown = argsShown === "all" || argsShown === "cut" ? { argsShown } : {};
+        if (reviewPermission({ command, tool }, rules).auto) {
+          publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: true });
           granted.add(permissionId);
           io.current = permissionId;
           return Promise.resolve(true);
         }
         if (body.unattendedDeny) {
-          publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: false, denied: true });
+          publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: false, denied: true });
           return Promise.resolve(false);
         }
-        publish(id, { type: "permission_request", permissionId, command, reason, tool, auto: false });
+        publish(id, { type: "permission_request", permissionId, command, reason, tool, ...shown, auto: false });
         return new Promise((resolve) => {
           const timer = setTimeout(() => finish(false), PERMISSION_TIMEOUT_MS);
           const finish = (allow) => {
@@ -125,9 +143,20 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
       },
       current: "",
     };
-    publish(id, { type: "turn_start", driver: driver.id });
-    const handle = driver.startTurn(turn, io);
+    publish(id, { type: "turn_start", driver: driver.id, ...(where ? { cwd } : {}) });
+    let handle;
+    try {
+      handle = driver.startTurn(turn, io);
+    } catch (error) {
+      // The turn never started, so its done promise will never remove the connector file.
+      mcp?.release();
+      throw error;
+    }
     turns.set(id, { controller, handle });
+    if (mcp?.servers.length) {
+      publish(id, { type: "thinking", text: `Connectors for this turn: ${mcp.servers.map((item) => item.connector).join(", ")}. Each tool asks for approval.` });
+    }
+    for (const item of mcp?.skipped ?? []) publish(id, { type: "thinking", text: `Connector ${item.name} left out: ${item.reason}` });
     handle.done
       .then(() => {
         for (const permissionId of granted) {
@@ -139,7 +168,10 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
         const aborted = controller.signal.aborted || error?.name === "AbortError";
         publish(id, aborted ? { type: "done", stopped: true } : { type: "error", message: error instanceof Error ? error.message : String(error) });
       })
-      .finally(() => turns.delete(id));
+      .finally(() => {
+        turns.delete(id);
+        mcp?.release();
+      });
     return { id, after };
   }
 
@@ -149,6 +181,14 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     turn.controller.abort();
     turn.handle.interrupt();
     return true;
+  }
+
+  // "running" while the driver works, "finished" once it ended (the last 1000 turns), "unknown"
+  // otherwise (a restarted harness, or a turn long gone). The page uses it to tell a dropped
+  // event stream it can resume from a turn that is gone.
+  function state(id) {
+    if (turns.has(id)) return "running";
+    return ended.has(id) ? "finished" : "unknown";
   }
 
   function permit(permissionId, allow) {
@@ -163,6 +203,8 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     const turn = url.searchParams.get("turn") || "";
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-store", connection: "keep-alive" });
     const sub = { turn, write: (entry) => res.write(`id: ${entry.seq}\ndata: ${JSON.stringify(entry)}\n\n`) };
+    // Some of this turn's events after `after` are no longer in the buffer: say so first.
+    if (turn && (evicted.get(turn) ?? 0) > after) res.write(`data: ${JSON.stringify({ type: "gap", turnId: turn })}\n\n`);
     for (const entry of events) {
       if (entry.seq > after && (!turn || entry.turnId === turn)) sub.write(entry);
     }
@@ -174,5 +216,5 @@ export function createTurns({ runShell, resolveFolder, captureScreen, secrets })
     });
   }
 
-  return { start, interrupt, permit, subscribe };
+  return { start, interrupt, permit, subscribe, state };
 }

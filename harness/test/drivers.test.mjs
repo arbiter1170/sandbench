@@ -54,15 +54,16 @@ test("http normalizeEvent reads text and tool call deltas", () => {
   assert.deepEqual(http.normalizeEvent({}), []);
 });
 
-test("claude buildClaudeArgs: no extras gives exactly the arguments from before", () => {
-  const base = ["-p", "--output-format", "stream-json", "--verbose", "--settings", "/tmp/s.json"];
+test("claude buildClaudeArgs: no extras gives exactly the base arguments", () => {
+  // Turn-folder settings and skills are never loaded (see claudeGate.test.mjs).
+  const base = ["-p", "--output-format", "stream-json", "--verbose", "--settings", "/tmp/s.json", "--setting-sources", "user", "--disable-slash-commands", "--strict-mcp-config"];
   assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: null, sessionId: "" }), base);
   assert.deepEqual(claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "sonnet", sessionId: "session-1234", extras: {} }), [...base, "--model", "sonnet", "--resume", "session-1234"]);
 });
 
 test("claude buildClaudeArgs: extras add --max-turns and --mcp-config, and resume replaces --resume", () => {
   const args = claude.buildClaudeArgs({ settingsFile: "/tmp/s.json", model: "haiku", sessionId: "session-old1", extras: { maxTurns: 5, mcpConfig: "/srv/sandbench/mcp.json", resume: "session-new2" } });
-  assert.deepEqual(args.slice(6), ["--model", "haiku", "--mcp-config", "/srv/sandbench/mcp.json", "--max-turns", "5", "--resume", "session-new2"]);
+  assert.deepEqual(args.slice(10), ["--model", "haiku", "--mcp-config", "/srv/sandbench/mcp.json", "--max-turns", "5", "--resume", "session-new2"]);
   assert.equal(args.filter((arg) => arg === "--resume").length, 1);
 });
 
@@ -76,8 +77,14 @@ test("claude buildClaudeArgs: bad extras are refused", () => {
 });
 
 test("claude buildClaudeSettings: extras.settings can't widen what is allowed", () => {
-  assert.equal(claude.buildClaudeSettings(["Bash(ls)"]), JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
-  const merged = JSON.parse(claude.buildClaudeSettings(["Bash(ls)"], { settings: { hooks: { PreToolUse: [] }, permissions: { allow: ["Bash(*)"], defaultMode: "bypassPermissions" } } }));
+  const hook = claude.gateHookCommand("/tmp/t.approved.json");
+  const gate = [{ matcher: "Bash|PowerShell|Monitor|WebFetch|WebSearch|Write|Edit|MultiEdit|NotebookEdit|mcp__.*", hooks: [{ type: "command", command: hook, timeout: 30, onFailure: "block" }] }];
+  assert.equal(
+    claude.buildClaudeSettings(["Bash(ls)"], {}, hook),
+    JSON.stringify({ env: { NODE_OPTIONS: "", BASH_ENV: "", ENV: "" }, disableAllHooks: false, hooks: { PreToolUse: gate }, permissions: { allow: ["Bash(ls)"] } }),
+  );
+  const merged = JSON.parse(claude.buildClaudeSettings(["Bash(ls)"], { settings: { hooks: { PreToolUse: [] }, permissions: { allow: ["Bash(*)"], defaultMode: "bypassPermissions" } } }, hook));
   assert.deepEqual(merged.permissions, { allow: ["Bash(ls)"] });
-  assert.deepEqual(merged.hooks, { PreToolUse: [] });
+  // The approval hook (claudeGate.mjs) always comes first; see claudeGate.test.mjs.
+  assert.deepEqual(merged.hooks, { PreToolUse: gate });
 });
