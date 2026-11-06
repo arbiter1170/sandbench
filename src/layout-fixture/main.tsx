@@ -8,6 +8,7 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { translate, type Key } from "../i18n";
 import { Workspace } from "../shell";
+import { DROPPED, STOP_REQUESTED_REPLY } from "../turnRecovery";
 import { defaultSettings, defaultStudio, type Bot, type Message, type Thread } from "../types";
 import { blankBot } from "../work";
 import "../styles.css";
@@ -17,6 +18,9 @@ const bot: Bot = { ...blankBot("North", "General", true), id: "north", createdAt
 // ?scenario=channel: a group chat with mixed agents, a long folder name and a reachable harness
 // (synthetic), for the context line's layout. The default page has no harness.
 const channelScenario = new URLSearchParams(location.search).get("scenario") === "channel";
+// ?scenario=turns: one message per turn state of the status line (UX P2), with a turn running
+// (so the planner choice is disabled) and the busy note under the composer. Synthetic data only.
+const turnsScenario = new URLSearchParams(location.search).get("scenario") === "turns";
 const members: Bot[] = [
   { ...blankBot("Pip", "Builder", true), id: "pip", createdAt: 1, driver: "claude" },
   { ...blankBot("Moss", "Tester", true), id: "moss", createdAt: 2, driver: "claude" },
@@ -103,7 +107,26 @@ const messages: Message[] = [
   }),
 ];
 
-const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages, botId: bot.id };
+const REASON_DETAIL = "Install the Claude Code CLI (`npm i -g @anthropic-ai/claude-code`), sign in, then restart the harness. Claude Desktop is not the CLI.";
+const turnMessages: Message[] = [
+  message({ role: "user", text: "List the files in the walklings-team folder" }),
+  message({ id: "s9", role: "assistant", text: "", thinking: ["Claude Code couldn't start, so nothing was sent to it. The built-in planner did not answer."], startFailure: { kind: "unreachable", agent: "Claude Code" } }),
+  message({ role: "user", text: "Try again with the folder listing" }),
+  message({ id: "s9b", role: "assistant", text: "", startFailure: { kind: "unavailable", agent: "Claude Code", detail: REASON_DETAIL }, plannerAnswer: { messageId: "s12", at: 1_700_000_100_000 } }),
+  message({ id: "s12", role: "assistant", text: "Here is what I can do without the agent: I can list the folder once you approve the command.", answeredBy: { kind: "planner-once", agent: "Claude Code", sourceId: "s9b" } }),
+  message({ role: "user", text: "Run the build" }),
+  message({ role: "assistant", text: "Starting the build now.", status: "done", interrupted: STOP_REQUESTED_REPLY, driverTurn: { agent: "Claude Code", id: "t1" } }),
+  message({ role: "user", text: "And the tests" }),
+  message({ role: "assistant", text: "", status: "error", failure: `Claude Code exited with 1. ${LONG_URL}`, driverTurn: { agent: "Claude Code", id: "t2" } }),
+  message({ role: "user", text: "Check the logs" }),
+  message({ role: "assistant", text: "Reading the logs…", status: "error", interrupted: DROPPED, driverTurn: { agent: "Claude Code", id: "t3" } }),
+  message({ role: "user", text: "One more time" }),
+  message({ role: "assistant", text: "", status: "error", startUnknown: { agent: "Claude Code", reason: "Failed to fetch" }, driverTurn: { agent: "Claude Code" } }),
+  message({ role: "user", text: "Now" }),
+  message({ role: "assistant", text: "Working on it", status: "streaming", thinking: ["Hand the turn to Claude Code (local CLI).", `Working folder: ${WIN_PATH}`], driverTurn: { agent: "Claude Code", id: "t4" } }),
+];
+
+const thread: Thread = { id: "thread-1", title: "Layout fixture", updatedAt: at, messages: turnsScenario ? turnMessages : messages, botId: bot.id };
 const channel: Thread = { id: "channel-1", title: "walklings-team", updatedAt: at, messages: [], memberIds: members.map((item) => item.id), workingFolder: "walklings-team/a-rather-long-project-folder-name" };
 const health = { ok: true, platform: "win32", host: "fixture", workspace: "C:\\Users\\<you>\\.sandbench\\workspace" };
 const drivers = [{ id: "claude", label: "Claude Code (local CLI)", ok: true, detail: "" }];
@@ -131,15 +154,21 @@ function Fixture() {
       selectedId={bot.id}
       openThreadId={thread.id}
       channel={channelScenario ? channel : null}
-      workingBotId={null}
+      workingBotId={turnsScenario ? bot.id : null}
       studio={studio}
       harness={channelScenario ? health : null}
       healthLog={{ checkedAt: at }}
       healthChecked
       onRecheckHarness={() => new Promise((resolve) => setTimeout(() => resolve(false), 300))}
+      onAskAgain={(id) => {
+        // The app puts the original message back in the composer; the fixture only records the call.
+        (window as unknown as { asked?: string[] }).asked = [...((window as unknown as { asked?: string[] }).asked ?? []), id];
+      }}
+      onPlannerAnswer={noop}
+      busyNote={turnsScenario ? "North is still replying. Your message is kept; send it when this turn ends." : ""}
       runner={false}
       callActive={false}
-      messages={channelScenario ? [] : messages}
+      messages={channelScenario ? [] : thread.messages}
       onApproval={noop}
       onCreateChannel={noop}
       onSendChannel={noop}

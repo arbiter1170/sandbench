@@ -8,6 +8,7 @@ import type { Key } from "./i18n";
 import { AvatarEditor, ComputerPanel, LibraryPanel } from "./studio";
 import type { ApprovalMode, Bot, BotTask, BotVisibility, ComputerEvent, Message, Reminder, Routine, Settings, SkillId, Studio, TestProfileId, Thread, TriggerRef, TriggerRun } from "./types";
 import { inferProfileFromBot, modelsForProfile, profileLabelKey, profileReadiness, profileTouchesCompatBase, TEST_PROFILE_IDS } from "./testProfiles";
+import { continuedIds } from "./turnStatus";
 import { MessageBody, type TriggerInfo, type TriggerPatch } from "./views";
 import { applyReaModelChoice, BUILTIN_PLUGINS, COLORS, parseSchedule, REA_GROK_MODEL, REA_OPUS_MODEL, safeWorkspacePath, SHAPES, SKILLS, VOICES } from "./work";
 
@@ -44,6 +45,11 @@ export function Workspace(props: {
   healthChecked: boolean;
   /** "Check again" in the context sheet: re-reads /health and /drivers; true when reachable. */
   onRecheckHarness: () => Promise<boolean>;
+  /** UX P2: "Ask again…" on a message (refills the composer, never sends) and the one-time planner answer on a Couldn't start message. */
+  onAskAgain: (messageId: string) => void;
+  onPlannerAnswer: (messageId: string) => void;
+  /** UX P2 S11: shown under the composer when a send is refused because a turn is running. */
+  busyNote: string;
   runner: boolean;
   callActive: boolean;
   hub: ReactNode;
@@ -127,6 +133,7 @@ export function Workspace(props: {
   const [channelMembers, setChannelMembers] = useState<string[]>([]);
   const channels = props.threads.filter((thread) => thread.memberIds);
   const names = useMemo(() => new Map(bots.map((item) => [item.id, item.name])), [bots]);
+  const continued = useMemo(() => continuedIds(messages), [messages]);
   // Who answers each bot in this chat, and the inputs of its sheet rows (src/chatContext.ts).
   const contextMember = (member: Bot, own: Message[]): ContextMember => {
     const route = routeFor(member, settings, props.keys);
@@ -533,6 +540,14 @@ export function Workspace(props: {
                     trigger={message.trigger ? triggerInfo(message.trigger) : undefined}
                     onTriggerPatch={(patch) => message.trigger && props.onPatchTrigger(message.trigger, patch)}
                     onTriggerUndo={() => message.trigger && props.onRemoveTrigger(message.trigger)}
+                    turn={{
+                      runner: props.runner,
+                      busy: workingBotId !== null,
+                      continued: continued.has(message.id),
+                      onCheckConnection: props.onRecheckHarness,
+                      onAskAgain: () => props.onAskAgain(message.id),
+                      onPlannerAnswer: () => props.onPlannerAnswer(message.id),
+                    }}
                   />
                 ))
               )}
@@ -584,6 +599,8 @@ export function Workspace(props: {
                   </button>
                 )}
               </div>
+              {/* Always in the page, so the note is announced when it appears (S11). */}
+              <p className="busy-note" role="status" aria-live="polite">{props.busyNote}</p>
               {plusOpen ? (
                 <div className="plus-row">
                   <button type="button" onClick={props.onPhoto}>{t("photo")}</button>

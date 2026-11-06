@@ -52,7 +52,8 @@ describe("chat context line and sheet (UX P1)", () => {
     expect(row(rows, "folder").value).toBe("Workspace root (configured): Unknown: harness offline");
     // I-9: the last good check shows only with its age.
     expect(row(rows, "runsOn").value).toBe("Unknown: harness offline · last connected 2 min ago");
-    expect(row(rows, "agent").value).toMatch(/needs the local harness, which is not reachable\. Until it is, the built-in planner answers/);
+    // UX P2 (I-2): nothing answers in its place; the planner is a one-time choice on Couldn't start.
+    expect(row(rows, "agent").value).toMatch(/needs the local harness, which is not reachable\. Until it is, a message here shows Couldn't start, and you can choose the built-in planner for that one reply\./);
     expect(JSON.stringify(rows)).not.toContain("win32");
   });
 
@@ -64,9 +65,9 @@ describe("chat context line and sheet (UX P1)", () => {
     expect([line.agent, line.folder, line.connection].join(" · ")).toBe("Codex (not available) · workspace root · Connected");
     expect(line.tone).toBe("bad");
     const rows = sheetRows({ bot: north, agent, route: noKey, connection: connected, messages: [], t });
-    expect(row(rows, "agent").value).toBe("Codex is not available on the harness: codex not found. Until it is, the built-in planner answers this chat.");
+    expect(row(rows, "agent").value).toBe("Codex is not available on the harness: codex not found. Until it is, a message here shows Couldn't start, and you can choose the built-in planner for that one reply.");
     expect(row(rows, "agent").badge).toBe("Chosen for this bot");
-    // The planner answers, so the Model row is the planner's, not "chosen by Codex".
+    // Only the one-time planner answer can reply, so the Model row is the planner's, not "chosen by Codex".
     expect(row(rows, "model").value).toBe("No model key: replies are local stand-ins");
     // Before anyone checked, a chosen driver is not called unavailable.
     const checking: Connection = { state: "checking", runner: false, now: NOW };

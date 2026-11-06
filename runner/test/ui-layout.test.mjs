@@ -280,3 +280,103 @@ describe("chat context sheet", () => {
     });
   }
 });
+
+// UX P2: the turn status line on every assistant message, the Couldn't start card with its
+// one-time planner choice, and the busy note under the composer (fixture ?scenario=turns: a turn
+// is running, so the planner choice is disabled).
+describe("turn status line", () => {
+  for (const viewport of VIEWPORTS) {
+    test(`${viewport.name}: every reply has an icon and a word, cards and actions fit, nothing scrolls sideways`, async () => {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, deviceScaleFactor: 1 });
+      const page = await context.newPage();
+      const errors = [];
+      page.on("pageerror", (error) => errors.push(String(error)));
+      await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+      await page.waitForSelector(".turn-card", { timeout: 10_000 });
+      await page.evaluate(() => document.fonts.ready);
+      const facts = await page.evaluate(() => {
+        const rect = (el) => el.getBoundingClientRect();
+        const shown = (el) => el.getClientRects().length > 0;
+        const scroll = document.querySelector(".scroll");
+        return {
+          pageScrollWidth: document.documentElement.scrollWidth,
+          scroll: { clientWidth: scroll.clientWidth, scrollWidth: scroll.scrollWidth },
+          receiving: document.body.textContent.includes("Receiving"),
+          replies: [...document.querySelectorAll(".msg:not(.user)")].map((msg) => {
+            const live = msg.querySelector(".turn-live");
+            return {
+              icon: live?.querySelector(".turn-icon")?.textContent ?? "",
+              iconHidden: live?.querySelector(".turn-icon")?.getAttribute("aria-hidden") ?? "",
+              text: live?.querySelector(".turn-text")?.textContent ?? "",
+              role: live?.getAttribute("role") ?? "",
+              // The line or card spans the bubble (a class clash once squeezed it to a dot's width).
+              widthShare: (() => {
+                const box = msg.querySelector(".turn-status, .turn-card");
+                return box ? rect(box).width / msg.clientWidth : 0;
+              })(),
+              clientWidth: msg.clientWidth,
+              scrollWidth: msg.scrollWidth,
+              spill: [...msg.querySelectorAll("*")].filter((el) => shown(el) && !el.closest("pre") && rect(el).right > rect(msg).right + 0.5).map((el) => el.className || el.tagName),
+            };
+          }),
+          buttons: [...document.querySelectorAll(".turn-actions button")].map((button) => ({ text: button.textContent, right: rect(button).right, height: rect(button).height, shown: shown(button), disabled: button.disabled, bubbleRight: rect(button.closest(".msg")).right })),
+          chosen: document.querySelector(".turn-chosen a")?.textContent ?? "",
+          busy: (() => {
+            const note = document.querySelector(".busy-note");
+            return { text: note?.textContent ?? "", role: note?.getAttribute("role"), live: note?.getAttribute("aria-live"), shown: note ? shown(note) && rect(note).height > 0 : false, right: note ? rect(note).right : 0 };
+          })(),
+        };
+      });
+      assert.deepEqual(errors, [], "the fixture page threw");
+      assert.ok(facts.pageScrollWidth <= viewport.width, `page scrollWidth ${facts.pageScrollWidth}`);
+      assert.ok(facts.scroll.scrollWidth <= facts.scroll.clientWidth, "the message list scrolls sideways");
+      assert.equal(facts.receiving, false, "'Receiving' is still shown");
+      assert.equal(facts.replies.length, 8);
+      for (const [index, reply] of facts.replies.entries()) {
+        assert.ok(reply.icon.trim().length > 0, `reply ${index} has no icon`);
+        assert.equal(reply.iconHidden, "true", `reply ${index}'s icon is read out`);
+        assert.ok(reply.text.trim().length > 0, `reply ${index} has no status word`);
+        assert.equal(reply.role, "status", `reply ${index}'s status line is not a live region`);
+        assert.ok(reply.widthShare >= 0.7, `reply ${index}'s status is ${Math.round(reply.widthShare * 100)}% of its bubble`);
+        assert.ok(reply.scrollWidth <= reply.clientWidth, `reply ${index} is wider than its bubble`);
+        assert.deepEqual(reply.spill, [], `reply ${index} has elements past its right edge`);
+      }
+      assert.deepEqual(
+        facts.replies.map((reply) => reply.text.split(/ · |\. /)[0]),
+        ["Couldn't start", "Couldn't start", "Finished", "Stop requested", "Failed", "Interrupted", "Start status unknown", "Working"],
+      );
+      const planner = facts.buttons.filter((button) => button.text === "Answer with the built-in planner this time");
+      assert.equal(planner.length, 1, "the planner choice shows once, on the unclaimed Couldn't start card");
+      assert.equal(planner[0].disabled, true, "the planner choice is enabled while a turn runs");
+      assert.match(facts.chosen, /^Planner answer chosen at .+ ↓$/);
+      for (const button of facts.buttons) {
+        assert.ok(button.shown, `${button.text} is hidden`);
+        assert.ok(button.right <= Math.min(button.bubbleRight, viewport.width) + 0.5, `${button.text} runs past its bubble`);
+        assert.ok(button.height >= 44, `${button.text} is ${button.height}px tall`);
+      }
+      assert.equal(facts.busy.role, "status");
+      assert.equal(facts.busy.live, "polite");
+      assert.match(facts.busy.text, /North is still replying\. Your message is kept/);
+      assert.ok(facts.busy.shown, "the busy note is not on screen");
+      assert.ok(facts.busy.right <= viewport.width + 0.5, "the busy note runs past the window");
+      if (SHOTS) await page.screenshot({ path: path.join(SHOTS, `${viewport.name}-turns.png`), fullPage: false });
+      await context.close();
+    });
+  }
+
+  test("Check connection keeps focus on its button and announces the result politely", async () => {
+    const context = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 1 });
+    const page = await context.newPage();
+    await page.goto(`${base}?scenario=turns`, { waitUntil: "load", timeout: 20_000 });
+    const button = page.locator(".turn-card").first().getByRole("button", { name: "Check connection" });
+    await button.focus();
+    await page.keyboard.press("Enter");
+    await page.locator(".turn-card").first().locator(".turn-result").getByText("Still not reachable").waitFor({ timeout: 5_000 });
+    assert.equal(await page.evaluate(() => document.activeElement?.textContent), "Check connection", "focus moved");
+    assert.equal(await page.locator(".turn-card").first().locator(".turn-result").getAttribute("aria-live"), "polite");
+    // Ask again… only calls back; the fixture records it and nothing else happens on the page.
+    await page.getByRole("button", { name: "Ask again…" }).first().click();
+    assert.equal((await page.evaluate(() => window.asked ?? [])).length, 1);
+    await context.close();
+  });
+});

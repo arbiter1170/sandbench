@@ -381,6 +381,12 @@ async function converse(bin, settingsFile, listFile, turn, io) {
       }
     }
     if (approved.length === 0 || !sessionId) return;
+    // The last round: the approved steps would need another round, so the turn ends here and
+    // says so (the page shows "Ended after N approval rounds without a final answer").
+    if (round === MAX_ROUNDS - 1) {
+      io.emit({ type: "thinking", text: `Stopped after ${MAX_ROUNDS} approval rounds; the steps approved last were not handed back to Claude Code.`, roundsExhausted: MAX_ROUNDS });
+      return;
+    }
     for (const rule of approved.map(allowRule)) if (!allow.includes(rule)) allow.push(rule);
     approvedKeys.push(...approved.map((denial) => gateKey(denial.tool_name, denial.tool_input)).filter((key) => key !== null));
     io.emit({ type: "thinking", text: "Resume the session with the approved tools." });
