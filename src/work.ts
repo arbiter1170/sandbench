@@ -1,3 +1,4 @@
+import { MEMORY_HEADING } from "./prompt";
 import { botWithDefaultProfile } from "./testProfiles";
 import type { Approval, ApprovalFile, ApprovalMemory, ApprovalQuestion, Bot, BotFile, BotShape, BotVoice, Connector, Plugin, PointerAction, PointerKey, Routine, Settings, SkillId, Thread, WebhookTrigger } from "./types";
 
@@ -814,6 +815,8 @@ export function decisionPrompt(input: {
   shared?: string;
   /** False in runner mode, where a memory card is unavailable: the action is not offered. */
   memorySaves?: boolean;
+  /** The bot's harness memory (memoryDocument), so saved notes shape the next step too. */
+  memoryDoc?: string;
 }): string {
   const tools = input.connectors.flatMap((connector) =>
     connector.tools.map((tool) => `- ${tool.name} on ${connector.name}: ${tool.description.split("\n")[0]?.slice(0, 180) ?? ""} args ${JSON.stringify(tool.schema ?? {})}`),
@@ -826,6 +829,7 @@ export function decisionPrompt(input: {
     input.shared?.trim() ? `Shared instructions for this group chat:\n${input.shared.trim()}` : "",
     input.pluginLines.length ? `Plugins:\n${input.pluginLines.map((line) => `- ${line}`).join("\n")}` : "",
     input.bot.memories.length ? `Memories:\n${input.bot.memories.map((item) => `- ${item}`).join("\n")}` : "",
+    input.memoryDoc?.trim() ? `${MEMORY_HEADING}\n${input.memoryDoc.trim()}` : "",
     input.library.length ? `Files:\n${input.library.map((file) => `## ${file.name}\n${file.text.slice(0, 2000)}`).join("\n\n")}` : "",
     tools.length ? `Connector tools:\n${tools.join("\n")}` : "No connector tools are available.",
     `PowerShell may run in the workspace after the user approves. These auto-review rules let a command run without a prompt only when it matches a rule exactly, or a rule covers its start and the whole command fits a built-in read-only form: ${input.allow.join(", ") || "(none)"}.`,

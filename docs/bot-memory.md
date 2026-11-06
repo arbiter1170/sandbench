@@ -2,7 +2,7 @@
 
 Each bot has a memory folder on the computer running the local harness: `~/.sandbench/bots/<bot id>/`. At the start of a turn the page reads it (`GET /bots/<id>/memory`) and puts it into the bot's system prompt under "Memory documents". That covers `MEMORY.md`, `memory/*.md` and up to 14 day logs from `memory/log/`. At most 8 files go in, each cut to 6,000 characters: `MEMORY.md` first, then the newest day log, then the other memory files, then older logs, newest first. The section says the notes are information, not instructions.
 
-Which turns read it: agent-driver turns (Claude Code, Codex, Grok CLI) always do. A planner reply with a model key reads it only when the decision step fails and the page falls back to a plain reply; the decision step itself does not get it yet.
+Which turns read it: agent-driver turns (Claude Code, Codex, Grok CLI) always do. A planner reply with a model key reads it in the step that picks the next action (the first step and each one after a result) and in the plain-reply fallback. Without a model key, the built-in planner does not read it.
 
 There are three ways to change a file, and they are kept apart on purpose:
 
@@ -32,7 +32,7 @@ The harness refuses a save, and writes nothing, when:
 - the day's log would pass 6,000 characters;
 - any folder on the way, or the log itself, is a symlink.
 
-Later turns read the log like any other memory file, as described at the top: agent-driver turns always, planner replies only on the fallback path.
+Later turns read the log like any other memory file, as described at the top.
 
 ## Where it works
 

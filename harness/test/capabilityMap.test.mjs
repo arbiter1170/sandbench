@@ -223,14 +223,16 @@ test("the computer use row says what works on the runner", () => {
   assert.match(row("Computer use (local exec daemon, window capture)").web, /On the runner, commands run in bash and file changes work; clicks, keystrokes and screenshots need the local harness/);
 });
 
-test("the teammates row does not promise MEMORY.md on planner turns", () => {
+test("the teammates row says which turns read MEMORY.md, as the code does", () => {
   const { web, needs } = row("Bot teammates");
   assert.equal(needs, "harness", "MEMORY.md is read through the harness");
-  assert.ok(!read("src/work.ts").includes("memoryDoc"), "the planner decision prompt has no memory document");
+  assert.match(read("src/work.ts"), /input\.memoryDoc\?\.trim\(\) \? `\$\{MEMORY_HEADING\}/, "the planner decision prompt carries the memory document");
+  assert.match(read("src/App.tsx"), /decisionPrompt\(\{[\s\S]{0,400}memoryDoc: await memoryDocFor\(bot\.id\)/, "the step after a result gets it");
+  assert.match(read("src/App.tsx"), /decisionPrompt\(\{[\s\S]{0,400}\bmemoryDoc,\n/, "the first step gets it");
   assert.match(read("src/App.tsx"), /system: assembleBotSystem\(\{[\s\S]{0,300}memoryDoc,/, "driver turns get the memory document");
   assert.doesNotMatch(web, /on every turn/);
   assert.match(web, /Without a key or a signed-in CLI driver, replies are local stand-ins/);
-  assert.match(web, /MEMORY\.md .*reaches agent-driver turns, and planner replies only when the decision step fails/);
+  assert.match(web, /MEMORY\.md .*reaches agent-driver turns and, with a model key, planner replies, including the step that picks the next action/);
 });
 
 test("the hosted site cannot reach the local harness, as the map note says", () => {

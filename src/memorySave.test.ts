@@ -1,5 +1,6 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { assembleBotSystem, memoryDocument } from "./prompt";
+import { assembleBotSystem, MEMORY_HEADING, memoryDocument } from "./prompt";
 import type { Approval, Bot } from "./types";
 import { actionForText, approvalFields, continuationText, decisionPrompt, holdForPerson, memoryStep, parseModelDecision, proposeMemory } from "./work";
 
@@ -89,6 +90,21 @@ describe("bot memory saves", () => {
     const input = { bot, request: "hi", connectors: [], allow: [], library: [], pluginLines: [], finished: [] };
     expect(decisionPrompt(input)).toContain('"kind":"memory"');
     expect(decisionPrompt({ ...input, memorySaves: false })).not.toContain('"kind":"memory"');
+  });
+
+  it("the step that picks the next action reads the bot's saved notes, labelled as information", () => {
+    const input = { bot, request: "hi", connectors: [], allow: [], library: [], pluginLines: [], finished: [] };
+    const doc = memoryDocument([{ path: "memory/log/2026-11-05.md", content: "- The demo builds with npm run build. <!-- save:33333333-cccc -->" }]);
+    const prompt = decisionPrompt({ ...input, memoryDoc: doc });
+    expect(prompt).toContain(`${MEMORY_HEADING}\n## memory/log/2026-11-05.md\n- The demo builds with npm run build.`);
+    expect(decisionPrompt(input)).not.toContain(MEMORY_HEADING);
+    expect(decisionPrompt({ ...input, memoryDoc: "  " })).not.toContain(MEMORY_HEADING);
+    // Both the first step and each step after a result pass it in.
+    const app = readFileSync(new URL("./App.tsx", import.meta.url), "utf8");
+    const calls = [...app.matchAll(/decisionPrompt\(\{[\s\S]*?\}\)/g)].map((match) => match[0]);
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatch(/memoryDoc: await memoryDocFor\(bot\.id\)/);
+    expect(calls[1]).toMatch(/\bmemoryDoc,/);
   });
 
   it("today's log reaches the prompt even when older logs and topic files would fill the 8 slots", () => {
