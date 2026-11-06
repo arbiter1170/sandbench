@@ -40,6 +40,10 @@ export function noteProblem(note) {
   if (!text) return "The note is empty.";
   if (text.length > MAX_NOTE) return `Notes are at most ${MAX_NOTE} characters.`;
   if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return "The note has control characters.";
+  // The card must show everything that is saved: no invisible format, private-use, unassigned or
+  // lone surrogate characters (tag characters and bidi overrides can hide text), and NFC only.
+  if (/[\p{Cf}\p{Co}\p{Cn}\p{Cs}]/u.test(text)) return "The note has invisible characters.";
+  if (text !== text.normalize("NFC")) return "The note is not in normalized Unicode (NFC).";
   if (/<!--|-->/.test(text)) return "The note can't contain comment markers.";
   // Saved notes go into later prompts sent to model providers.
   if (KEY_SHAPE.test(text)) return "The note looks like it contains an API key or token.";

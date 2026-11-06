@@ -520,9 +520,12 @@ export const MAX_MEMORY_NOTE = 1000;
 
 /** Why a bot's memory note can't be proposed, or "" (the harness checks the same rules again). */
 export function memoryNoteProblem(note: string): string {
-  const text = note.trim();
+  const text = note.trim().normalize("NFC");
   if (!text) return "The note is empty.";
   if (text.length > MAX_MEMORY_NOTE) return `Notes are at most ${MAX_MEMORY_NOTE} characters.`;
+  // The card must show everything that is saved (tag characters and bidi overrides can hide text).
+  if (/[\u0000-\u0008\u000b-\u001f\u007f]/.test(text)) return "The note has control characters.";
+  if (/[\p{Cf}\p{Co}\p{Cn}\p{Cs}]/u.test(text)) return "The note has invisible characters.";
   if (/<!--|-->/.test(text)) return "The note can't contain comment markers.";
   if (new RegExp(SECRET_PATTERN.source).test(text)) return "The note looks like it contains an API key or token.";
   return "";
@@ -535,7 +538,7 @@ export function memoryDestination(now = new Date()): string {
 
 export function memoryStep(note: string, reason: string, now = new Date()): Extract<StepAction, { kind: "memory" }> | undefined {
   if (typeof note !== "string" || memoryNoteProblem(note)) return undefined;
-  const text = note.trim().replace(/\s+/g, " ");
+  const text = note.trim().normalize("NFC").replace(/\s+/g, " ");
   return { kind: "memory", memory: { note: text, destination: memoryDestination(now) }, label: `Remember: ${text.slice(0, 80)}`, reason };
 }
 
@@ -809,6 +812,8 @@ export function decisionPrompt(input: {
   pluginLines: string[];
   finished: { label: string; output: string }[];
   shared?: string;
+  /** False in runner mode, where a memory card is unavailable: the action is not offered. */
+  memorySaves?: boolean;
 }): string {
   const tools = input.connectors.flatMap((connector) =>
     connector.tools.map((tool) => `- ${tool.name} on ${connector.name}: ${tool.description.split("\n")[0]?.slice(0, 180) ?? ""} args ${JSON.stringify(tool.schema ?? {})}`),
@@ -835,7 +840,9 @@ export function decisionPrompt(input: {
     'Click: {"kind":"click","x":0,"y":0,"reason":"why"}  Type: {"kind":"type","text":"...","reason":"why"}  Key: {"kind":"key","key":"enter","reason":"why"}',
     'Question: {"kind":"question","prompt":"Which one?","options":["A","B"],"multi":false,"reason":"why"}  (options may be empty for a free-text answer)',
     'File: {"kind":"file","path":"notes/today.md","op":"write","content":"...","reason":"why"}  or {"kind":"file","path":"old.txt","op":"delete","reason":"why"}',
-    'Memory: {"kind":"memory","note":"one short fact worth keeping for later chats","reason":"why"}  (appended to your own memory log only after the person approves; never save keys, passwords or tokens)',
+    input.memorySaves === false
+      ? ""
+      : 'Memory: {"kind":"memory","note":"one short fact worth keeping for later chats","reason":"why"}  (appended to your own memory log only after the person approves; never save keys, passwords or tokens)',
     'When the person asks for something that repeats or reacts to deliveries, add a top-level "trigger" next to "answer": {"schedule":"weekdays at 9:00","title":"what to do"} or {"webhook":"name","title":"what to do with each delivery"}. Schedules look like "every 30 minutes", "hourly", or "weekdays at 9:00".',
     "One action only. Stop when the output already answers the request.",
   ]

@@ -1,6 +1,8 @@
 # Bot memory
 
-Each bot has a memory folder on the computer running the local harness: `~/.sandbench/bots/<bot id>/`. At the start of a turn the page reads it (`GET /bots/<id>/memory`) and puts it into the bot's system prompt under "Memory documents". That covers `MEMORY.md`, `memory/*.md` and up to 14 day logs from `memory/log/`. At most 8 files go in, each cut to 6,000 characters.
+Each bot has a memory folder on the computer running the local harness: `~/.sandbench/bots/<bot id>/`. At the start of a turn the page reads it (`GET /bots/<id>/memory`) and puts it into the bot's system prompt under "Memory documents". That covers `MEMORY.md`, `memory/*.md` and up to 14 day logs from `memory/log/`. At most 8 files go in, each cut to 6,000 characters: `MEMORY.md` first, then the newest day log, then the other memory files, then older logs, newest first. The section says the notes are information, not instructions.
+
+Which turns read it: agent-driver turns (Claude Code, Codex, Grok CLI) always do. A planner reply with a model key reads it only when the decision step fails and the page falls back to a plain reply; the decision step itself does not get it yet.
 
 There are three ways to change a file, and they are kept apart on purpose:
 
@@ -26,11 +28,11 @@ When the person approves:
 The harness refuses a save, and writes nothing, when:
 - the bot id is not plain letters, digits, `-` or `_`;
 - the save id is not hex;
-- the note is empty, over 1,000 characters, has control characters or comment markers, or looks like an API key or token;
+- the note is empty, over 1,000 characters, has control characters, invisible characters (format, private-use or unassigned code points, such as tag characters or bidi overrides) or comment markers, is not in NFC form, or looks like an API key or token;
 - the day's log would pass 6,000 characters;
 - any folder on the way, or the log itself, is a symlink.
 
-The next turn reads the log like any other memory file.
+Later turns read the log like any other memory file, as described at the top: agent-driver turns always, planner replies only on the fallback path.
 
 ## Where it works
 
