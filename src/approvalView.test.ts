@@ -264,18 +264,22 @@ describe("approval cards: what, where, what changes, what approving covers (UX P
   });
 
   it("M1: an MCP card showing one argument labels it Target and doesn't promise an exact call", () => {
+    // Since #38 the harness shows every MCP argument and the gate keys the exact call.
     const write = claudeCard("mcp__fs__write_file", { path: "/notes/a.md", content: "secret plan" });
-    expect(write.command).toBe("mcp__fs__write_file /notes/a.md");
-    const card = view(write);
+    expect(write.command).toBe('mcp__fs__write_file {"path":"/notes/a.md","content":"secret plan"}');
+    expect(view(write).fields.find((item) => item.id === "target")).toMatchObject({ label: "Arguments", value: '{"path":"/notes/a.md","content":"secret plan"}' });
+    expect(view(write).scope).toBe(t("acScopeClaudeConnector"));
+    // A card saved by a harness before #38 showed one argument: Target, and no exact-call promise.
+    const card = view({ ...write, command: "mcp__fs__write_file /notes/a.md" });
     const target = card.fields.find((item) => item.id === "target")!;
     expect([target.label, target.value, target.note]).toEqual(["Target", "/notes/a.md", "Other arguments are not shown on this card."]);
     expect(card.scope).toBe(t("acScopeClaudeConnectorPartial"));
     expect(card.scope).not.toMatch(/this exact call|same arguments|no other|stops the reply/);
-    // A `command` argument: today's gate key is Bash(<command>), so "this exact call" would be wrong.
-    expect(gateKey("mcp__shell__run", { command: "ls", cwd: "/" })).toBe("Bash(ls)");
-    expect(view(claudeCard("mcp__shell__run", { command: "ls", cwd: "/" })).scope).toBe(t("acScopeClaudeConnectorPartial"));
-    // A single value that happens to be JSON with one of the picked keys is still one value.
-    expect(view(claudeCard("mcp__x__y", { query: '{"path":"/a"}' })).fields.find((item) => item.id === "target")?.label).toBe("Target");
+    // A `command` argument: the gate keys the MCP call itself (#38), not Bash(<command>).
+    expect(gateKey("mcp__shell__run", { command: "ls", cwd: "/" })).toBe('mcp__shell__run({"command":"ls","cwd":"/"})');
+    expect(view(claudeCard("mcp__shell__run", { command: "ls", cwd: "/" })).scope).toBe(t("acScopeClaudeConnector"));
+    // A value that is itself JSON stays inside the full arguments.
+    expect(view(claudeCard("mcp__x__y", { query: '{"path":"/a"}' })).fields.find((item) => item.id === "target")).toMatchObject({ label: "Arguments", value: '{"query":"{\\"path\\":\\"/a\\"}"}' });
     // All the arguments in JSON: "Arguments", and the exact-call scope.
     const full = view(claudeCard("mcp__docs__search", { q: "a", limit: 3 }));
     expect(full.fields.find((item) => item.id === "target")).toMatchObject({ label: "Arguments", value: '{"q":"a","limit":3}' });

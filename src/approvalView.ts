@@ -110,21 +110,17 @@ export function claudeRequest(approval: Pick<Approval, "command" | "reason" | "p
   return { tool, target: command.slice(tool.length).trim() };
 }
 
-// claude.mjs denialCommand shows an MCP call as one argument (command, file_path, notebook_path,
-// path, url or query, whichever comes first) or, when it has none of those, as all its arguments
-// in JSON cut at 300 characters. A JSON object that still has one of those keys is that one value.
-const SINGLE_TARGET_KEYS = ["command", "file_path", "notebook_path", "path", "url", "query"];
+// claude.mjs denialCommand shows an MCP call as all of its arguments in JSON, cut to 299
+// characters and "…" past 300 (#38). A harness from before #38 showed one argument (command,
+// file_path, notebook_path, path, url or query) when it had one: text that isn't a JSON object
+// is that one value. The page can't tell a pre-#38 harness from its labels alone.
 
 /** What an MCP card's target text is: all the arguments, all of them cut short, one value, or nothing. */
 export function mcpArguments(target: string): "full" | "cut" | "single" | "none" {
   if (!target) return "none";
   try {
     const parsed: unknown = JSON.parse(target);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      const record = parsed as Record<string, unknown>;
-      return SINGLE_TARGET_KEYS.some((key) => typeof record[key] === "string" && record[key] !== "") ? "single" : "full";
-    }
-    return "single";
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? "full" : "single";
   } catch {
     return target.length === MCP_ARGS_SHOWN && target.startsWith('{"') ? "cut" : "single";
   }
