@@ -23,7 +23,7 @@ const approved = (saveId, note) => ({ approved: true, saveId, note });
 
 function tree(dir) {
   if (!existsSync(dir)) return [];
-  return readdirSync(dir, { recursive: true }).map(String).sort();
+  return readdirSync(dir, { recursive: true }).map((file) => String(file).split(path.sep).join("/")).sort();
 }
 
 test("an approved note is appended to that bot's own day log and read back for its next turn", () => {
