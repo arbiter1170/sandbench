@@ -398,16 +398,25 @@ async function converse(bin, settingsFile, listFile, turn, io) {
         approvedIds.set(command, io.current);
       }
     }
-    if (approved.length === 0 || !sessionId) return;
-    // The last round: the approved steps would need another round, so the turn ends here and
-    // says so (the page shows "Ended after N approval rounds without a final answer").
-    if (round === MAX_ROUNDS - 1) {
-      // Each step approved in this last round gets its own end, so the harness's "The agent ran
-      // this step itself" line (turns.mjs, for a granted step with no result) is not added to it.
-      // By request, not card text: two steps can read the same (identical calls, or arguments cut short).
+    if (approved.length === 0) return;
+    // Each step that won't reach Claude Code gets its own end, so the harness's "The agent ran this
+    // step itself" line (turns.mjs, for a granted step with no result) is not added to it.
+    // By request, not card text: two steps can read the same (identical calls, or arguments cut short).
+    const endNotRun = () => {
       for (const permissionId of approvedRequests) {
         if (permissionId) io.emit({ type: "tool_end", permissionId, undelivered: true, output: "Approved, but the turn ended before Claude Code was given this step." });
       }
+    };
+    // Approved steps run by resuming the session, so without one they can't be handed back, and
+    // the turn can't go on: it ends as an error rather than as a finished reply.
+    if (!sessionId) {
+      endNotRun();
+      throw new Error("Claude Code reported no session to resume, so the approved steps did not run.");
+    }
+    // The last round: the approved steps would need another round, so the turn ends here and
+    // says so (the page shows "Ended after N approval rounds without a final answer").
+    if (round === MAX_ROUNDS - 1) {
+      endNotRun();
       io.emit({ type: "thinking", text: `Stopped after ${MAX_ROUNDS} approval rounds; the steps approved last were not handed back to Claude Code.`, roundsExhausted: MAX_ROUNDS });
       return;
     }

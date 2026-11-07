@@ -20,7 +20,8 @@ const posix = process.platform !== "win32";
 
 // Each run asks for `echo round-<n>`, n counting the runs, so no round's denial is already approved.
 // `tool`: ask for that tool instead, with `input` (a connector call, say).
-function fakeCli({ denials = true, tool = "", input = null, copies = 1 } = {}) {
+// `session: false`: the CLI never reports a session id, so nothing can be resumed.
+function fakeCli({ denials = true, tool = "", input = null, copies = 1, session = true } = {}) {
   const denial = tool ? `{ tool_name: ${JSON.stringify(tool)}, tool_input: Object.assign(${JSON.stringify(input ?? {})}, { n: runs }) }` : `{ tool_name: "Bash", tool_input: { command: "echo round-" + runs } }`;
   const dir = mkdtempSync(path.join(HOME, "fake-cli-"));
   const bin = path.join(dir, "claude");
@@ -33,9 +34,10 @@ const file = ${JSON.stringify(count)};
 const runs = (fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0) + 1;
 fs.writeFileSync(file, String(runs));
 const out = (line) => process.stdout.write(JSON.stringify(line) + "\\n");
-out({ type: "system", subtype: "init", session_id: "session-rounds-1" });
+const session_id = ${session ? `"session-rounds-1"` : "undefined"};
+out({ type: "system", subtype: "init", session_id });
 out({ type: "assistant", message: { content: [{ type: "text", text: "round " + runs }] } });
-out({ type: "result", session_id: "session-rounds-1", result: "ok", permission_denials: ${denials} ? [${Array(copies).fill(denial).join(", ")}] : [] });
+out({ type: "result", session_id, result: "ok", permission_denials: ${denials} ? [${Array(copies).fill(denial).join(", ")}] : [] });
 `,
   );
   chmodSync(bin, 0o755);
@@ -71,6 +73,33 @@ async function withCli(cli, run) {
   } finally {
     delete process.env.SANDBENCH_CLAUDE_BIN;
   }
+}
+
+// One turn through the harness's turn store with the real approval hook check, approving each
+// request. Returns every event and the one that ended the turn.
+async function turnThroughStore() {
+  const turns = createTurns({ runShell: async () => ({ code: 0, stdout: "", stderr: "", ms: 1 }), resolveFolder: () => HOME });
+  const events = [];
+  let close = () => undefined;
+  const finished = new Promise((resolve) => {
+    const res = {
+      writeHead() {},
+      write(chunk) {
+        const line = String(chunk).split("\n").find((item) => item.startsWith("data: "));
+        if (!line) return;
+        const event = JSON.parse(line.slice(6));
+        events.push(event);
+        if (event.type === "permission_request" && !event.auto) setImmediate(() => turns.permit(event.permissionId, true));
+        if (event.type === "done" || event.type === "error") resolve(event);
+      },
+    };
+    // The stand-in request records its close handler, so the stream's keep-alive timer is stopped below.
+    turns.subscribe({ on: (name, handler) => name === "close" && (close = handler) }, res, new URL("http://127.0.0.1/events?after=0"));
+  });
+  turns.start({ driver: "claude", prompt: "hi" });
+  const end = await finished;
+  close();
+  return { events, end };
 }
 
 test("all approval rounds used with approved steps still waiting: one roundsExhausted signal, no resume line after it", { skip: !posix }, async () => {
@@ -116,27 +145,7 @@ test("a turn that finishes without denials has no signal", { skip: !posix }, asy
 test("through createTurns: the last round's approved step is not reported as run", { skip: !posix }, async () => {
   const cli = fakeCli();
   await withCli(cli, async () => {
-    const turns = createTurns({ runShell: async () => ({ code: 0, stdout: "", stderr: "", ms: 1 }), resolveFolder: () => HOME });
-    const events = [];
-    let close = () => undefined;
-    const finished = new Promise((resolve) => {
-      const res = {
-        writeHead() {},
-        write(chunk) {
-          const line = String(chunk).split("\n").find((item) => item.startsWith("data: "));
-          if (!line) return;
-          const event = JSON.parse(line.slice(6));
-          events.push(event);
-          if (event.type === "permission_request" && !event.auto) setImmediate(() => turns.permit(event.permissionId, true));
-          if (event.type === "done" || event.type === "error") resolve(event);
-        },
-      };
-      // The stand-in request records its close handler, so the stream's keep-alive timer is stopped below.
-      turns.subscribe({ on: (name, handler) => name === "close" && (close = handler) }, res, new URL("http://127.0.0.1/events?after=0"));
-    });
-    turns.start({ driver: "claude", prompt: "hi" });
-    const end = await finished;
-    close();
+    const { events, end } = await turnThroughStore();
     assert.equal(end.type, "done");
     assert.equal(cli.runs(), 4);
     const requests = events.filter((event) => event.type === "permission_request");
@@ -150,6 +159,30 @@ test("through createTurns: the last round's approved step is not reported as run
       assert.match(events.find((event) => event.type === "tool_end" && event.permissionId === request.permissionId)?.output ?? "", /ran this step itself/);
     }
     assert.equal(events.filter((event) => event.roundsExhausted === 4).length, 1);
+  });
+});
+
+test("no session to resume: an approved step ends as not run and the turn ends in an error", { skip: !posix }, async () => {
+  const cli = fakeCli({ session: false });
+  await withCli(cli, async () => {
+    const { events, end } = await turnThroughStore();
+    assert.equal(end.type, "error");
+    assert.match(end.message, /no session to resume/);
+    assert.equal(cli.runs(), 1, "nothing was resumed");
+    const request = events.find((event) => event.type === "permission_request");
+    const ends = events.filter((event) => event.type === "tool_end" && event.permissionId === request.permissionId);
+    assert.deepEqual(ends.map((event) => event.undelivered), [true]);
+    assert.equal(events.some((event) => /ran this step itself/.test(event.output ?? "")), false);
+  });
+});
+
+test("no session to resume, but the step was refused: the turn ends normally", { skip: !posix }, async () => {
+  const cli = fakeCli({ session: false });
+  await withCli(cli, async () => {
+    const turnIo = io(false);
+    await claude.startTurn(turn(), turnIo, noGateCheck).done;
+    assert.equal(cli.runs(), 1);
+    assert.equal(turnIo.events.some((event) => event.undelivered), false);
   });
 });
 
