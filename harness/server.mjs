@@ -81,7 +81,6 @@ $k = [byte]$env:SB_VK
 Write-Output "Pressed key $k"`;
 
 mkdirSync(WORKSPACE, { recursive: true });
-writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
 
 function workspacePath(relative) {
   if (typeof relative !== "string" || !relative.trim() || relative.length > 240) return null;
@@ -896,11 +895,6 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, "127.0.0.1", () => {
-  console.log(`Sandbench harness on http://127.0.0.1:${PORT}`);
-  console.log(`Commands run in ${WORKSPACE}`);
-});
-
 async function readText(req, limit) {
   let raw = "";
   for await (const chunk of req) {
@@ -940,6 +934,23 @@ const hooks = createServer(async (req, res) => {
   }
 });
 
+// A harness that can't get both ports must not touch the token: another one may be using it. So
+// the token is written only after both are bound.
+function exitIfPortInUse(port) {
+  return (error) => {
+    if (error.code !== "EADDRINUSE") throw error;
+    console.error(`Port ${port} is in use, so a harness is probably already running. Stop it first; its token was left alone.`);
+    process.exit(1);
+  };
+}
+hooks.on("error", exitIfPortInUse(HOOK_PORT));
+server.on("error", exitIfPortInUse(PORT));
+
 hooks.listen(HOOK_PORT, "127.0.0.1", () => {
   console.log(`Webhook receiver on http://127.0.0.1:${HOOK_PORT}/hooks/<id>`);
+  server.listen(PORT, "127.0.0.1", () => {
+    writeFileSync(TOKEN_FILE, TOKEN, { mode: 0o600 });
+    console.log(`Sandbench harness on http://127.0.0.1:${PORT}`);
+    console.log(`Commands run in ${WORKSPACE}`);
+  });
 });
