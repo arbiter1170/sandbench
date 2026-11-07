@@ -26,6 +26,16 @@ Session numbers: **Session 0** is the Grok Bot/Supervisor handoff below. Claude'
 ---
 ENTRIES START BELOW
 
+### Session 11 · 2026-11-07 03:09 ET · Approved steps with no session to resume · partial
+- **Branch / PR / head sha:** `claude/no-session-not-run`, cut from `b3cb1a1`, the merge of #48. Vincent approved merging #45, #46, #47 and #48 in chat; all four merged, and CI passed on `b3cb1a1`.
+- **Checks on the head:** not known when this was written.
+- **What was done:** in `harness/drivers/claude.mjs`, a turn with approved steps and no session id used to end as finished, so `turns.mjs` reported those steps as "The agent ran this step itself" though they never ran. They now end as not run (`undelivered`) and the turn ends in an error. Also looked into Vincent's report that the Claude CLI read as not available: `/health` and `/drivers` answer 401 through the dev proxy because the running harness's token was overwritten (see the 15:00 entry), and the page lists agents as not available while the harness is unreachable. The merged detection, run directly, finds the CLI. Restarting the harness is the expected cure; that has not been seen working yet.
+- **Tests run (real results, Windows, Node 24):** `test:web` 219 passed; `test:node` 298 pass, 1 fail, 55 skipped. The failure is the known `exec needs approval and runs in bash` (WSL launcher with no distribution). The new driver tests are POSIX-only and skip here, so CI is their first run. A throwaway Windows reproduction with a stand-in CLI through the real turn store showed the false "ran itself" line before the fix, and the not-run end and error after it.
+- **Not run / could not run:** no real Claude Code turn. Whether the real CLI ever ends a turn without a session id is not established; this path was found by reading the code.
+- **Decisions made and why:** the no-session turn ends in an error, not a normal finish, because it stopped with approved work undone and can't continue.
+- **Open questions for Vincent or the Supervisor:** restart the harness, then confirm the agent reads available. Docker: see STATUS blocker 1.
+- **Next step:** review result, then Vincent's approval.
+
 ### Session 11 · 2026-11-06 15:00 ET · Windows-found fixes and docs refresh · partial
 - **Branch / PR / head sha:** this entry is on `claude/docs-drift`. #45 `claude/harness-token-after-listen`, #46 `claude/windows-test-portability`, #47 `claude/last-round-not-run`.
 - **Checks on the head:** #45, #46 and #47 had all four required checks green on their heads when this was written; none merged at this writing.

@@ -1,10 +1,10 @@
 # STATUS (rewritten by Claude at the end of every session; one screen)
 
-**Last updated:** 2026-11-06 by Session 11 · **Last session number:** 11
-**Base branch:** `deploy/vercel`. Merged since this file was last written: #20, #21, #26, #29 to #44. Open-work list: Claude's artifact "Sandbench open work" (private to Vincent). Rules for merging and closing: Vincent approves in chat, PR by PR.
+**Last updated:** 2026-11-07 by Session 11 · **Last session number:** 11
+**Base branch:** `deploy/vercel`. Merged since this file was last written: #20, #21, #26, #29 to #48. Open-work list: Claude's artifact "Sandbench open work" (private to Vincent). Rules for merging and closing: Vincent approves in chat, PR by PR.
 
 ## Open PRs
-- **#45** harness token written only after listen, **#46** tests pass on Windows, **#47** last-round not-run ends: green; review and Vincent's approval pending at this writing.
+- **`claude/no-session-not-run`** (this PR): approved steps with no session to resume end as not run. Review and Vincent's approval pending at this writing.
 - **#22** SB-03 PR 2 turn engine: held. Known defects (secret redaction, replay, duplicate replies); needs Vincent's go-ahead to repair.
 
 ## Tasks not started from WORKPLAN
@@ -17,4 +17,4 @@ T06 SB-15a importer, T07 bot-event delete retry, T08 SB-06 classifier, T09 prune
 4. Runner image size (3.24 GB): a Chromium-only base is an open follow-up.
 
 ## Live checks pending (Vincent, on ThinkHelp)
-Plan boxes stay unticked until he confirms. Local harness restart on the latest code, then one connector call and an approve, deny and Monitor turn (the gate hook on real Windows). UX P1 to P5 device and screen-reader checks (spec §9). Everything needing the laptop runner (blocker 1).
+Plan boxes stay unticked until he confirms. Local harness restart on the latest code (until then the page's harness calls get 401, so its agents read "not available"), then one connector call and an approve, deny and Monitor turn (the gate hook on real Windows). UX P1 to P5 device and screen-reader checks (spec §9). Everything needing the laptop runner (blocker 1).
